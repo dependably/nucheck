@@ -1,0 +1,29 @@
+{
+  "name": "nuget-audit",
+  "version": "1.0.0",
+  "description": "An npm package that audits NuGet packages for known vulnerabilities, similar to npm audit.",
+  "main": "index.js",
+  "bin": {
+    "nuget-audit": "./cli.js"
+  },
+  "scripts": {
+    "test": "jest --coverage",
+    "test:watch": "jest --watch"
+  },
+  "keywords": [
+    "nuget",
+    "audit",
+    "vulnerability",
+    "security"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "node-fetch": "^2.6.7",
+    "xml2js": "^0.4.23",
+    "semver": "^7.5.4"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}

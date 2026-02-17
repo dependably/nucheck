@@ -1,90 +1,242 @@
 # nuget-audit
 
-A command-line tool that audits NuGet packages for known vulnerabilities, similar to `npm audit`.
+A command-line tool and Node.js library that audits NuGet packages for known vulnerabilities, similar to `npm audit`.
 
 ## Purpose
 
-**nuget-audit** scans your NuGet project dependencies (defined in `packages.config`) against GitHub's Vulnerability Database to identify known security vulnerabilities. This enables .NET developers to proactively discover and address security issues in their project dependencies.
+**nuget-audit** scans your NuGet project dependencies (defined in `packages.config` or `packages.lock.json`) against GitHub's Vulnerability Database to identify known security vulnerabilities. This enables .NET developers to proactively discover and address security issues in their project dependencies.
 
 ## Features
 
 - **Vulnerability Detection**: Identifies known vulnerabilities in your NuGet packages
 - **Semantic Versioning Support**: Uses semver matching to determine if installed versions are affected by vulnerabilities
 - **GitHub Integration**: Queries the official GitHub Vulnerability Database for authoritative vulnerability data
-- **Detailed Reporting**: Displays vulnerability summaries, severity levels, and reference links
-- **Two Query Modes**: Supports both GraphQL (default) and REST API modes for flexibility
+- **Detailed Reporting**: Multiple output formats (summary, table, JSON)
+- **Query Modes**: Supports both GraphQL (default) and REST API modes
+- **Flexible Output**: Format results as summary, table, or JSON
+- **Caching**: In-memory and optional file-based caching to reduce API calls
+- **Structured Logging**: Debug-friendly logging with configurable levels
+- **Configuration Files**: Load options from `.nuget-auditrc.json`
+- **Severity Filtering**: Filter vulnerabilities by severity level
+- **packages.lock.json Support**: Works with both packages.config (XML) and packages.lock.json (JSON)
 
 ## Installation
 
+### Global (CLI)
+
 ```bash
 npm install -g nuget-audit
+nuget-audit ./packages.config
 ```
 
-Or install locally in your project:
+### Local (Project)
 
 ```bash
 npm install nuget-audit
 ```
 
-## Usage
-
-### Basic Usage
+### Development
 
 ```bash
-nuget-audit <path-to-packages.config>
+git clone https://github.com/yourusername/nuget-audit.git
+cd nuget-audit
+npm install
+npm test
 ```
 
-Example:
+## Quick Start
+
+### 1. Set GitHub Token
+
+```bash
+export GITHUB_TOKEN=your_github_personal_access_token
+```
+
+### 2. Run Audit
 
 ```bash
 nuget-audit ./packages.config
 ```
 
-### Output
+### 3. Check Results
 
 The tool will report:
 - Total number of packages found
-- Status for each package (vulnerable or safe)
-- For vulnerabilities: summary, severity level, and reference URLs
+- Packages with vulnerabilities and their details
+- Severity levels for each vulnerability
+- Reference links for more information
 
-Example output:
+## Usage
+
+### Basic Command
+
+```bash
+nuget-audit <path-to-packages-file> [options]
+```
+
+### Examples
+
+```bash
+# Basic audit with summary output
+nuget-audit ./packages.config
+
+# JSON output for parsing
+nuget-audit ./packages.config --format json
+
+# Table output for readability
+nuget-audit ./packages.config --format table
+
+# Filter by severity
+nuget-audit ./packages.config --severity high
+
+# Enable caching and verbose logging
+nuget-audit ./packages.config --cache --log-level debug
+
+# Use REST API instead of GraphQL
+nuget-audit ./packages.config --rest
+
+# Load options from config file
+nuget-audit ./packages.config --config ./.nuget-auditrc.json
+```
+
+### CLI Options
 
 ```
-Found 5 packages in ./packages.config
+--format <type>            Output format: summary, table, json (default: summary)
+--severity <level>         Filter by severity: high, medium, low
+--cache                    Enable caching of vulnerability data
+--no-cache                 Disable caching
+--log-level <level>        Logging level: debug, info, warn, error (default: info)
+--verbose, -v              Enable verbose output
+--config <path>            Path to .nuget-auditrc.json config file
+--rest                     Use REST API instead of GraphQL
+--help, -h                 Show help message
+```
 
-=== Vulnerability found for SomePackage (1.0.0) ===
-- Remote Code Execution vulnerability (Severity: high)
-  * https://github.com/advisories/GHSA-xxxx-yyyy-zzzz
+### Example Output
 
-✓ SafePackage (2.1.0) - no known vulnerabilities
+#### Summary Format (default)
+```
+Found 8 packages in ./packages.config
+⚠ Found 3 package(s) with known vulnerabilities:
+
+  • Newtonsoft.Json (11.0.2)
+    Issues: 1 | Severity: high
+
+  • log4net (2.0.8)
+    Issues: 2 | Severity: high, medium
+```
+
+#### Table Format
+```
+┌─ NUGET AUDIT RESULTS ─────────────────────────────────┐
+│ Total Packages: 8                                       │
+│ Vulnerabilities Found: 3                                │
+├────────────────────────────────────────────────────────┤
+│ 1. Newtonsoft.Json (11.0.2)                            │
+│    [HIGH] Remote code execution vulnerability          │
+```
+
+#### JSON Format
+```json
+{
+  "totalPackages": 8,
+  "vulnerabilities": [
+    {
+      "id": "Newtonsoft.Json",
+      "version": "11.0.2",
+      "issues": [
+        {
+          "summary": "Remote code execution",
+          "severity": "high"
+        }
+      ]
+    }
+  ],
+  "vulnerabilityCount": 3
+}
 ```
 
 ## Configuration
 
-### GitHub API Authentication
+### Environment Variables
 
-The tool uses GitHub's API to query vulnerabilities. You must set the `GITHUB_TOKEN` environment variable:
+- **GITHUB_TOKEN** (required): Your GitHub personal access token
+  - Get one at: https://github.com/settings/tokens
+  - Required scopes: `security_events` (or full `public_repo` access)
 
-```bash
-export GITHUB_TOKEN=your_github_personal_access_token
-nuget-audit ./packages.config
+- **USE_REST** (optional): Set to `true` to use REST API instead of GraphQL
+
+### Configuration File (.nuget-auditrc.json)
+
+Create a `.nuget-auditrc.json` in your project root:
+
+```json
+{
+  "format": "summary",
+  "severity": null,
+  "cache": true,
+  "logLevel": "info",
+  "verbose": false,
+  "useRest": false
+}
 ```
 
-Generate a token at: https://github.com/settings/tokens
+CLI arguments override configuration file settings.
 
-### API Mode
+### GitHub Token Setup
 
-By default, the tool uses GitHub's GraphQL API. To use the REST API instead, set the `USE_REST` environment variable:
+#### On macOS/Linux:
 
 ```bash
-USE_REST=true nuget-audit ./packages.config
+# 1. Create token at https://github.com/settings/tokens
+# 2. Add to your shell profile (~/.bashrc, ~/.zshrc, etc.)
+export GITHUB_TOKEN=ghp_your_token_here
+
+# 3. Reload shell
+source ~/.bashrc
+```
+
+#### On Windows (PowerShell):
+
+```powershell
+# 1. Create token at https://github.com/settings/tokens
+# 2. Set environment variable
+$env:GITHUB_TOKEN="ghp_your_token_here"
+
+# 3. For persistent storage
+[Environment]::SetEnvironmentVariable("GITHUB_TOKEN", "ghp_your_token_here", "User")
+```
+
+## Programmatic Usage
+
+See [docs/API.md](./docs/API.md) for complete API documentation.
+
+### Basic Example
+
+```javascript
+const { audit } = require('nuget-audit');
+
+process.env.GITHUB_TOKEN = 'your_token';
+
+audit('./packages.config', {
+  logLevel: 'info',
+  enableCache: true
+}).then(results => {
+  console.log(`Found ${results.vulnerabilityCount} vulnerabilities`);
+  process.exit(results.vulnerabilityCount > 0 ? 1 : 0);
+}).catch(err => {
+  console.error('Audit failed:', err);
+  process.exit(1);
+});
 ```
 
 ## Requirements
 
 - Node.js 12.x or higher
-- A `packages.config` file from your .NET project
-- GitHub personal access token for API authentication
+- npm or yarn
+- GitHub personal access token
+- `packages.config` or `packages.lock.json` file
 
 ## Dependencies
 
@@ -92,6 +244,128 @@ USE_REST=true nuget-audit ./packages.config
 - `xml2js`: XML parsing for packages.config
 - `semver`: Semantic version matching
 
+## Troubleshooting
+
+### GITHUB_TOKEN not set
+
+```
+Error: GITHUB_TOKEN environment variable is not set
+```
+
+**Solution:** Set your GitHub token
+```bash
+export GITHUB_TOKEN=your_token
+```
+
+### 401 Unauthorized
+
+```
+GitHub API authentication failed. Check GITHUB_TOKEN.
+```
+
+**Solution:**
+1. Verify your token is valid at https://github.com/settings/tokens
+2. Check token has required permissions
+3. Token may have expired - generate a new one
+
+### Failed to read packages.config
+
+```
+Error: File not found: ./packages.config
+```
+
+**Solution:**
+1. Verify the file path is correct
+2. Use absolute path if needed: `nuget-audit /full/path/to/packages.config`
+3. Check file exists: `ls packages.config`
+
+### GitHub API rate limits
+
+```
+GitHub API error: 403
+```
+
+**Solution:**
+- Authenticated requests have higher limits (5,000 per hour)
+- Use `--cache` flag to avoid repeated queries
+- Consider staggering audits over time
+
+### No vulnerabilities detected
+
+This is good! It means:
+- All packages are up to date
+- No known vulnerabilities exist in the database
+- Continue monitoring for new vulnerabilities
+
+## Development
+
+### Running Tests
+
+```bash
+npm test              # Run all tests
+npm run test:watch   # Run tests in watch mode
+```
+
+### Building
+
+No build step required. The project runs directly with Node.js.
+
+### Project Structure
+
+```
+nuget-audit/
+├── index.js              # Core audit logic
+├── cli.js                # CLI entry point
+├── package.json          # Dependencies
+├── jest.config.js        # Test configuration
+├── utils/
+│   ├── logger.js         # Structured logging
+│   ├── cache.js          # Vulnerability caching
+│   ├── config.js         # Configuration loader
+│   └── formatters.js     # Output formatters
+├── tests/                # Test suite
+├── docs/
+│   └── API.md           # API documentation
+├── examples/
+│   └── packages.config  # Example package file
+├── README.md            # This file
+├── CONTRIBUTING.md      # Contributing guide
+└── LICENSE              # MIT License
+```
+
+## Contributing
+
+We welcome contributions! Please see [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
+
 ## License
 
-MIT
+MIT - See [LICENSE](./LICENSE) file for details
+
+## Changelog
+
+### Version 1.0.0 (Initial Release)
+
+- Core vulnerability audit functionality
+- GraphQL and REST API support
+- Multiple output formats
+- Configuration file support
+- Caching system
+- Structured logging
+- Comprehensive documentation
+- Full test suite
+
+## Support
+
+- **Issues:** Report bugs at https://github.com/yourusername/nuget-audit/issues
+- **Questions:** Ask at https://github.com/yourusername/nuget-audit/discussions
+- **Security:** Report vulnerabilities privately at security@example.com
+
+## Related Projects
+
+- [npm audit](https://docs.npmjs.com/cli/audit) - Similar tool for npm packages
+- [GitHub Security Advisory Database](https://github.com/advisories) - Vulnerability source
+- [OWASP Dependency Check](https://owasp.org/www-project-dependency-check/) - Comprehensive dependency scanner
+
+---
+
+**Made with ❤️ for .NET developers**
