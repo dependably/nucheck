@@ -10,7 +10,7 @@ class VulnerabilityCache {
   constructor(enableFileCache = false) {
     this.memory = new Map();
     this.enableFileCache = enableFileCache;
-    this.cacheDir = path.join(process.cwd(), '.nuget-audit-cache');
+    this.cacheDir = path.join(process.cwd(), '.nuget-check-cache');
 
     if (enableFileCache) {
       this._ensureCacheDir();
@@ -68,7 +68,7 @@ class VulnerabilityCache {
             fs.unlinkSync(filePath);
           }
         }
-      } catch (err) {
+      } catch {
         // Ignore cache read errors
       }
     }
@@ -97,7 +97,7 @@ class VulnerabilityCache {
           data: data
         };
         fs.writeFileSync(filePath, JSON.stringify(cacheEntry, null, 2));
-      } catch (err) {
+      } catch {
         // Ignore cache write errors
       }
     }
@@ -112,7 +112,7 @@ class VulnerabilityCache {
     if (this.enableFileCache && fs.existsSync(this.cacheDir)) {
       try {
         fs.rmSync(this.cacheDir, { recursive: true, force: true });
-      } catch (err) {
+      } catch {
         // Ignore clear errors
       }
     }

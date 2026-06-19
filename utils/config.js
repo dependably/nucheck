@@ -1,17 +1,17 @@
 /**
  * Configuration loader and merger
- * Loads options from .nuget-auditrc.json if it exists
+ * Loads options from .nuget-checkrc.json if it exists
  */
 
 const fs = require('fs');
 const path = require('path');
 
 /**
- * Load configuration from .nuget-auditrc.json
+ * Load configuration from .nuget-checkrc.json
  * @param {string} configPath - Path to config file (defaults to current directory)
  * @returns {Object} Configuration object
  */
-function loadConfig(configPath = '.nuget-auditrc.json') {
+function loadConfig(configPath = '.nuget-checkrc.json') {
   const fullPath = path.resolve(configPath);
 
   try {
@@ -19,7 +19,7 @@ function loadConfig(configPath = '.nuget-auditrc.json') {
       const data = fs.readFileSync(fullPath, 'utf-8');
       return JSON.parse(data);
     }
-  } catch (err) {
+  } catch {
     // Silently ignore config load errors
   }
 
@@ -33,7 +33,7 @@ function loadConfig(configPath = '.nuget-auditrc.json') {
  * @param {string} configFile - Path to config file
  * @returns {Object} Merged configuration
  */
-function mergeConfig(cliArgs, configFile = '.nuget-auditrc.json') {
+function mergeConfig(cliArgs, configFile = '.nuget-checkrc.json') {
   const fileConfig = loadConfig(configFile);
 
   return {

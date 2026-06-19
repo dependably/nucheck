@@ -1,10 +1,10 @@
-# nuget-audit
+# nuget-check
 
 A command-line tool and Node.js library that audits NuGet packages for known vulnerabilities, similar to `npm audit`.
 
 ## Purpose
 
-**nuget-audit** scans your NuGet project dependencies (defined in `packages.config` or `packages.lock.json`) against GitHub's Vulnerability Database to identify known security vulnerabilities. This enables .NET developers to proactively discover and address security issues in their project dependencies.
+**nuget-check** scans your NuGet project dependencies (defined in `packages.config` or `packages.lock.json`) against GitHub's Vulnerability Database to identify known security vulnerabilities. This enables .NET developers to proactively discover and address security issues in their project dependencies.
 
 ## Features
 
@@ -16,7 +16,7 @@ A command-line tool and Node.js library that audits NuGet packages for known vul
 - **Flexible Output**: Format results as summary, table, or JSON
 - **Caching**: In-memory and optional file-based caching to reduce API calls
 - **Structured Logging**: Debug-friendly logging with configurable levels
-- **Configuration Files**: Load options from `.nuget-auditrc.json`
+- **Configuration Files**: Load options from `.nuget-checkrc.json`
 - **Severity Filtering**: Filter vulnerabilities by severity level
 - **packages.lock.json Support**: Works with both packages.config (XML) and packages.lock.json (JSON)
 
@@ -25,21 +25,21 @@ A command-line tool and Node.js library that audits NuGet packages for known vul
 ### Global (CLI)
 
 ```bash
-npm install -g nuget-audit
-nuget-audit ./packages.config
+npm install -g @moonlitlabs/nuget-check
+nuget-check ./packages.config
 ```
 
 ### Local (Project)
 
 ```bash
-npm install nuget-audit
+npm install @moonlitlabs/nuget-check
 ```
 
 ### Development
 
 ```bash
-git clone https://github.com/yourusername/nuget-audit.git
-cd nuget-audit
+git clone https://gitlab.northwardlabs.ca/moonlitlabs/nuget-check.git
+cd nuget-check
 npm install
 npm test
 ```
@@ -55,7 +55,7 @@ export GITHUB_TOKEN=your_github_personal_access_token
 ### 2. Run Audit
 
 ```bash
-nuget-audit ./packages.config
+nuget-check ./packages.config
 ```
 
 ### 3. Check Results
@@ -71,32 +71,32 @@ The tool will report:
 ### Basic Command
 
 ```bash
-nuget-audit <path-to-packages-file> [options]
+nuget-check <path-to-packages-file> [options]
 ```
 
 ### Examples
 
 ```bash
 # Basic audit with summary output
-nuget-audit ./packages.config
+nuget-check ./packages.config
 
 # JSON output for parsing
-nuget-audit ./packages.config --format json
+nuget-check ./packages.config --format json
 
 # Table output for readability
-nuget-audit ./packages.config --format table
+nuget-check ./packages.config --format table
 
 # Filter by severity
-nuget-audit ./packages.config --severity high
+nuget-check ./packages.config --severity high
 
 # Enable caching and verbose logging
-nuget-audit ./packages.config --cache --log-level debug
+nuget-check ./packages.config --cache --log-level debug
 
 # Use REST API instead of GraphQL
-nuget-audit ./packages.config --rest
+nuget-check ./packages.config --rest
 
 # Load options from config file
-nuget-audit ./packages.config --config ./.nuget-auditrc.json
+nuget-check ./packages.config --config ./.nuget-checkrc.json
 ```
 
 ### CLI Options
@@ -108,7 +108,7 @@ nuget-audit ./packages.config --config ./.nuget-auditrc.json
 --no-cache                 Disable caching
 --log-level <level>        Logging level: debug, info, warn, error (default: info)
 --verbose, -v              Enable verbose output
---config <path>            Path to .nuget-auditrc.json config file
+--config <path>            Path to .nuget-checkrc.json config file
 --rest                     Use REST API instead of GraphQL
 --help, -h                 Show help message
 ```
@@ -167,9 +167,9 @@ Found 8 packages in ./packages.config
 
 - **USE_REST** (optional): Set to `true` to use REST API instead of GraphQL
 
-### Configuration File (.nuget-auditrc.json)
+### Configuration File (.nuget-checkrc.json)
 
-Create a `.nuget-auditrc.json` in your project root:
+Create a `.nuget-checkrc.json` in your project root:
 
 ```json
 {
@@ -215,7 +215,7 @@ See [docs/API.md](./docs/API.md) for complete API documentation.
 ### Basic Example
 
 ```javascript
-const { audit } = require('nuget-audit');
+const { audit } = require('@moonlitlabs/nuget-check');
 
 process.env.GITHUB_TOKEN = 'your_token';
 
@@ -276,7 +276,7 @@ Error: File not found: ./packages.config
 
 **Solution:**
 1. Verify the file path is correct
-2. Use absolute path if needed: `nuget-audit /full/path/to/packages.config`
+2. Use absolute path if needed: `nuget-check /full/path/to/packages.config`
 3. Check file exists: `ls packages.config`
 
 ### GitHub API rate limits
@@ -313,7 +313,7 @@ No build step required. The project runs directly with Node.js.
 ### Project Structure
 
 ```
-nuget-audit/
+nuget-check/
 ├── index.js              # Core audit logic
 ├── cli.js                # CLI entry point
 ├── package.json          # Dependencies
@@ -356,8 +356,8 @@ MIT - See [LICENSE](./LICENSE) file for details
 
 ## Support
 
-- **Issues:** Report bugs at https://github.com/yourusername/nuget-audit/issues
-- **Questions:** Ask at https://github.com/yourusername/nuget-audit/discussions
+- **Issues:** Report bugs at https://gitlab.northwardlabs.ca/moonlitlabs/nuget-check/-/issues
+- **Questions:** Ask at https://gitlab.northwardlabs.ca/moonlitlabs/nuget-check/-/issues
 - **Security:** Report vulnerabilities privately at security@example.com
 
 ## Related Projects

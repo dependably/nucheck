@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 const path = require('path');
-const fs = require('fs');
 const { audit } = require('./index');
 const config = require('./utils/config');
 const { getFormatter } = require('./utils/formatters');
@@ -20,7 +19,7 @@ function parseArgs(args) {
     logLevel: 'info',
     verbose: false,
     useRest: false,
-    configFile: '.nuget-auditrc.json'
+    configFile: '.nuget-checkrc.json'
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -58,10 +57,10 @@ function parseArgs(args) {
  */
 function printHelp() {
   console.log(`
-nuget-audit - NuGet vulnerability auditor
+nuget-check - NuGet vulnerability auditor
 
 Usage:
-  nuget-audit <path-to-packages-file> [options]
+  nuget-check <path-to-packages-file> [options]
 
 Arguments:
   <path-to-packages-file>    Path to packages.config or packages.lock.json
@@ -72,7 +71,7 @@ Options:
   --cache                    Enable caching of vulnerability data
   --log-level <level>        Logging level: debug, info, warn, error (default: info)
   --verbose, -v              Enable verbose output
-  --config <path>            Path to .nuget-auditrc.json config file
+  --config <path>            Path to .nuget-checkrc.json config file
   --rest                     Use REST API instead of GraphQL
   --help, -h                 Show this help message
 
@@ -81,10 +80,10 @@ Environment Variables:
   USE_REST                   Use REST API when true (overrides --rest flag)
 
 Examples:
-  nuget-audit ./packages.config
-  nuget-audit ./packages.lock.json --format json
-  nuget-audit ./packages.config --cache --log-level debug
-  nuget-audit ./packages.config --severity high
+  nuget-check ./packages.config
+  nuget-check ./packages.lock.json --format json
+  nuget-check ./packages.config --cache --log-level debug
+  nuget-check ./packages.config --severity high
   `);
 }
 

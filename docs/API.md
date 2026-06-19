@@ -2,18 +2,18 @@
 
 ## Overview
 
-nuget-audit provides a Node.js API for programmatically auditing NuGet package dependencies for known vulnerabilities.
+nuget-check provides a Node.js API for programmatically auditing NuGet package dependencies for known vulnerabilities.
 
 ## Installation
 
 ```bash
-npm install nuget-audit
+npm install @moonlitlabs/nuget-check
 ```
 
 ## Basic Usage
 
 ```javascript
-const { audit } = require('nuget-audit');
+const { audit } = require('@moonlitlabs/nuget-check');
 
 // Set GitHub token
 process.env.GITHUB_TOKEN = 'your_token_here';
@@ -47,7 +47,7 @@ Audits a packages.config or packages.lock.json file for vulnerabilities.
 **Example:**
 
 ```javascript
-const { audit } = require('nuget-audit');
+const { audit } = require('@moonlitlabs/nuget-check');
 
 process.env.GITHUB_TOKEN = 'ghp_your_token';
 
@@ -84,7 +84,7 @@ Reads and parses a packages.config or packages.lock.json file.
 **Example:**
 
 ```javascript
-const { readPackagesFile } = require('nuget-audit');
+const { readPackagesFile } = require('@moonlitlabs/nuget-check');
 
 readPackagesFile('./packages.config').then(packages => {
   packages.forEach(pkg => {
@@ -114,7 +114,7 @@ Queries the GitHub Vulnerability Database for a specific package.
 **Example:**
 
 ```javascript
-const { queryVulnerability } = require('nuget-audit');
+const { queryVulnerability } = require('@moonlitlabs/nuget-check');
 
 process.env.GITHUB_TOKEN = 'ghp_your_token';
 
@@ -145,7 +145,7 @@ Queries using GitHub's REST API (alternative to GraphQL).
 **Example:**
 
 ```javascript
-const { queryVulnerabilityREST } = require('nuget-audit');
+const { queryVulnerabilityREST } = require('@moonlitlabs/nuget-check');
 
 process.env.GITHUB_TOKEN = 'ghp_your_token';
 
@@ -168,7 +168,7 @@ Initialize the audit system with configuration options.
 **Example:**
 
 ```javascript
-const { initialize, audit } = require('nuget-audit');
+const { initialize, audit } = require('@moonlitlabs/nuget-check');
 
 initialize({
   logLevel: 'debug',
@@ -185,9 +185,9 @@ audit('./packages.config');
 - `GITHUB_TOKEN` (required): GitHub personal access token
 - `USE_REST` (optional): Set to 'true' to use REST API instead of GraphQL
 
-### Configuration File (.nuget-auditrc.json)
+### Configuration File (.nuget-checkrc.json)
 
-Create a `.nuget-auditrc.json` file in your project root:
+Create a `.nuget-checkrc.json` file in your project root:
 
 ```json
 {
@@ -217,14 +217,14 @@ The caching system supports both in-memory and file-based caching:
 - Reduces API calls for duplicate packages
 
 **File-Based Cache:**
-- Persists results in `.nuget-audit-cache/` directory
+- Persists results in `.nuget-check-cache/` directory
 - Results expire after 24 hours
 - Useful for recurring audits
 
 **Example:**
 
 ```javascript
-const { audit } = require('nuget-audit');
+const { audit } = require('@moonlitlabs/nuget-check');
 
 process.env.GITHUB_TOKEN = 'ghp_your_token';
 
@@ -237,7 +237,7 @@ audit('./packages.config', {
 ## Error Handling
 
 ```javascript
-const { audit } = require('nuget-audit');
+const { audit } = require('@moonlitlabs/nuget-check');
 
 audit('./packages.config').catch(err => {
   if (err.message.includes('File not found')) {

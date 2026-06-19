@@ -1,4 +1,4 @@
-# nuget-audit - Test Results & Verification
+# nuget-check - Test Results & Verification
 
 ## ✅ All Tests Passed!
 
@@ -123,7 +123,7 @@ To use in production:
 
 3. **Or use as library:**
    ```javascript
-   const { audit } = require('nuget-audit');
+   const { audit } = require('@moonlitlabs/nuget-check');
    audit('./packages.config', { logLevel: 'info' });
    ```
 

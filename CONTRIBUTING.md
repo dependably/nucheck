@@ -1,4 +1,4 @@
-# Contributing to nuget-audit
+# Contributing to nuget-check
 
 Thank you for your interest in contributing! This guide will help you get started.
 
@@ -14,8 +14,8 @@ Thank you for your interest in contributing! This guide will help you get starte
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/nuget-audit.git
-cd nuget-audit
+git clone https://gitlab.northwardlabs.ca/moonlitlabs/nuget-check.git
+cd nuget-check
 ```
 
 2. Install dependencies:
@@ -31,7 +31,7 @@ export GITHUB_TOKEN=your_github_personal_access_token
 ### Project Structure
 
 ```
-nuget-audit/
+nuget-check/
 ├── index.js              # Main audit logic
 ├── cli.js                # CLI entry point
 ├── package.json          # Dependencies and scripts
@@ -155,4 +155,4 @@ By contributing, you agree that your contributions will be licensed under the MI
 
 Feel free to open an issue with the `question` label if you need help!
 
-Thank you for contributing to nuget-audit! 🎉
+Thank you for contributing to nuget-check! 🎉

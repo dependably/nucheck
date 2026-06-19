@@ -1,14 +1,32 @@
 {
-  "name": "nuget-audit",
+  "name": "@moonlitlabs/nuget-check",
   "version": "1.0.0",
   "description": "An npm package that audits NuGet packages for known vulnerabilities, similar to npm audit.",
   "main": "index.js",
   "bin": {
-    "nuget-audit": "./cli.js"
+    "nuget-check": "./cli.js"
   },
+  "files": [
+    "index.js",
+    "cli.js",
+    "utils/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "test": "jest --coverage",
-    "test:watch": "jest --watch"
+    "test:watch": "jest --watch",
+    "lint": "eslint .",
+    "setup:hooks": "git config core.hooksPath .githooks",
+    "sbom": "cyclonedx-npm --output-format json --output-file sbom.json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://gitlab.northwardlabs.ca/moonlitlabs/nuget-check.git"
+  },
+  "homepage": "https://gitlab.northwardlabs.ca/moonlitlabs/nuget-check#readme",
+  "bugs": {
+    "url": "https://gitlab.northwardlabs.ca/moonlitlabs/nuget-check/-/issues"
   },
   "keywords": [
     "nuget",
@@ -16,14 +34,25 @@
     "vulnerability",
     "security"
   ],
-  "author": "",
+  "author": {
+    "name": "MHiland",
+    "email": "michael@moonlitlabs.ca"
+  },
   "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
   "dependencies": {
     "node-fetch": "^2.6.7",
     "xml2js": "^0.4.23",
     "semver": "^7.5.4"
   },
   "devDependencies": {
+    "@cyclonedx/cyclonedx-npm": "^4.2.1",
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.5.0",
+    "globals": "^17.6.0",
     "jest": "^29.7.0"
   }
 }

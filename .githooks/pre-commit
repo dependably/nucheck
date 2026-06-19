@@ -1,0 +1,32 @@
+#!/bin/bash
+
+# Pre-commit hook for nuget-check (tracked; installed by running
+# `npm run setup:hooks`, which points git's core.hooksPath at .githooks/).
+# Gates a commit on ESLint (hard gate) and runs the test suite (advisory).
+
+echo "🔍 Running pre-commit checks..."
+
+if ! command -v npm &> /dev/null; then
+  echo "❌ npm is not installed"
+  exit 1
+fi
+
+# 1. ESLint — hard gate
+echo "📝 Running ESLint..."
+npm run lint
+if [ $? -ne 0 ]; then
+  echo "❌ ESLint found issues. Fix them before committing."
+  exit 1
+fi
+
+# 2. Test suite — advisory only (never blocks)
+echo "⚡ Running tests..."
+npm test 2>/dev/null
+if [ $? -ne 0 ]; then
+  echo "⚠️  Some tests failed. Review the output above."
+  echo "💡 You can run 'npm test' for the full test suite."
+  # Don't exit 1 here — allow commit with warning
+fi
+
+echo "✅ Pre-commit checks completed!"
+exit 0

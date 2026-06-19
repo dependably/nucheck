@@ -1,5 +1,5 @@
 /**
- * Test suite for nuget-audit
+ * Test suite for nuget-check
  * Run with: npm test
  */
 
@@ -54,7 +54,7 @@ function cleanupTestFixtures() {
   }
 }
 
-describe('nuget-audit', () => {
+describe('nuget-check', () => {
   beforeAll(setupTestFixtures);
   afterAll(cleanupTestFixtures);
 
@@ -89,12 +89,7 @@ describe('nuget-audit', () => {
       const invalidXml = path.join(TEST_DIR, 'invalid.config');
       fs.writeFileSync(invalidXml, '<invalid>unclosed tag');
 
-      try {
-        await readPackagesFile(invalidXml);
-        fail('Should have thrown an error');
-      } catch (err) {
-        expect(err.message).toContain('Failed to parse XML');
-      }
+      await expect(readPackagesFile(invalidXml)).rejects.toThrow('Failed to parse XML');
 
       fs.unlinkSync(invalidXml);
     });

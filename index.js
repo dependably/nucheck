@@ -66,7 +66,7 @@ async function readPackagesFile(filePath) {
       try {
         result = await parser.parseStringPromise(data);
       } catch (err) {
-        throw new Error(`Failed to parse XML: ${err.message}`);
+        throw new Error(`Failed to parse XML: ${err.message}`, { cause: err });
       }
 
       const packages = result.packages.package || [];
