@@ -22,6 +22,13 @@ A command-line tool and Node.js library that audits NuGet packages for known vul
 
 ## Installation
 
+`@moonlitlabs/nuget-check` is published to the private registry. Point the
+`@moonlitlabs` scope at it once (per machine or per project):
+
+```bash
+npm config set @moonlitlabs:registry https://dependably.northwardlabs.ca/
+```
+
 ### Global (CLI)
 
 ```bash
