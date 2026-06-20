@@ -28,6 +28,9 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
     // Cap any single backoff wait so a hostile or buggy Retry-After can't stall the CLI.
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(60);
 
+    // Cap how much of an API error body is echoed into an exception message.
+    private const int MaxErrorBodyLength = 500;
+
     private readonly HttpClient _http;
     private readonly string _token;
     private readonly bool _useRest;
@@ -114,15 +117,15 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
     /// <summary>Whether a response is worth retrying: rate limits and server errors.</summary>
     private static bool IsTransient(HttpResponseMessage response)
     {
-        var status = (int)response.StatusCode;
-        if (status == 429 || status >= 500)
+        if (response.StatusCode == HttpStatusCode.TooManyRequests
+            || (int)response.StatusCode >= (int)HttpStatusCode.InternalServerError)
         {
             return true;
         }
 
         // GitHub signals a secondary rate limit with 403 plus Retry-After or an
         // exhausted x-ratelimit-remaining; a plain 403 (bad scope) is not retryable.
-        if (status == 403)
+        if (response.StatusCode == HttpStatusCode.Forbidden)
         {
             return response.Headers.RetryAfter is not null
                 || (response.Headers.TryGetValues("x-ratelimit-remaining", out var remaining)
@@ -279,12 +282,12 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
             throw new InvalidOperationException("GitHub API authentication failed (401). Check GITHUB_TOKEN.");
         }
 
-        if ((int)status is < 200 or >= 300)
+        if ((int)status is < (int)HttpStatusCode.OK or >= (int)HttpStatusCode.MultipleChoices)
         {
             var trimmed = body.Trim();
-            if (trimmed.Length > 500)
+            if (trimmed.Length > MaxErrorBodyLength)
             {
-                trimmed = trimmed[..500] + "…";
+                trimmed = trimmed[..MaxErrorBodyLength] + "…";
             }
 
             var detail = trimmed.Length == 0 ? string.Empty : $": {trimmed}";
