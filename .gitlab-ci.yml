@@ -1,68 +1,78 @@
-# CI/CD pipeline for nuget-check
+# CI/CD pipeline for nuget-check (.NET global tool)
 #
-# Flow:  test  →  build  →  sbom  →  sbom-publish  →  publish (manual, default branch only)
+# Flow:  test  →  pack  →  sbom  →  sbom-publish  →  publish (manual, default branch only)
 #
-#   test          lint + unit tests on every push/MR
-#   build         `npm pack` the publishable tarball, kept as a job artifact
+#   test          build + xUnit tests w/ coverage, format check, secret + SAST + Sonar scans
+#   pack          `dotnet pack` the .nupkg tool, kept as a job artifact
 #   sbom          generate a CycloneDX SBOM (every pipeline), kept as an artifact
-#   sbom-publish  upload the SBOM to Dependency-Track on the default branch (its own
-#                 stage so it never races the `sbom` job in the shared build dir)
-#   publish       manual gate that pushes the built tarball to the private registry
+#   sbom-publish  upload the SBOM to Dependency-Track on the default branch
+#   publish       manual gate that pushes the .nupkg to the private NuGet feed
 #
-# Required CI/CD variables (Settings → CI/CD → Variables), set as "Protected"
-# and "Masked" so they're only exposed to protected branches:
-#   REGISTRY_URL          e.g. https://dependably.northwardlabs.ca/
-#   REGISTRY_KEY          auth token for that registry  (npm `_authToken`)
-#   dependencyTrack_url   Dependency-Track base URL, e.g. https://dtrack.example.com
+# Required CI/CD variables (Settings → CI/CD → Variables), "Protected" + "Masked":
+#   REGISTRY_URL          private NuGet v3 feed endpoint (the index.json or push URL —
+#                         NOTE: likely a different path than the npm endpoint)
+#   REGISTRY_KEY          API key for `dotnet nuget push`
+#   dependencyTrack_url   Dependency-Track base URL
 #   dependencyTrack_token DT API key with BOM_UPLOAD + PROJECT_CREATION_UPLOAD perms
-#   SNYK_TOKEN            Snyk Code (SAST) auth token. Set UNPROTECTED + masked so
-#                         merge-request pipelines (unprotected branches) can scan.
+#   SNYK_TOKEN            Snyk (SAST) token. UNPROTECTED + masked so MR pipelines can scan.
 #   SONAR_HOST_URL        SonarQube server URL (not a secret)
-#   SONAR_PROJECT_KEY     SonarQube project key (not a secret)
 #   SONAR_TOKEN           SonarQube analysis token (masked)
 
 default:
-  image: node:20
+  image: mcr.microsoft.com/dotnet/sdk:10.0
 
 stages:
   - test
-  - build
+  - pack
   - sbom
   - sbom-publish
   - publish
 
-# Reusable npm dependency cache (keyed on the lockfile).
-.npm_install: &npm_install
+variables:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+  NUGET_PACKAGES: "${CI_PROJECT_DIR}/.nuget/packages"
+
+# Reusable NuGet restore cache (keyed on the project files).
+.dotnet_cache: &dotnet_cache
   cache:
     key:
       files:
-        - package-lock.json
+        - src/NuGetCheck/NuGetCheck.csproj
+        - tests/NuGetCheck.Tests/NuGetCheck.Tests.csproj
     paths:
-      - .npm/
-  before_script:
-    - npm ci --cache .npm --prefer-offline
+      - .nuget/packages/
 
-lint:
+build-test:
   stage: test
-  <<: *npm_install
+  <<: *dotnet_cache
   script:
-    - npm run lint
+    - dotnet restore NuGetCheck.slnx
+    - dotnet build NuGetCheck.slnx -c Release --no-restore
+    # coverlet.runsettings emits opencover (for Sonar) + cobertura (for GitLab).
+    - dotnet test NuGetCheck.slnx -c Release --no-build
+      --settings coverlet.runsettings --collect:"XPlat Code Coverage"
+      --results-directory ./coverage
+  artifacts:
+    when: always
+    paths:
+      - coverage/**/coverage.opencover.xml
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage/**/coverage.cobertura.xml
+    expire_in: 1 week
 
-unit-tests:
+format:
   stage: test
-  <<: *npm_install
+  <<: *dotnet_cache
   script:
-    # `npm test` runs Jest with --coverage; its default reporters emit
-    # coverage/lcov.info, which the sonarqube-check job consumes.
-    - npm test
+    - dotnet format NuGetCheck.slnx --verify-no-changes
 
 # Secret scan — fail the pipeline if a committed secret is detected. Pinned by
-# digest so the scanner version can't drift under us. GIT_DEPTH: 0 fetches full
-# history. We prefer an incremental scan (CI_COMMIT_BEFORE_SHA..HEAD) for speed,
-# but fall back to a FULL-history scan whenever the "before" SHA is unusable —
-# the all-zero sentinel on a branch's first push, or an unreachable commit after
-# a force-push — so a secret hidden in earlier/rewritten history can't slip the
-# gate. --only-verified keeps it fast/false-positive-free, --fail hard-fails.
+# digest so the scanner version can't drift. GIT_DEPTH 0 fetches full history;
+# prefer a fast incremental scan but fall back to FULL history when the "before"
+# SHA is unusable (first push / force-push). --only-verified, --fail hard-fails.
 secret-scan:
   stage: test
   image:
@@ -80,18 +90,10 @@ secret-scan:
         trufflehog git file://. --since-commit "$BEFORE" --only-verified --fail
       fi
 
-# Snyk Code (SAST) — static analysis of the source for security bugs, using the
-# pinned-by-digest snyk/snyk image (same image the sibling pipelines use). This
-# is the project's FIRST Snyk run, so it's deliberately advisory:
-# `allow_failure: true` lets findings surface as a signal without blocking merges
-# until they're triaged. Once reviewed, flip allow_failure to false to make it a
-# hard gate. No `npm ci` needed — Snyk Code scans source directly, not node_modules.
-#
-# The `rules` keep the job out of the pipeline entirely until SNYK_TOKEN exists,
-# so it never shows a spurious auth failure before the operator configures it.
-# SNYK_TOKEN must be an UNPROTECTED, masked CI/CD variable — merge-request
-# pipelines run on unprotected branches, so a protected token would be absent
-# there and every MR scan would error. The Snyk CLI reads it from the env.
+# Snyk (SAST) — pinned-by-digest snyk/snyk image. Advisory for now
+# (allow_failure:true); flip to false to make it a hard gate once triaged. The
+# rules keep it out of the pipeline until SNYK_TOKEN exists (set UNPROTECTED +
+# masked so MR pipelines on unprotected branches can read it).
 snyk-code:
   stage: test
   image:
@@ -101,117 +103,71 @@ snyk-code:
   rules:
     - if: '$SNYK_TOKEN'
   script:
-    - snyk code test --severity-threshold=high
+    - snyk test --severity-threshold=high --all-projects
 
-# SonarQube static analysis + coverage (advisory). Main-only and
-# allow_failure:true, mirroring the sibling pipelines. Runs in the default
-# node:20 image and drives the analysis through the `sonarqube-scanner` npm
-# package (run via npx) — its v3 line downloads the classic SonarScanner CLI,
-# which ships a bundled JRE (no system Java needed). Coverage comes from Jest's
-# lcov report; the `|| true` keeps a coverage-threshold miss (the `unit-tests`
-# job is the real gate) from aborting the scan. GIT_DEPTH:0 gives Sonar full
-# history for accurate new-code/blame attribution. Token passed as `sonar.login`.
-# The project key and `sonar.qualitygate.wait` live in sonar-project.properties.
-#
-# The job is advisory (allow_failure:true): with sonar.qualitygate.wait=true the
-# scanner blocks on the quality-gate result and exits non-zero if it fails, but
-# allow_failure keeps that from blocking the pipeline — the red icon is the signal.
-# Flip allow_failure to false to make the quality gate a hard merge gate.
-#
-# Required CI/CD variables: SONAR_HOST_URL (not a secret) and SONAR_TOKEN (masked).
-# SONAR_PROJECT_KEY is optional and overrides the key in sonar-project.properties
-# when set; the job only adds -Dsonar.projectKey when the variable is non-empty.
-# The Sonar project is already provisioned (key in sonar-project.properties).
-# NOTE: this is a JavaScript project — analysis runs via the `sonarqube-scanner`
-# JS CLI and ingests Jest's lcov coverage. Do NOT use the .NET dotnet-sonarscanner
-# here; there is no .NET project to `dotnet build`.
+# SonarQube analysis + coverage via the .NET scanner (dotnet-sonarscanner), wrapped
+# around the build so the analyzer sees the compilation. Main-only + allow_failure
+# (advisory), reusing the existing project key. The scanner needs a JRE; SQ 9.9
+# accepts coverage as OpenCover xml (sonar.cs.opencover.reportsPaths). sonar.login
+# is the param the 9.9 server expects. Flip allow_failure to false for a hard gate.
 sonarqube-check:
   stage: test
   variables:
-    GIT_DEPTH: "0"
     SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
+    GIT_DEPTH: "0"
   cache:
-    - key:
-        files:
-          - package-lock.json
-      paths:
-        - .npm/
-    - key: "${CI_JOB_NAME}"
-      paths:
-        - .sonar/
+    key: "${CI_JOB_NAME}"
+    paths:
+      - .sonar/cache
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $SONAR_TOKEN'
   before_script:
-    - npm ci --cache .npm --prefer-offline
+    - apt-get update && apt-get install --yes --no-install-recommends openjdk-17-jre-headless
+    - dotnet tool install --global dotnet-sonarscanner
+    - export PATH="$PATH:$HOME/.dotnet/tools"
   script:
-    - npm test || true
-    # Normalize lcov source paths. Under node:20, Jest writes SF paths relative to
-    # a nested report dir (e.g. `../../utils/cache.js`); SonarQube resolves those
-    # outside the project and drops them ("Could not resolve file paths" → 0%
-    # coverage). Strip any leading `../` segments so they become project-root-
-    # relative (`utils/cache.js`) and the JS coverage sensor maps them. Idempotent —
-    # a no-op on already-clean paths.
-    - |
-      if [ -f coverage/lcov.info ]; then
-        sed -i -E 's#^SF:(\.\./)+#SF:#' coverage/lcov.info
-        echo "Normalized $(grep -c '^SF:' coverage/lcov.info) lcov source path(s)"
-      else
-        echo "WARNING: coverage/lcov.info not found; coverage will report 0%" >&2
-      fi
-    - |
-      set -eu
-      VERSION=$(node -p "require('./package.json').version")
-      set -- -Dsonar.host.url="$SONAR_HOST_URL" -Dsonar.login="$SONAR_TOKEN" -Dsonar.projectVersion="$VERSION"
-      if [ -n "${SONAR_PROJECT_KEY:-}" ]; then
-        set -- "$@" -Dsonar.projectKey="$SONAR_PROJECT_KEY"
-      fi
-      npx --yes sonarqube-scanner "$@"
+    - dotnet sonarscanner begin
+      /k:"DevAi_nuget-audit_AZ7hTtTJena5TNZ7ZTTX"
+      /d:sonar.host.url="$SONAR_HOST_URL"
+      /d:sonar.login="$SONAR_TOKEN"
+      /d:sonar.cs.opencover.reportsPaths="**/coverage.opencover.xml"
+    - dotnet build NuGetCheck.slnx -c Release
+    - dotnet test NuGetCheck.slnx -c Release --no-build
+      --settings coverlet.runsettings --collect:"XPlat Code Coverage"
+      --results-directory ./coverage
+    - dotnet sonarscanner end /d:sonar.login="$SONAR_TOKEN"
   allow_failure: true
 
-build:
-  stage: build
+pack:
+  stage: pack
+  <<: *dotnet_cache
   script:
-    # Pure-JS package: no transpile step, so "build" is just packing the
-    # publishable tarball. `npm pack` honors the package.json `files` allowlist.
-    - npm pack
+    - dotnet pack src/NuGetCheck/NuGetCheck.csproj -c Release -o artifacts
   artifacts:
     paths:
-      - "*.tgz"
+      - artifacts/*.nupkg
     expire_in: 1 week
 
-# Software Bill of Materials (CycloneDX, spec 1.6). Generated on every pipeline
-# from the installed dependency tree and kept as an artifact. cyclonedx-npm is
-# pinned via devDependency + package-lock, so the tool version can't drift.
-# `npm run sbom` includes the full tree (dev toolchain + the runtime deps
-# node-fetch/xml2js/semver) so the build's whole supply chain is captured.
+# Software Bill of Materials (CycloneDX). Generated every pipeline from the restored
+# dependency graph and kept as an artifact. The CycloneDX dotnet tool is installed
+# per-run (no global pin needed — it's advisory tooling, not a build input).
 sbom:
   stage: sbom
-  <<: *npm_install
+  <<: *dotnet_cache
   script:
-    - npm run sbom
+    - dotnet restore NuGetCheck.slnx
+    - dotnet tool install --global CycloneDX
+    - export PATH="$PATH:$HOME/.dotnet/tools"
+    - dotnet CycloneDX NuGetCheck.slnx -o . -fn sbom.json -j
   artifacts:
     paths:
       - sbom.json
     expire_in: 30 days
 
-# Publish the SBOM to Dependency-Track for continuous supply-chain monitoring.
-# Default branch only. Runs in its own stage after `sbom` and consumes that job's
-# artifact (alpine:3 + curl).
-#
-# IMPORTANT — why the text fields use `--form-string`, not `-F`: in a curl `-F`
-# value, a leading `@` means "read this file" and a leading `<` means "read this
-# file as the field value". Our project name is the scoped package
-# `@moonlitlabs/nuget-check`, so `-F "projectName=@moonlitlabs/nuget-check"` would
-# make curl try to open a file named `moonlitlabs/nuget-check`, failing the run
-# with the misleading "(26) Failed to open/read local data". `--form-string` sends
-# the value verbatim with no @/< interpretation. Only the actual file upload keeps
-# `-F "bom=@sbom.json"`.
-#
-# autoCreate stands the project up on first upload; projectVersion tracks the
-# package.json version so each release is a distinct BOM (read with sed since the
-# alpine image has no node). The job hard-fails when the Dependency-Track variables
-# aren't configured, mirroring `publish`'s REGISTRY_* guard. Uses the group-level
-# `dependencyTrack_url` / `dependencyTrack_token` CI/CD variables.
+# Publish the SBOM to Dependency-Track. Default branch only, serialized. autoCreate
+# stands the project up on first upload; projectVersion tracks the package version
+# (read from the csproj with sed since the alpine image has no dotnet). Hard-fails
+# when the Dependency-Track variables aren't configured.
 sbom-publish:
   stage: sbom-publish
   image: alpine:3
@@ -231,13 +187,13 @@ sbom-publish:
     - |
       set -eu
       if [ ! -s sbom.json ]; then
-        echo "ERROR: sbom.json (from the sbom job artifact) is missing. Directory contents:" >&2
+        echo "ERROR: sbom.json (from the sbom job artifact) is missing." >&2
         ls -la >&2
         exit 1
       fi
       BASE="${dependencyTrack_url%/}"
-      PROJECT="@moonlitlabs/nuget-check"
-      VERSION=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' package.json | head -n1)
+      PROJECT="MoonlitLabs.NuGetCheck"
+      VERSION=$(sed -n 's/.*<Version>\([^<]*\)<\/Version>.*/\1/p' src/NuGetCheck/NuGetCheck.csproj | head -n1)
       [ -n "$VERSION" ] || VERSION=latest
       echo "Publishing SBOM ($(wc -c < sbom.json) bytes) for $PROJECT@$VERSION to $BASE"
       status=$(curl -sS -o /tmp/bom.out -w '%{http_code}' \
@@ -252,14 +208,14 @@ sbom-publish:
         *) echo "SBOM upload failed (HTTP $status):" >&2; cat /tmp/bom.out >&2; exit 1;;
       esac
 
+# Push the .nupkg to the private NuGet feed. Manual approval, default branch only,
+# serialized. Bump <Version> in the csproj to release — pushing an existing version
+# fails unless the feed allows overwrite (--skip-duplicate tolerates re-runs).
+# REGISTRY_URL must be the NuGet v3 feed/push endpoint, NOT the npm endpoint path.
 publish:
   stage: publish
-  # Only the build artifact is needed — no source install, and publishing a
-  # prebuilt tarball deliberately skips any prepublish hooks. The `test` stage
-  # above is the authoritative quality gate.
   dependencies:
-    - build
-  # Manual approval, default branch only. Serialize so two publishes can't race.
+    - pack
   resource_group: publish
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
@@ -271,43 +227,6 @@ publish:
         echo "ERROR: REGISTRY_URL and REGISTRY_KEY must be set as CI/CD variables." >&2
         exit 1
       fi
-    # Derive the registry host (strip scheme + trailing slash) for the auth key.
-    - REGISTRY_HOST=$(printf '%s' "$REGISTRY_URL" | sed -E 's#^https?://##; s#/+$##')
-    - |
-      {
-        echo "registry=$REGISTRY_URL"
-        echo "//$REGISTRY_HOST/:_authToken=$REGISTRY_KEY"
-        echo "always-auth=true"
-      } > .npmrc
-    - TARBALL=$(ls ./*.tgz)
-    - PKG=$(node -p "const p=require('./package.json'); p.name + '@' + p.version")
-    - echo "Publishing $TARBALL ($PKG) to $REGISTRY_URL"
-    # Publishing fails if this version already exists — bump the version to release.
-    # On failure, dump npm's debug log (verbose, includes the registry's HTTP
-    # response body) so the actual rejection reason — e.g. a 422 ProblemDetails
-    # "detail" — is visible. The log ALSO contains the request Authorization header,
-    # so everything is piped through `redact` before reaching the (retained,
-    # broadly-readable) job output — defense-in-depth even though REGISTRY_KEY is a
-    # masked CI variable. npm prints the log path in its error; parse that, and fall
-    # back to scanning the standard log dirs.
-    - |
-      redact() { sed -E 's/((authorization|authtoken|_auth|_password|bearer)[: =]+)[^ ]+/\1<redacted>/Ig; s/npm_[A-Za-z0-9]{6,}/npm_<redacted>/g'; }
-      if ! npm publish "$TARBALL" --registry "$REGISTRY_URL" --loglevel verbose 2> publish.err; then
-        redact < publish.err >&2
-        echo "=== registry response (npm debug log, redacted) ===" >&2
-        LOG=$(grep -oE '/[^ ]+_logs/[0-9TZ_-]+-debug-[0-9]+\.log' publish.err | tail -1)
-        for f in "$LOG" /root/.npm/_logs/*-debug-*.log "$HOME"/.npm/_logs/*-debug-*.log; do
-          [ -n "$f" ] && [ -f "$f" ] && { echo "--- $f (redacted) ---" >&2; redact < "$f" >&2; break; }
-        done
-        exit 1
-      fi
-      redact < publish.err >&2
-    # Verify the version is actually retrievable from the registry. A plain
-    # `npm publish` success can be a false positive against a non-registry
-    # endpoint (e.g. an SPA that 200s the PUT); this read-back fails the job
-    # unless the package is genuinely live.
-    - echo "Verifying $PKG is live on the registry…"
-    - npm view "$PKG" version --registry "$REGISTRY_URL"
-    - echo "✓ $PKG published and verified on $REGISTRY_URL"
-  after_script:
-    - rm -f .npmrc
+    - PKG=$(ls artifacts/*.nupkg)
+    - echo "Publishing $PKG to $REGISTRY_URL"
+    - dotnet nuget push "$PKG" --source "$REGISTRY_URL" --api-key "$REGISTRY_KEY" --skip-duplicate

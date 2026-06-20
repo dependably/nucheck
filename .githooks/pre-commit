@@ -1,30 +1,30 @@
 #!/bin/bash
 
-# Pre-commit hook for nuget-check (tracked; installed by running
-# `npm run setup:hooks`, which points git's core.hooksPath at .githooks/).
-# Gates a commit on ESLint (hard gate) and runs the test suite (advisory).
+# Pre-commit hook for nuget-check (tracked; install by running
+# `git config core.hooksPath .githooks`).
+# Gates a commit on `dotnet format` (hard gate) and runs the tests (advisory).
 
 echo "🔍 Running pre-commit checks..."
 
-if ! command -v npm &> /dev/null; then
-  echo "❌ npm is not installed"
+if ! command -v dotnet &> /dev/null; then
+  echo "❌ dotnet SDK is not installed"
   exit 1
 fi
 
-# 1. ESLint — hard gate
-echo "📝 Running ESLint..."
-npm run lint
+# 1. Formatting — hard gate
+echo "📝 Verifying formatting (dotnet format)..."
+dotnet format NuGetCheck.slnx --verify-no-changes
 if [ $? -ne 0 ]; then
-  echo "❌ ESLint found issues. Fix them before committing."
+  echo "❌ Formatting issues. Run 'dotnet format NuGetCheck.slnx' before committing."
   exit 1
 fi
 
 # 2. Test suite — advisory only (never blocks)
 echo "⚡ Running tests..."
-npm test 2>/dev/null
+dotnet test NuGetCheck.slnx -c Release 2>/dev/null
 if [ $? -ne 0 ]; then
   echo "⚠️  Some tests failed. Review the output above."
-  echo "💡 You can run 'npm test' for the full test suite."
+  echo "💡 Run 'dotnet test NuGetCheck.slnx' for the full suite."
   # Don't exit 1 here — allow commit with warning
 fi
 

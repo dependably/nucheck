@@ -1,18 +1,35 @@
-# .gitignore
-node_modules/
-coverage/
-*.log
-.env
-.DS_Store
+# .gitignore (.NET)
 
-# build artifacts / registry auth (generated in CI)
-*.tgz
-.npmrc
+# Build output
+bin/
+obj/
+artifacts/
+*.user
+
+# Coverage output directory + any stray Node leftovers
+coverage/
+node_modules/
+
+# Test + coverage output
+[Tt]est[Rr]esults/
+coverage*.xml
+coverage*.json
+*.opencover.xml
+
+# Packages produced by `dotnet pack`
+*.nupkg
+*.snupkg
 
 # SBOM (CycloneDX) — generated in CI, published to Dependency-Track
 sbom.json
 sbom-prod.json
 
 # SonarQube scanner working/cache dirs (generated in CI)
+.sonarqube/
 .scannerwork/
 .sonar/
+
+# Misc
+*.log
+.env
+.DS_Store
