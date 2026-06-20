@@ -4,6 +4,15 @@ All notable changes to `nuget-check` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`--source osv` advisory source.** Audit against the public [OSV.dev](https://osv.dev)
+  database with no token required, as an alternative to the default GitHub Advisory source.
+  OSV introduced/fixed/last_affected ranges are translated into the comparator syntax the
+  existing `VulnerabilityMatcher` understands, so version matching stays centralized.
+
 ## [1.0.0] - 2026-06-19
 
 Initial release: a native .NET global tool (`Dependably.NuGetCheck`, command

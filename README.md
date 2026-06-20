@@ -25,9 +25,11 @@ correctly handles NuGet's 4-part versions (e.g. `1.8.3.1`) and interval ranges
 ## Requirements
 
 - .NET SDK 10.0+ (the tool targets `net10.0`).
-- A GitHub personal access token in the `GITHUB_TOKEN` environment variable
-  (the Advisory API requires authentication). Create one at
-  <https://github.com/settings/tokens> — no scopes are needed for public advisory data.
+- An advisory source:
+  - **`--source github`** (default): a GitHub personal access token in the `GITHUB_TOKEN`
+    environment variable (the GitHub Advisory API requires authentication). Create one at
+    <https://github.com/settings/tokens> — no scopes are needed for public advisory data.
+  - **`--source osv`**: queries the public [OSV.dev](https://osv.dev) database — **no token required**.
 
 ## Installation
 
@@ -57,14 +59,15 @@ Arguments:
   <path-to-packages-file>    Path to packages.config or packages.lock.json
 
 Options:
+  --source <name>            Advisory source: github (default), osv
   --format <type>            Output format: summary, table, json (default: summary)
   --severity <level>         Filter by severity: critical, high, moderate, low
-  --rest                     Use the GitHub REST API instead of GraphQL
+  --rest                     Use the GitHub REST API instead of GraphQL (github source)
   --verbose, -v              Write progress to stderr
   --help, -h                 Show help
 
 Environment:
-  GITHUB_TOKEN               GitHub personal access token (required)
+  GITHUB_TOKEN               GitHub personal access token (required for the github source)
 ```
 
 ### Examples
@@ -72,6 +75,9 @@ Environment:
 ```bash
 # Default summary
 nuget-check ./packages.config
+
+# OSV.dev source — no GITHUB_TOKEN needed
+nuget-check ./packages.lock.json --source osv
 
 # JSON output (for piping into other tools / CI)
 nuget-check ./packages.lock.json --format json

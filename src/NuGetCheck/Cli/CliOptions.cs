@@ -10,6 +10,7 @@ public sealed class CliOptions
     {
         ["--format"] = (o, v) => o.Format = v,
         ["--severity"] = (o, v) => o.Severity = v,
+        ["--source"] = (o, v) => o.Source = v,
     };
 
     private static readonly Dictionary<string, Action<CliOptions>> BoolFlags = new(StringComparer.Ordinal)
@@ -26,6 +27,9 @@ public sealed class CliOptions
     public string Format { get; private set; } = "summary";
 
     public string? Severity { get; private set; }
+
+    /// <summary>Advisory source: "github" (default, needs GITHUB_TOKEN) or "osv" (no token).</summary>
+    public string Source { get; private set; } = "github";
 
     public bool UseRest { get; private set; }
 
