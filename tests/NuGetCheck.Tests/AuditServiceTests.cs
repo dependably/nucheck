@@ -44,4 +44,38 @@ public class AuditServiceTests
         Assert.Empty(result.Vulnerabilities);
         Assert.Equal(0, result.VulnerabilityCount);
     }
+
+    [Fact]
+    public async Task AuditAsync_preserves_input_order_under_concurrency()
+    {
+        var source = new FakeAdvisorySource(new Dictionary<string, IReadOnlyList<Advisory>>
+        {
+            ["A"] = [Advisory(">= 1.0.0")],
+            ["B"] = [Advisory(">= 1.0.0")],
+            ["C"] = [Advisory(">= 1.0.0")],
+        });
+
+        var result = await new AuditService(source, maxConcurrency: 8)
+            .AuditAsync([Pkg("A", "1.0.0"), Pkg("B", "1.0.0"), Pkg("C", "1.0.0")]);
+
+        Assert.Equal(new[] { "A", "B", "C" }, result.Vulnerabilities.Select(v => v.Id).ToArray());
+    }
+
+    [Fact]
+    public async Task AuditAsync_propagates_a_source_failure()
+    {
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new AuditService(new ThrowingSource()).AuditAsync([Pkg("Ok", "1.0.0"), Pkg("Boom", "1.0.0")]));
+
+        Assert.Equal("query failed", ex.Message);
+    }
+
+    /// <summary>An advisory source that fails for one package, to prove the audit surfaces it.</summary>
+    private sealed class ThrowingSource : IAdvisorySource
+    {
+        public Task<IReadOnlyList<Advisory>> GetAdvisoriesAsync(string packageId, CancellationToken cancellationToken = default)
+            => packageId == "Boom"
+                ? throw new InvalidOperationException("query failed")
+                : Task.FromResult<IReadOnlyList<Advisory>>([]);
+    }
 }

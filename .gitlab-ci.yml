@@ -56,7 +56,9 @@ build-test:
   stage: test
   <<: *dotnet_cache
   script:
-    - dotnet restore NuGetCheck.slnx
+    # --locked-mode fails the build if packages.lock.json is out of date with the
+    # csproj — i.e. a dependency drifted or was tampered with without a committed lock.
+    - dotnet restore NuGetCheck.slnx --locked-mode
     - dotnet build NuGetCheck.slnx -c Release --no-restore
     # coverlet.runsettings emits opencover (for Sonar) + cobertura (for GitLab).
     - dotnet test NuGetCheck.slnx -c Release --no-build
@@ -166,7 +168,7 @@ sbom:
   stage: sbom
   <<: *dotnet_cache
   script:
-    - dotnet restore NuGetCheck.slnx
+    - dotnet restore NuGetCheck.slnx --locked-mode
     - dotnet tool install --global CycloneDX
     - export PATH="$PATH:$HOME/.dotnet/tools"
     # -spv 1.6: CycloneDX v6 defaults to spec 1.7, which the Dependency-Track

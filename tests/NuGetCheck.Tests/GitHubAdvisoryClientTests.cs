@@ -54,18 +54,97 @@ public class GitHubAdvisoryClientTests
     }
 
     [Fact]
-    public async Task Non_success_returns_empty()
+    public async Task Non_success_throws_instead_of_reporting_clean()
     {
         var client = new GitHubAdvisoryClient(
-            new HttpClient(new FakeHttpMessageHandler(HttpStatusCode.InternalServerError, "{}")), "token");
+            new HttpClient(new FakeHttpMessageHandler(HttpStatusCode.InternalServerError, "boom")), "token",
+            maxRetries: 0);
 
-        Assert.Empty(await client.GetAdvisoriesAsync("X"));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => client.GetAdvisoriesAsync("X"));
+        Assert.Contains("500", ex.Message);
     }
 
     [Fact]
-    public void ParseGraphQl_returns_empty_when_no_data()
+    public async Task Retries_transient_failure_then_succeeds()
     {
-        Assert.Empty(GitHubAdvisoryClient.ParseGraphQl("""{"errors":[{"message":"boom"}]}"""));
+        var calls = 0;
+        var handler = new FakeHttpMessageHandler(_ =>
+        {
+            calls++;
+            return calls == 1 ? (HttpStatusCode.ServiceUnavailable, "down") : (HttpStatusCode.OK, GraphQlBody);
+        });
+        var client = new GitHubAdvisoryClient(new HttpClient(handler), "token", delay: NoDelay);
+
+        var advisories = await client.GetAdvisoriesAsync("Newtonsoft.Json");
+
+        Assert.Equal(2, calls);
+        Assert.Single(advisories);
+    }
+
+    [Fact]
+    public async Task Throws_after_exhausting_retries()
+    {
+        var calls = 0;
+        var handler = new FakeHttpMessageHandler(_ =>
+        {
+            calls++;
+            return (HttpStatusCode.ServiceUnavailable, "still down");
+        });
+        var client = new GitHubAdvisoryClient(new HttpClient(handler), "token", maxRetries: 2, delay: NoDelay);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.GetAdvisoriesAsync("X"));
+        Assert.Equal(3, calls); // 1 initial attempt + 2 retries
+    }
+
+    [Fact]
+    public async Task Plain_403_is_not_retried()
+    {
+        var calls = 0;
+        var handler = new FakeHttpMessageHandler(_ =>
+        {
+            calls++;
+            return (HttpStatusCode.Forbidden, "insufficient scope");
+        });
+        var client = new GitHubAdvisoryClient(new HttpClient(handler), "token", delay: NoDelay);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.GetAdvisoriesAsync("X"));
+        Assert.Equal(1, calls); // a non-rate-limit 403 is a hard failure, not transient
+    }
+
+    private static Task NoDelay(TimeSpan _, CancellationToken __) => Task.CompletedTask;
+
+    [Fact]
+    public async Task Rate_limited_graphql_200_with_errors_throws()
+    {
+        const string body = """{"data":null,"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}""";
+        var client = new GitHubAdvisoryClient(new HttpClient(new FakeHttpMessageHandler(HttpStatusCode.OK, body)), "token");
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => client.GetAdvisoriesAsync("X"));
+        Assert.Contains("rate limit", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ParseGraphQl_throws_on_errors_payload()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => GitHubAdvisoryClient.ParseGraphQl("""{"errors":[{"message":"boom"}]}"""));
+        Assert.Contains("boom", ex.Message);
+    }
+
+    [Fact]
+    public void ParseGraphQl_returns_empty_when_data_has_no_nodes()
+    {
+        Assert.Empty(GitHubAdvisoryClient.ParseGraphQl("""{"data":{"securityVulnerabilities":{"nodes":[]}}}"""));
+    }
+
+    [Fact]
+    public void ParseRest_normalises_medium_severity_to_moderate()
+    {
+        const string body = """
+[{"summary":"x","severity":"medium","html_url":"u","vulnerabilities":[{"package":{"ecosystem":"nuget","name":"Pkg"},"vulnerable_version_range":"< 1.0"}]}]
+""";
+        var advisory = Assert.Single(GitHubAdvisoryClient.ParseRest(body, "Pkg"));
+        Assert.Equal("moderate", advisory.Severity);
     }
 
     [Fact]
