@@ -160,7 +160,9 @@ sbom:
     - dotnet restore NuGetCheck.slnx
     - dotnet tool install --global CycloneDX
     - export PATH="$PATH:$HOME/.dotnet/tools"
-    - dotnet CycloneDX NuGetCheck.slnx -o . -fn sbom.json -F Json
+    # -spv 1.6: CycloneDX v6 defaults to spec 1.7, which the Dependency-Track
+    # server rejects ("Unrecognized specVersion 1.7"). Pin to 1.6 (what DT accepts).
+    - dotnet CycloneDX NuGetCheck.slnx -o . -fn sbom.json -F Json -spv 1.6
   artifacts:
     paths:
       - sbom.json
