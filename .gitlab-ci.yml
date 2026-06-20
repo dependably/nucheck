@@ -18,8 +18,17 @@
 #   SONAR_HOST_URL        SonarQube server URL (not a secret)
 #   SONAR_TOKEN           SonarQube analysis token (masked)
 
+# Cancel superseded pipelines: when a new commit is pushed to a ref, cancel the
+# still-running *interruptible* jobs from the previous commit's pipeline (saves
+# runners). Side-effectful jobs (publish, sbom-publish) opt out with
+# interruptible:false so an in-flight release/upload is never cut off.
+workflow:
+  auto_cancel:
+    on_new_commit: interruptible
+
 default:
   image: mcr.microsoft.com/dotnet/sdk:10.0
+  interruptible: true
 
 stages:
   - test
@@ -175,6 +184,7 @@ sbom:
 sbom-publish:
   stage: sbom-publish
   image: alpine:3
+  interruptible: false
   needs:
     - job: sbom
       artifacts: true
@@ -218,6 +228,7 @@ sbom-publish:
 # REGISTRY_URL must be the NuGet v3 feed/push endpoint, NOT the npm endpoint path.
 publish:
   stage: publish
+  interruptible: false
   dependencies:
     - pack
   resource_group: publish
