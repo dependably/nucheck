@@ -22,7 +22,7 @@ public static class PackageFileReader
         return extension == ".json" ? ReadLockFile(filePath) : ReadPackagesConfig(filePath);
     }
 
-    private static IReadOnlyList<PackageRef> ReadPackagesConfig(string path)
+    private static List<PackageRef> ReadPackagesConfig(string path)
     {
         try
         {
@@ -38,7 +38,7 @@ public static class PackageFileReader
         }
     }
 
-    private static IReadOnlyList<PackageRef> ReadLockFile(string path)
+    private static List<PackageRef> ReadLockFile(string path)
     {
         PackagesLockFile lockFile;
         try

@@ -58,7 +58,7 @@ public static class Program
         }
     }
 
-    private static IAdvisorySource? CreateGitHubSource(CliOptions options)
+    private static GitHubAdvisoryClient? CreateGitHubSource(CliOptions options)
     {
         var token = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
         if (string.IsNullOrWhiteSpace(token))

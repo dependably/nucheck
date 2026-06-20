@@ -16,7 +16,7 @@ public class ProgramTests : IDisposable
     private readonly TextWriter _originalError = Console.Error;
     private readonly List<string> _tempFiles = [];
 
-    private static IAdvisorySource Source(params (string Id, Advisory Advisory)[] entries)
+    private static FakeAdvisorySource Source(params (string Id, Advisory Advisory)[] entries)
     {
         var map = new Dictionary<string, IReadOnlyList<Advisory>>();
         foreach (var (id, advisory) in entries)
@@ -27,7 +27,7 @@ public class ProgramTests : IDisposable
         return new FakeAdvisorySource(map);
     }
 
-    private (int Exit, string Out, string Error) Run(string[] args, Func<CliOptions, IAdvisorySource>? factory)
+    private static (int Exit, string Out, string Error) Run(string[] args, Func<CliOptions, IAdvisorySource>? factory)
     {
         var stdout = new StringWriter();
         var stderr = new StringWriter();
@@ -115,6 +115,7 @@ public class ProgramTests : IDisposable
 
     public void Dispose()
     {
+        GC.SuppressFinalize(this);
         Console.SetOut(_originalOut);
         Console.SetError(_originalError);
         foreach (var file in _tempFiles)
