@@ -7,6 +7,8 @@ namespace NuGetCheck.Tests;
 
 public class AuditServiceTests
 {
+    private static readonly string[] OrderedIds = ["A", "B", "C"];
+
     private static PackageRef Pkg(string id, string version) => new(id, NuGetVersion.Parse(version));
 
     private static Advisory Advisory(string range, string severity = "high")
@@ -58,7 +60,7 @@ public class AuditServiceTests
         var result = await new AuditService(source, maxConcurrency: 8)
             .AuditAsync([Pkg("A", "1.0.0"), Pkg("B", "1.0.0"), Pkg("C", "1.0.0")]);
 
-        Assert.Equal(new[] { "A", "B", "C" }, result.Vulnerabilities.Select(v => v.Id).ToArray());
+        Assert.Equal(OrderedIds, result.Vulnerabilities.Select(v => v.Id).ToArray());
     }
 
     [Fact]
