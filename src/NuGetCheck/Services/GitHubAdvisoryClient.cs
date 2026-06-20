@@ -9,8 +9,9 @@ namespace NuGetCheck.Services;
 /// <summary>
 /// Queries the GitHub Advisory Database for NuGet-ecosystem advisories. Uses the
 /// GraphQL <c>securityVulnerabilities</c> API by default, or the REST advisories
-/// API when <c>useRest</c> is set. Severities are normalised to lower case so they
-/// match a <c>--severity high</c> filter regardless of the API's casing.
+/// API when <c>useRest</c> is set. Severities are normalised to the GraphQL vocabulary
+/// (critical/high/moderate/low) so a <c>--severity</c> filter matches regardless of the
+/// API's casing or its "medium" vs "moderate" spelling.
 /// </summary>
 public sealed class GitHubAdvisoryClient : IAdvisorySource
 {
@@ -24,15 +25,27 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
         Justification = "Constant public GitHub API endpoint.")]
     private const string RestUrl = "https://api.github.com/advisories";
 
+    // Cap any single backoff wait so a hostile or buggy Retry-After can't stall the CLI.
+    private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(60);
+
     private readonly HttpClient _http;
     private readonly string _token;
     private readonly bool _useRest;
+    private readonly int _maxRetries;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delay;
 
-    public GitHubAdvisoryClient(HttpClient http, string token, bool useRest = false)
+    public GitHubAdvisoryClient(
+        HttpClient http,
+        string token,
+        bool useRest = false,
+        int maxRetries = 3,
+        Func<TimeSpan, CancellationToken, Task>? delay = null)
     {
         _http = http;
         _token = token;
         _useRest = useRest;
+        _maxRetries = Math.Max(0, maxRetries);
+        _delay = delay ?? Task.Delay;
     }
 
     public Task<IReadOnlyList<Advisory>> GetAdvisoriesAsync(string packageId, CancellationToken cancellationToken = default)
@@ -45,19 +58,15 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
             "{ securityVulnerabilities(first: 100, ecosystem: NUGET, package: \"" + escaped + "\") " +
             "{ nodes { advisory { summary severity references { url } } vulnerableVersionRange } } }";
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, GraphQlUrl)
+        var body = await SendWithRetryAsync(() =>
         {
-            Content = new StringContent(JsonSerializer.Serialize(new { query }), Encoding.UTF8, "application/json"),
-        };
-        AddHeaders(request);
-
-        using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        EnsureAuthorized(response.StatusCode);
-        if (!response.IsSuccessStatusCode)
-        {
-            return [];
-        }
+            var request = new HttpRequestMessage(HttpMethod.Post, GraphQlUrl)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new { query }), Encoding.UTF8, "application/json"),
+            };
+            AddHeaders(request);
+            return request;
+        }, cancellationToken).ConfigureAwait(false);
 
         return ParseGraphQl(body);
     }
@@ -65,24 +74,94 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
     private async Task<IReadOnlyList<Advisory>> QueryRestAsync(string packageId, CancellationToken cancellationToken)
     {
         var url = $"{RestUrl}?ecosystem=nuget&affects={Uri.EscapeDataString(packageId)}";
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        AddHeaders(request);
 
-        using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        EnsureAuthorized(response.StatusCode);
-        if (!response.IsSuccessStatusCode)
+        var body = await SendWithRetryAsync(() =>
         {
-            return [];
-        }
+            var request = new HttpRequestMessage(HttpMethod.Get, url);
+            AddHeaders(request);
+            return request;
+        }, cancellationToken).ConfigureAwait(false);
 
         return ParseRest(body, packageId);
     }
 
+    /// <summary>
+    /// Send a request, retrying transient failures — HTTP 429, 5xx, and the secondary
+    /// rate-limit 403 — with a Retry-After-aware exponential backoff. The request is
+    /// rebuilt per attempt (an <see cref="HttpRequestMessage"/> can only be sent once).
+    /// On the final attempt the response is validated by <see cref="EnsureSuccess"/>,
+    /// so a persistent failure surfaces loudly rather than as an empty advisory list.
+    /// </summary>
+    private async Task<string> SendWithRetryAsync(Func<HttpRequestMessage> createRequest, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            using var request = createRequest();
+            using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+
+            if (attempt < _maxRetries && IsTransient(response))
+            {
+                await _delay(RetryDelay(response, attempt), cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
+            EnsureSuccess(response.StatusCode, body);
+            return body;
+        }
+    }
+
+    /// <summary>Whether a response is worth retrying: rate limits and server errors.</summary>
+    private static bool IsTransient(HttpResponseMessage response)
+    {
+        var status = (int)response.StatusCode;
+        if (status == 429 || status >= 500)
+        {
+            return true;
+        }
+
+        // GitHub signals a secondary rate limit with 403 plus Retry-After or an
+        // exhausted x-ratelimit-remaining; a plain 403 (bad scope) is not retryable.
+        if (status == 403)
+        {
+            return response.Headers.RetryAfter is not null
+                || (response.Headers.TryGetValues("x-ratelimit-remaining", out var remaining)
+                    && remaining.FirstOrDefault() == "0");
+        }
+
+        return false;
+    }
+
+    /// <summary>Honour Retry-After when present, else exponential backoff (1s, 2s, 4s …), capped.</summary>
+    private static TimeSpan RetryDelay(HttpResponseMessage response, int attempt)
+    {
+        var retryAfter = response.Headers.RetryAfter;
+        if (retryAfter?.Delta is { } delta && delta > TimeSpan.Zero)
+        {
+            return delta < MaxBackoff ? delta : MaxBackoff;
+        }
+
+        var backoff = TimeSpan.FromSeconds(Math.Pow(2, attempt));
+        return backoff < MaxBackoff ? backoff : MaxBackoff;
+    }
+
     /// <summary>Parse a GraphQL securityVulnerabilities response body into advisories.</summary>
+    /// <remarks>
+    /// A GraphQL response can carry HTTP 200 yet still have failed (e.g. a rate-limited
+    /// or malformed query returns <c>data: null</c> with an <c>errors</c> array). Treat
+    /// that as a hard failure rather than "no vulnerabilities" — otherwise a failed query
+    /// is indistinguishable from a clean result and the audit silently passes.
+    /// </remarks>
     public static IReadOnlyList<Advisory> ParseGraphQl(string body)
     {
         using var document = JsonDocument.Parse(body);
+        if (document.RootElement.TryGetProperty("errors", out var errors)
+            && errors.ValueKind == JsonValueKind.Array && errors.GetArrayLength() > 0)
+        {
+            var messages = string.Join("; ", errors.EnumerateArray().Select(e => GetString(e, "message")));
+            throw new InvalidOperationException($"GitHub GraphQL API returned errors: {messages}");
+        }
+
         if (!document.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object
             || !data.TryGetProperty("securityVulnerabilities", out var sv)
             || !sv.TryGetProperty("nodes", out var nodes) || nodes.ValueKind != JsonValueKind.Array)
@@ -100,7 +179,7 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
 
             advisories.Add(new Advisory(
                 GetString(advisory, "summary"),
-                GetString(advisory, "severity").ToLowerInvariant(),
+                NormalizeSeverity(GetString(advisory, "severity")),
                 GetString(node, "vulnerableVersionRange"),
                 ExtractReferences(advisory)));
         }
@@ -128,7 +207,7 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
 
             advisories.Add(new Advisory(
                 GetString(item, "summary"),
-                GetString(item, "severity").ToLowerInvariant(),
+                NormalizeSeverity(GetString(item, "severity")),
                 range,
                 [GetString(item, "html_url")]));
         }
@@ -177,11 +256,39 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
             ? value.GetString()!
             : string.Empty;
 
-    private static void EnsureAuthorized(HttpStatusCode status)
+    /// <summary>
+    /// Normalise a GitHub severity to the GraphQL vocabulary (critical/high/moderate/low)
+    /// so that <c>--severity moderate</c> filters consistently across both API paths —
+    /// the REST advisories API reports "medium" where GraphQL reports "moderate".
+    /// </summary>
+    private static string NormalizeSeverity(string severity)
+    {
+        var normalized = severity.ToLowerInvariant();
+        return normalized == "medium" ? "moderate" : normalized;
+    }
+
+    /// <summary>
+    /// Fail loudly on any non-success response. A swallowed error (rate limit, 5xx,
+    /// auth failure) would otherwise yield an empty advisory list, making a failed
+    /// query indistinguishable from a clean package and silently passing the audit.
+    /// </summary>
+    private static void EnsureSuccess(HttpStatusCode status, string body)
     {
         if (status == HttpStatusCode.Unauthorized)
         {
             throw new InvalidOperationException("GitHub API authentication failed (401). Check GITHUB_TOKEN.");
+        }
+
+        if ((int)status is < 200 or >= 300)
+        {
+            var trimmed = body.Trim();
+            if (trimmed.Length > 500)
+            {
+                trimmed = trimmed[..500] + "…";
+            }
+
+            var detail = trimmed.Length == 0 ? string.Empty : $": {trimmed}";
+            throw new InvalidOperationException($"GitHub API request failed (HTTP {(int)status} {status}){detail}");
         }
     }
 

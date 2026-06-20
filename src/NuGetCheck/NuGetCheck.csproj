@@ -8,6 +8,10 @@
     <RootNamespace>NuGetCheck</RootNamespace>
     <AssemblyName>nuget-check</AssemblyName>
 
+    <!-- Pin the dependency graph: commit packages.lock.json and let CI restore in
+         locked mode so a tampered or drifted transitive dependency fails the build. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+
     <!-- Package as a .NET global tool: `dotnet tool install -g MoonlitLabs.NuGetCheck` -->
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>nuget-check</ToolCommandName>
@@ -21,6 +25,7 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <RepositoryUrl>https://gitlab.northwardlabs.ca/moonlitlabs/nuget-check.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://gitlab.northwardlabs.ca/moonlitlabs/nuget-check</PackageProjectUrl>
   </PropertyGroup>
 
   <ItemGroup>
