@@ -69,6 +69,7 @@ public class PackageFileReaderTests : IDisposable
 
     public void Dispose()
     {
+        GC.SuppressFinalize(this);
         foreach (var file in _tempFiles)
         {
             if (File.Exists(file))

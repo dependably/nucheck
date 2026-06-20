@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -13,7 +14,14 @@ namespace NuGetCheck.Services;
 /// </summary>
 public sealed class GitHubAdvisoryClient : IAdvisorySource
 {
+    // Fixed, well-known public GitHub API endpoints — not environment-specific, so
+    // the "don't hardcode URIs" rule (S1075) does not meaningfully apply here.
+    [SuppressMessage("Minor Code Smell", "S1075:URIs should not be hardcoded",
+        Justification = "Constant public GitHub API endpoint.")]
     private const string GraphQlUrl = "https://api.github.com/graphql";
+
+    [SuppressMessage("Minor Code Smell", "S1075:URIs should not be hardcoded",
+        Justification = "Constant public GitHub API endpoint.")]
     private const string RestUrl = "https://api.github.com/advisories";
 
     private readonly HttpClient _http;
@@ -90,23 +98,11 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
                 continue;
             }
 
-            var references = new List<string>();
-            if (advisory.TryGetProperty("references", out var refs) && refs.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var reference in refs.EnumerateArray())
-                {
-                    if (reference.TryGetProperty("url", out var url) && url.ValueKind == JsonValueKind.String)
-                    {
-                        references.Add(url.GetString()!);
-                    }
-                }
-            }
-
             advisories.Add(new Advisory(
                 GetString(advisory, "summary"),
                 GetString(advisory, "severity").ToLowerInvariant(),
                 GetString(node, "vulnerableVersionRange"),
-                references));
+                ExtractReferences(advisory)));
         }
 
         return advisories;
@@ -157,6 +153,23 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
         }
 
         return null;
+    }
+
+    private static List<string> ExtractReferences(JsonElement advisory)
+    {
+        var references = new List<string>();
+        if (advisory.TryGetProperty("references", out var refs) && refs.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var reference in refs.EnumerateArray())
+            {
+                if (reference.TryGetProperty("url", out var url) && url.ValueKind == JsonValueKind.String)
+                {
+                    references.Add(url.GetString()!);
+                }
+            }
+        }
+
+        return references;
     }
 
     private static string GetString(JsonElement element, string property)
