@@ -103,7 +103,9 @@ snyk-code:
   rules:
     - if: '$SNYK_TOKEN'
   script:
-    - snyk test --severity-threshold=high --all-projects
+    # SAST over the C# source (not a dependency scan — that would flag the
+    # intentionally-vulnerable example fixtures). Matches the sibling pipelines.
+    - snyk code test --severity-threshold=high
 
 # SonarQube analysis + coverage via the .NET scanner (dotnet-sonarscanner), wrapped
 # around the build so the analyzer sees the compilation. Main-only + allow_failure
@@ -158,7 +160,7 @@ sbom:
     - dotnet restore NuGetCheck.slnx
     - dotnet tool install --global CycloneDX
     - export PATH="$PATH:$HOME/.dotnet/tools"
-    - dotnet CycloneDX NuGetCheck.slnx -o . -fn sbom.json -j
+    - dotnet CycloneDX NuGetCheck.slnx -o . -fn sbom.json -F Json
   artifacts:
     paths:
       - sbom.json
