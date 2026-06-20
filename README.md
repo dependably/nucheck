@@ -31,10 +31,10 @@ correctly handles NuGet's 4-part versions (e.g. `1.8.3.1`) and interval ranges
 
 ## Installation
 
-`MoonlitLabs.NuGetCheck` is published to the private feed. Install it as a global tool:
+`Dependably.NuGetCheck` is published to the private feed. Install it as a global tool:
 
 ```bash
-dotnet tool install --global MoonlitLabs.NuGetCheck \
+dotnet tool install --global Dependably.NuGetCheck \
   --add-source https://dependably.northwardlabs.ca/nuget/v3/index.json
 ```
 
@@ -97,7 +97,7 @@ Pack the tool locally:
 
 ```bash
 dotnet pack src/NuGetCheck/NuGetCheck.csproj -c Release -o artifacts
-dotnet tool install --global --add-source ./artifacts MoonlitLabs.NuGetCheck
+dotnet tool install --global --add-source ./artifacts Dependably.NuGetCheck
 ```
 
 ## Project layout

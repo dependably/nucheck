@@ -12,13 +12,13 @@
          locked mode so a tampered or drifted transitive dependency fails the build. -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
 
-    <!-- Package as a .NET global tool: `dotnet tool install -g MoonlitLabs.NuGetCheck` -->
+    <!-- Package as a .NET global tool: `dotnet tool install -g Dependably.NuGetCheck` -->
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>nuget-check</ToolCommandName>
-    <PackageId>MoonlitLabs.NuGetCheck</PackageId>
+    <PackageId>Dependably.NuGetCheck</PackageId>
     <Version>1.0.0</Version>
     <Authors>MHiland</Authors>
-    <Company>Moonlit Labs</Company>
+    <Company>Dependably</Company>
     <Description>Audits .NET NuGet dependencies (packages.config / packages.lock.json) for known vulnerabilities via the GitHub Advisory Database, similar to npm audit.</Description>
     <PackageTags>nuget;audit;vulnerability;security;dotnet-tool</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
