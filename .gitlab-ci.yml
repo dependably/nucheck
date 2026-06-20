@@ -208,7 +208,7 @@ sbom-publish:
         exit 1
       fi
       BASE="${dependencyTrack_url%/}"
-      PROJECT="MoonlitLabs.NuGetCheck"
+      PROJECT="Dependably.NuGetCheck"
       VERSION=$(sed -n 's/.*<Version>\([^<]*\)<\/Version>.*/\1/p' src/NuGetCheck/NuGetCheck.csproj | head -n1)
       [ -n "$VERSION" ] || VERSION=latest
       echo "Publishing SBOM ($(wc -c < sbom.json) bytes) for $PROJECT@$VERSION to $BASE"

@@ -182,7 +182,7 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
-      "MoonlitLabs.NuGetCheck": {
+      "Dependably.NuGetCheck": {
         "type": "Project",
         "dependencies": {
           "NuGet.Packaging": "[7.6.0, )",

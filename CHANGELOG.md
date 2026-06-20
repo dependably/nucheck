@@ -6,7 +6,7 @@ All notable changes to `nuget-check` are documented here. The format is based on
 
 ## [1.0.0] - 2026-06-19
 
-Initial release: a native .NET global tool (`MoonlitLabs.NuGetCheck`, command
+Initial release: a native .NET global tool (`Dependably.NuGetCheck`, command
 `nuget-check`) that audits `packages.config` / `packages.lock.json` against the GitHub
 Advisory Database, matching installed versions with the real `NuGet.Versioning` comparer
 (4-part versions and interval ranges, where a JavaScript `semver` port is wrong).
