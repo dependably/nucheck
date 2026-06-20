@@ -12,7 +12,7 @@ public static class Program
     /// <summary>
     /// Runs the audit and returns the process exit code (1 when vulnerabilities are
     /// found or an error occurs, 0 otherwise). <paramref name="sourceFactory"/> lets
-    /// tests inject a fake advisory source instead of hitting GitHub.
+    /// tests inject a fake advisory source instead of hitting a live database.
     /// </summary>
     public static async Task<int> RunAsync(string[] args, Func<CliOptions, IAdvisorySource>? sourceFactory = null)
     {
@@ -31,7 +31,7 @@ public static class Program
             return 1;
         }
 
-        var source = sourceFactory is not null ? sourceFactory(options) : CreateGitHubSource(options);
+        var source = sourceFactory is not null ? sourceFactory(options) : CreateSource(options);
         if (source is null)
         {
             return 1;
@@ -58,13 +58,30 @@ public static class Program
         }
     }
 
+    private static IAdvisorySource? CreateSource(CliOptions options)
+    {
+        switch (options.Source.ToLowerInvariant())
+        {
+            case "osv":
+                return new OsvAdvisoryClient(new HttpClient());
+
+            case "github":
+                return CreateGitHubSource(options);
+
+            default:
+                Console.Error.WriteLine($"Error: unknown --source '{options.Source}'. Use 'github' or 'osv'.");
+                return null;
+        }
+    }
+
     private static GitHubAdvisoryClient? CreateGitHubSource(CliOptions options)
     {
         var token = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
         if (string.IsNullOrWhiteSpace(token))
         {
             Console.Error.WriteLine("Error: GITHUB_TOKEN environment variable is not set.");
-            Console.Error.WriteLine("Create a token at https://github.com/settings/tokens and export GITHUB_TOKEN.");
+            Console.Error.WriteLine("Create a token at https://github.com/settings/tokens and export GITHUB_TOKEN,");
+            Console.Error.WriteLine("or use '--source osv' to query OSV.dev without a token.");
             return null;
         }
 
@@ -81,18 +98,19 @@ Arguments:
   <path-to-packages-file>    Path to packages.config or packages.lock.json
 
 Options:
+  --source <name>            Advisory source: github (default), osv
   --format <type>            Output format: summary, table, json (default: summary)
   --severity <level>         Filter by severity: critical, high, moderate, low
-  --rest                     Use the GitHub REST API instead of GraphQL
+  --rest                     Use the GitHub REST API instead of GraphQL (github source)
   --verbose, -v              Write progress to stderr
   --help, -h                 Show this help message
 
 Environment Variables:
-  GITHUB_TOKEN               GitHub personal access token (required)
+  GITHUB_TOKEN               GitHub personal access token (required for the github source)
 
 Examples:
   nuget-check ./packages.config
-  nuget-check ./packages.lock.json --format json
+  nuget-check ./packages.lock.json --source osv --format json
   nuget-check ./packages.config --severity high
 """;
 }
