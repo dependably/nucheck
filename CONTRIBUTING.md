@@ -54,4 +54,4 @@ build + tests + `dotnet format`; SonarQube analysis runs on `main` after merge.
 
 ## License
 
-By contributing you agree your contributions are licensed under the MIT License.
+By contributing you agree your contributions are licensed under the Apache License, Version 2.0.

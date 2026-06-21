@@ -150,4 +150,4 @@ See [docs/API.md](docs/API.md) for the internal architecture and the key types.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Apache-2.0 — see [LICENSE](LICENSE).
