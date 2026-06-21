@@ -9,8 +9,8 @@
 #   publish       manual gate that pushes the .nupkg to the private NuGet feed
 #
 # Required CI/CD variables (Settings → CI/CD → Variables), "Protected" + "Masked":
-#   REGISTRY_URL          private NuGet v3 feed endpoint (the index.json or push URL —
-#                         NOTE: likely a different path than the npm endpoint)
+#   REGISTRY_URL          private NuGet feed BASE host, e.g. https://dependably.northwardlabs.ca
+#                         (the publish job appends /nuget/v3/index.json itself)
 #   REGISTRY_KEY          API key for `dotnet nuget push`
 #   dependencyTrack_url   Dependency-Track base URL
 #   dependencyTrack_token DT API key with BOM_UPLOAD + PROJECT_CREATION_UPLOAD perms
@@ -227,7 +227,10 @@ sbom-publish:
 # Push the .nupkg to the private NuGet feed. Manual approval, default branch only,
 # serialized. Bump <Version> in the csproj to release — pushing an existing version
 # fails unless the feed allows overwrite (--skip-duplicate tolerates re-runs).
-# REGISTRY_URL must be the NuGet v3 feed/push endpoint, NOT the npm endpoint path.
+# REGISTRY_URL is the feed's BASE host (e.g. https://dependably.northwardlabs.ca);
+# this job appends the v3 service-index path. dotnet nuget push needs the index.json
+# (it reads the PackagePublish resource from it) — given a bare host it would guess the
+# legacy /api/v2/package path and 404 against a v3-only feed.
 publish:
   stage: publish
   interruptible: false
@@ -245,5 +248,7 @@ publish:
         exit 1
       fi
     - PKG=$(ls artifacts/*.nupkg)
-    - echo "Publishing $PKG to $REGISTRY_URL"
-    - dotnet nuget push "$PKG" --source "$REGISTRY_URL" --api-key "$REGISTRY_KEY" --skip-duplicate
+    # Build the v3 service index from the base host (tolerate a trailing slash).
+    - FEED="${REGISTRY_URL%/}/nuget/v3/index.json"
+    - echo "Publishing $PKG to $FEED"
+    - dotnet nuget push "$PKG" --source "$FEED" --api-key "$REGISTRY_KEY" --skip-duplicate
