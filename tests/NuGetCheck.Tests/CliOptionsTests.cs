@@ -51,4 +51,18 @@ public class CliOptionsTests
         var options = CliOptions.Parse(["first.config", "second.config"]);
         Assert.Equal("first.config", options.FilePath);
     }
+
+    [Fact]
+    public void Parse_reads_config_path()
+    {
+        var options = CliOptions.Parse(["./p.config", "--config", "./.dependably-check"]);
+
+        Assert.Equal("./.dependably-check", options.ConfigPath);
+    }
+
+    [Fact]
+    public void Parse_config_defaults_to_null()
+    {
+        Assert.Null(CliOptions.Parse(["./p.config"]).ConfigPath);
+    }
 }

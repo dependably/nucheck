@@ -14,7 +14,7 @@ public class ProgramTests : IDisposable
 {
     private readonly TextWriter _originalOut = Console.Out;
     private readonly TextWriter _originalError = Console.Error;
-    private readonly List<string> _tempFiles = [];
+    private readonly List<string> _tempDirs = [];
 
     private static FakeAdvisorySource Source(params (string Id, Advisory Advisory)[] entries)
     {
@@ -93,6 +93,36 @@ public class ProgramTests : IDisposable
     }
 
     [Fact]
+    public void Untrusted_source_fails_clean_audit()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"nugetcheck-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        _tempDirs.Add(dir);
+
+        File.WriteAllText(Path.Combine(dir, "nuget.config"), """
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="private" value="https://nuget.evil.example/v3/index.json" />
+  </packageSources>
+</configuration>
+""");
+        var path = Path.Combine(dir, "packages.config");
+        File.WriteAllText(path, """
+<?xml version="1.0" encoding="utf-8"?>
+<packages>
+  <package id="Safe.Pkg" version="1.0.0" targetFramework="net462" />
+</packages>
+""");
+
+        var (exit, output, _) = Run([path, "--format", "json"], _ => Source());
+
+        Assert.Equal(1, exit);
+        Assert.Contains("nuget.evil.example", output);
+    }
+
+    [Fact]
     public void File_error_exits_one()
     {
         var (exit, _, error) = Run(["/no/such/file.config"], _ => Source());
@@ -102,14 +132,30 @@ public class ProgramTests : IDisposable
 
     private string WritePackagesConfig(string id, string version)
     {
-        var path = Path.Combine(Path.GetTempPath(), $"nugetcheck-{Guid.NewGuid():N}.config");
+        // Place the manifest in its own directory with an isolating nuget.config so the
+        // source-trust policy check sees only nuget.org, independent of the machine's
+        // ambient NuGet configuration.
+        var dir = Path.Combine(Path.GetTempPath(), $"nugetcheck-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        _tempDirs.Add(dir);
+
+        File.WriteAllText(Path.Combine(dir, "nuget.config"), """
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+  </packageSources>
+</configuration>
+""");
+
+        var path = Path.Combine(dir, "packages.config");
         File.WriteAllText(path, $"""
 <?xml version="1.0" encoding="utf-8"?>
 <packages>
   <package id="{id}" version="{version}" targetFramework="net462" />
 </packages>
 """);
-        _tempFiles.Add(path);
         return path;
     }
 
@@ -118,11 +164,11 @@ public class ProgramTests : IDisposable
         GC.SuppressFinalize(this);
         Console.SetOut(_originalOut);
         Console.SetError(_originalError);
-        foreach (var file in _tempFiles)
+        foreach (var dir in _tempDirs)
         {
-            if (File.Exists(file))
+            if (Directory.Exists(dir))
             {
-                File.Delete(file);
+                Directory.Delete(dir, recursive: true);
             }
         }
     }

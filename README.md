@@ -20,7 +20,11 @@ correctly handles NuGet's 4-part versions (e.g. `1.8.3.1`) and interval ranges
 - **Manifest support**: `packages.config` (XML) and `packages.lock.json`.
 - **Output formats**: `summary` (default), `table`, `json`.
 - **Severity filtering**: `--severity critical|high|moderate|low`.
-- **CI-friendly**: exits `1` when any vulnerability is found, `0` otherwise.
+- **Source-trust policy**: flags any configured NuGet package source whose host is not
+  public (`api.nuget.org` / `nuget.org`) and not allowlisted in `.dependably-check`.
+- **Shared config**: reads the repo-root `.dependably-check` (JSON), discovered by walking
+  up the directory tree, or pointed at explicitly with `--config`.
+- **CI-friendly**: exits `1` when any vulnerability OR any policy error is found, `0` otherwise.
 
 ## Requirements
 
@@ -62,6 +66,7 @@ Options:
   --source <name>            Advisory source: github (default), osv
   --format <type>            Output format: summary, table, json (default: summary)
   --severity <level>         Filter by severity: critical, high, moderate, low
+  --config <path>            Path to a .dependably-check config file (otherwise discovered)
   --rest                     Use the GitHub REST API instead of GraphQL (github source)
   --verbose, -v              Write progress to stderr
   --help, -h                 Show help
@@ -69,6 +74,29 @@ Options:
 Environment:
   GITHUB_TOKEN               GitHub personal access token (required for the github source)
 ```
+
+### Source-trust policy & `.dependably-check`
+
+Beyond known vulnerabilities, `nuget-check` audits the **effective NuGet package
+sources** for the audited file's directory (the same resolution NuGet itself uses,
+honouring `nuget.config` files up the tree). Every enabled `http(s)` source whose host
+is neither a built-in public host (`api.nuget.org`, `nuget.org`) nor explicitly
+allowlisted is reported as a **policy error**, and the process exits non-zero. Local
+folder feeds and disabled sources are ignored.
+
+Allowlist private/internal registries in a repo-root `.dependably-check` file (JSON),
+shared across the Dependably checker tools. This tool reads the union of
+`common.allowedRegistryHosts` and `nuget.allowedRegistryHosts` (bare hostnames):
+
+```json
+{
+  "common": { "allowedRegistryHosts": ["dependably.northwardlabs.ca"] },
+  "nuget":  { "allowedRegistryHosts": [] }
+}
+```
+
+The file is discovered by walking up from the current directory (stopping at the repo
+root, i.e. a directory containing `.git`), or pointed at explicitly with `--config`.
 
 ### Examples
 

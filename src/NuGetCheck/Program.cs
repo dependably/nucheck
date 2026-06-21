@@ -1,4 +1,5 @@
 using NuGetCheck.Cli;
+using NuGetCheck.Config;
 using NuGetCheck.Models;
 using NuGetCheck.Output;
 using NuGetCheck.Services;
@@ -48,14 +49,40 @@ public static class Program
             var result = await new AuditService(source).AuditAsync(packages).ConfigureAwait(false);
             result = result.FilterBySeverity(options.Severity);
 
+            var checkDirectory = ResolveCheckDirectory(options.FilePath);
+            var config = DependablyCheckConfig.Load(options.ConfigPath, checkDirectory);
+            if (options.Verbose)
+            {
+                Console.Error.WriteLine(
+                    $"Trusted registry hosts: {string.Join(", ", SourceTrustService.PublicHosts.Concat(config.AllowedRegistryHosts))}");
+            }
+
+            var policyFindings = SourceTrustService.Check(checkDirectory, config.AllowedRegistryHosts);
+            result = new AuditResult
+            {
+                TotalPackages = result.TotalPackages,
+                Vulnerabilities = result.Vulnerabilities,
+                PolicyFindings = policyFindings,
+            };
+
             Console.WriteLine(FormatterFactory.Get(options.Format).Format(result));
-            return result.VulnerabilityCount > 0 ? 1 : 0;
+            return result.HasFailures ? 1 : 0;
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"Error: {ex.Message}");
             return 1;
         }
+    }
+
+    /// <summary>
+    /// The directory whose effective NuGet sources are checked: the directory of the
+    /// audited file, falling back to the current directory.
+    /// </summary>
+    private static string ResolveCheckDirectory(string filePath)
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(filePath));
+        return string.IsNullOrEmpty(directory) ? Directory.GetCurrentDirectory() : directory;
     }
 
     private static IAdvisorySource? CreateSource(CliOptions options)
@@ -101,9 +128,17 @@ Options:
   --source <name>            Advisory source: github (default), osv
   --format <type>            Output format: summary, table, json (default: summary)
   --severity <level>         Filter by severity: critical, high, moderate, low
+  --config <path>            Path to a .dependably-check config file. When omitted, the
+                             file is discovered by walking up from the current directory.
   --rest                     Use the GitHub REST API instead of GraphQL (github source)
   --verbose, -v              Write progress to stderr
   --help, -h                 Show this help message
+
+Policy checks:
+  In addition to vulnerabilities, nuget-check flags any configured NuGet package
+  source whose host is not public (api.nuget.org / nuget.org) and not allowlisted
+  in .dependably-check (common.allowedRegistryHosts ∪ nuget.allowedRegistryHosts).
+  An untrusted source is an error and exits non-zero.
 
 Environment Variables:
   GITHUB_TOKEN               GitHub personal access token (required for the github source)
@@ -112,5 +147,6 @@ Examples:
   nuget-check ./packages.config
   nuget-check ./packages.lock.json --source osv --format json
   nuget-check ./packages.config --severity high
+  nuget-check ./packages.config --config ./.dependably-check
 """;
 }

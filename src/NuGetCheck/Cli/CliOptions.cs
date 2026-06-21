@@ -11,6 +11,7 @@ public sealed class CliOptions
         ["--format"] = (o, v) => o.Format = v,
         ["--severity"] = (o, v) => o.Severity = v,
         ["--source"] = (o, v) => o.Source = v,
+        ["--config"] = (o, v) => o.ConfigPath = v,
     };
 
     private static readonly Dictionary<string, Action<CliOptions>> BoolFlags = new(StringComparer.Ordinal)
@@ -30,6 +31,12 @@ public sealed class CliOptions
 
     /// <summary>Advisory source: "github" (default, needs GITHUB_TOKEN) or "osv" (no token).</summary>
     public string Source { get; private set; } = "github";
+
+    /// <summary>
+    /// Explicit path to a <c>.dependably-check</c> config file. When null, the file is
+    /// discovered by walking up from the current directory.
+    /// </summary>
+    public string? ConfigPath { get; private set; }
 
     public bool UseRest { get; private set; }
 

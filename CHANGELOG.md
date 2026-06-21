@@ -6,7 +6,21 @@ All notable changes to `nuget-check` are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.1.0]
+
 ### Added
+
+- **Source-trust policy check.** `nuget-check` now audits the effective NuGet package
+  sources for the audited file's directory (resolved via the native `NuGet.Configuration`
+  API) and flags any enabled `http(s)` source whose host is neither a built-in public host
+  (`api.nuget.org` / `nuget.org`) nor explicitly allowlisted. An untrusted source is an
+  error and makes the process exit non-zero; local folder feeds and disabled sources are
+  ignored. Findings surface in all three output formats (a `policyFindings` array in JSON).
+- **Shared `.dependably-check` config.** A repo-root JSON config (shared across the
+  Dependably checker tools) supplies allowlisted registry hosts via the union of
+  `common.allowedRegistryHosts` and `nuget.allowedRegistryHosts`. It is discovered by
+  walking up from the current directory (stopping at the repo root), or pointed at
+  explicitly with the new `--config <path>` flag.
 
 - **`--source osv` advisory source.** Audit against the public [OSV.dev](https://osv.dev)
   database with no token required, as an alternative to the default GitHub Advisory source.

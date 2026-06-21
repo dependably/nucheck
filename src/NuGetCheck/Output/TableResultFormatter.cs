@@ -13,26 +13,44 @@ public sealed class TableResultFormatter : IResultFormatter
         builder.AppendLine("===================");
         builder.AppendLine($"Total Packages:         {result.TotalPackages}");
         builder.AppendLine($"Vulnerabilities Found:  {result.VulnerabilityCount}");
+        builder.AppendLine($"Policy Findings:        {result.PolicyFindings.Count}");
         builder.AppendLine("-------------------");
 
         if (result.Vulnerabilities.Count == 0)
         {
             builder.AppendLine("✓ All packages are secure");
-            return builder.ToString();
         }
-
-        var index = 1;
-        foreach (var vulnerability in result.Vulnerabilities)
+        else
         {
-            builder.AppendLine($"{index}. {vulnerability.Id} ({vulnerability.Version})");
-            foreach (var advisory in vulnerability.Advisories)
+            var index = 1;
+            foreach (var vulnerability in result.Vulnerabilities)
             {
-                builder.AppendLine($"   [{advisory.Severity}] {advisory.Summary}");
-            }
+                builder.AppendLine($"{index}. {vulnerability.Id} ({vulnerability.Version})");
+                foreach (var advisory in vulnerability.Advisories)
+                {
+                    builder.AppendLine($"   [{advisory.Severity}] {advisory.Summary}");
+                }
 
-            index++;
+                index++;
+            }
         }
 
+        AppendPolicyFindings(builder, result);
         return builder.ToString();
+    }
+
+    private static void AppendPolicyFindings(StringBuilder builder, AuditResult result)
+    {
+        if (result.PolicyFindings.Count == 0)
+        {
+            return;
+        }
+
+        builder.AppendLine("-------------------");
+        builder.AppendLine("POLICY FINDINGS");
+        foreach (var finding in result.PolicyFindings)
+        {
+            builder.AppendLine($"   [{finding.Severity}] {finding.Source} -> {finding.Host}: {finding.Message}");
+        }
     }
 }
