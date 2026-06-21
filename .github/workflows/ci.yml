@@ -1,0 +1,97 @@
+# GitHub Actions CI for nuget-check (.NET global tool)
+#
+# This is the public-facing CI that runs on the GitHub mirror
+# (github.com/dependably/nuget-check). GitLab remains the source of truth; its
+# pipeline mirrors `main` here via a manual `mirror-to-github` job, and GitHub
+# CI then runs on the pushed commit and on community pull requests.
+#
+# Jobs (all use public nuget.org only — see NuGet.config):
+#   secret-scan   TruffleHog verified-secret scan (same pinned digest as GitLab)
+#   format        `dotnet format --verify-no-changes`
+#   build-test    restore (locked) + build + xUnit tests with coverage
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref (PR branch / main) to save runners.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  # Verified-secret scan. Pinned to the exact image+digest the GitLab pipeline
+  # uses so the scanner version is a single source of truth and can't drift.
+  # Scans only the new commits (PR base..head or push before..after); falls back
+  # to full history when the base SHA is unusable (first push / force-push).
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: TruffleHog secret scan
+        run: |
+          set -eu
+          IMAGE="trufflesecurity/trufflehog:3.95.3@sha256:9cc33bb080cac0efbbf228a17667172875b529eeeab01efcc4697adfb55f568a"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+          fi
+          # GIT_CONFIG_* marks the mounted repo safe so git inside the (root) container
+          # doesn't bail on "dubious ownership" against the runner-owned checkout.
+          run_th() {
+            docker run --rm -v "$PWD:/repo" -w /repo \
+              -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo \
+              "$IMAGE" "$@"
+          }
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "No usable base commit (first push / force-push) — scanning full history"
+            run_th git file:///repo --only-verified --fail
+          else
+            echo "Scanning new commits since $BASE"
+            run_th git file:///repo --since-commit "$BASE" --only-verified --fail
+          fi
+
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - run: dotnet restore NuGetCheck.slnx --locked-mode
+      - run: dotnet format NuGetCheck.slnx --verify-no-changes --no-restore
+
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      # --locked-mode fails the restore if packages.lock.json drifted from the
+      # csproj — i.e. a dependency changed or was tampered with without a committed lock.
+      - run: dotnet restore NuGetCheck.slnx --locked-mode
+      - run: dotnet build NuGetCheck.slnx -c Release --no-restore
+      - run: >-
+          dotnet test NuGetCheck.slnx -c Release --no-build
+          --settings coverlet.runsettings --collect:"XPlat Code Coverage"
+          --results-directory ./coverage
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/**/coverage.opencover.xml
+          if-no-files-found: ignore
