@@ -18,11 +18,22 @@
 #   SONAR_HOST_URL        SonarQube server URL (not a secret)
 #   SONAR_TOKEN           SonarQube analysis token (masked)
 
+# Run ONE pipeline per change: a merge-request pipeline when an MR is open (so the
+# full test suite runs in — and gates — the MR, not just snyk), the branch pipeline
+# on the default branch, and tag pipelines — while suppressing the redundant branch
+# pipeline when an MR is already open. Mirrors the python-check pipeline.
+#
 # Cancel superseded pipelines: when a new commit is pushed to a ref, cancel the
 # still-running *interruptible* jobs from the previous commit's pipeline (saves
 # runners). Side-effectful jobs (publish, sbom-publish) opt out with
 # interruptible:false so an in-flight release/upload is never cut off.
 workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
   auto_cancel:
     on_new_commit: interruptible
 
