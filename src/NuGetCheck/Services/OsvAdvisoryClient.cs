@@ -101,44 +101,36 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
     {
         if (!vuln.TryGetProperty("affected", out var affected) || affected.ValueKind != JsonValueKind.Array)
         {
-            yield break;
+            return [];
         }
 
-        foreach (var entry in affected.EnumerateArray())
-        {
-            if (!entry.TryGetProperty("package", out var package)
-                || !GetString(package, "ecosystem").Equals(NuGetEcosystem, StringComparison.OrdinalIgnoreCase)
-                || !GetString(package, "name").Equals(packageId, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            var emitted = false;
-            if (entry.TryGetProperty("ranges", out var ranges) && ranges.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var range in ranges.EnumerateArray())
-                {
-                    foreach (var comparator in IntervalsFromEvents(range))
-                    {
-                        emitted = true;
-                        yield return comparator;
-                    }
-                }
-            }
-
-            // Some advisories enumerate explicit affected versions instead of ranges.
-            if (!emitted && entry.TryGetProperty("versions", out var versions) && versions.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var version in versions.EnumerateArray())
-                {
-                    if (version.ValueKind == JsonValueKind.String)
-                    {
-                        yield return $"= {version.GetString()}";
-                    }
-                }
-            }
-        }
+        return affected.EnumerateArray()
+            .Where(entry => MatchesPackage(entry, packageId))
+            .SelectMany(ComparatorsForAffected);
     }
+
+    private static bool MatchesPackage(JsonElement entry, string packageId)
+        => entry.TryGetProperty("package", out var package)
+            && GetString(package, "ecosystem").Equals(NuGetEcosystem, StringComparison.OrdinalIgnoreCase)
+            && GetString(package, "name").Equals(packageId, StringComparison.OrdinalIgnoreCase);
+
+    private static IEnumerable<string> ComparatorsForAffected(JsonElement entry)
+    {
+        var fromRanges = RangeComparators(entry).ToList();
+
+        // Fall back to explicit affected versions only when no ranges were present.
+        return fromRanges.Count > 0 ? fromRanges : ExplicitVersionComparators(entry);
+    }
+
+    private static IEnumerable<string> RangeComparators(JsonElement entry)
+        => entry.TryGetProperty("ranges", out var ranges) && ranges.ValueKind == JsonValueKind.Array
+            ? ranges.EnumerateArray().SelectMany(IntervalsFromEvents)
+            : [];
+
+    private static IEnumerable<string> ExplicitVersionComparators(JsonElement entry)
+        => entry.TryGetProperty("versions", out var versions) && versions.ValueKind == JsonValueKind.Array
+            ? versions.EnumerateArray().Where(v => v.ValueKind == JsonValueKind.String).Select(v => $"= {v.GetString()}")
+            : [];
 
     /// <summary>Translate an OSV range's introduced/fixed/last_affected events into comparator strings.</summary>
     private static IEnumerable<string> IntervalsFromEvents(JsonElement range)
