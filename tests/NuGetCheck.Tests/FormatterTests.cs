@@ -61,4 +61,37 @@ public class FormatterTests
         Assert.Contains("Newtonsoft.Json", vulnerable);
         Assert.Contains("[high]", vulnerable);
     }
+
+    private static AuditResult PolicyResult() => new()
+    {
+        TotalPackages = 1,
+        Vulnerabilities = [],
+        PolicyFindings =
+        [
+            new SourceFinding("nuget.evil.example", "private", "untrusted host 'nuget.evil.example'"),
+        ],
+    };
+
+    [Fact]
+    public void Summary_formatter_renders_policy_findings()
+    {
+        var output = new SummaryResultFormatter().Format(PolicyResult());
+
+        Assert.Contains("policy finding", output);
+        Assert.Contains("nuget.evil.example", output);
+        Assert.Contains("[error]", output);
+    }
+
+    [Fact]
+    public void Json_formatter_renders_policy_findings()
+    {
+        var output = new JsonResultFormatter().Format(PolicyResult());
+
+        using var document = JsonDocument.Parse(output);
+        Assert.Equal(1, document.RootElement.GetProperty("policyErrorCount").GetInt32());
+        var finding = document.RootElement.GetProperty("policyFindings")[0];
+        Assert.Equal("nuget.evil.example", finding.GetProperty("host").GetString());
+        Assert.Equal("private", finding.GetProperty("source").GetString());
+        Assert.Equal("error", finding.GetProperty("severity").GetString());
+    }
 }

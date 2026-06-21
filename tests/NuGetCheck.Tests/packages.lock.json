@@ -185,6 +185,7 @@
       "Dependably.NuGetCheck": {
         "type": "Project",
         "dependencies": {
+          "NuGet.Configuration": "[7.6.0, )",
           "NuGet.Packaging": "[7.6.0, )",
           "NuGet.ProjectModel": "[7.6.0, )",
           "NuGet.Versioning": "[7.6.0, )"

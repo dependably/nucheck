@@ -49,4 +49,40 @@ public class AuditResultTests
         var result = Build();
         Assert.Same(result, result.FilterBySeverity(severity));
     }
+
+    [Fact]
+    public void HasFailures_true_for_policy_error_without_vulnerabilities()
+    {
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities = [],
+            PolicyFindings = [new SourceFinding("h", "s", "m")],
+        };
+
+        Assert.Equal(1, result.PolicyErrorCount);
+        Assert.True(result.HasFailures);
+    }
+
+    [Fact]
+    public void HasFailures_false_when_clean()
+    {
+        var result = new AuditResult { TotalPackages = 1, Vulnerabilities = [], PolicyFindings = [] };
+        Assert.False(result.HasFailures);
+    }
+
+    [Fact]
+    public void FilterBySeverity_preserves_policy_findings()
+    {
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities = Build().Vulnerabilities,
+            PolicyFindings = [new SourceFinding("h", "s", "m")],
+        };
+
+        var filtered = result.FilterBySeverity("high");
+
+        Assert.Single(filtered.PolicyFindings);
+    }
 }

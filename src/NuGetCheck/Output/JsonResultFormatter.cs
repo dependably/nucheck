@@ -14,6 +14,7 @@ public sealed class JsonResultFormatter : IResultFormatter
         {
             totalPackages = result.TotalPackages,
             vulnerabilityCount = result.VulnerabilityCount,
+            policyErrorCount = result.PolicyErrorCount,
             vulnerabilities = result.Vulnerabilities.Select(v => new
             {
                 id = v.Id,
@@ -25,6 +26,13 @@ public sealed class JsonResultFormatter : IResultFormatter
                     vulnerableVersionRange = a.VulnerableVersionRange,
                     references = a.References,
                 }),
+            }),
+            policyFindings = result.PolicyFindings.Select(f => new
+            {
+                host = f.Host,
+                source = f.Source,
+                message = f.Message,
+                severity = f.Severity,
             }),
         };
 
