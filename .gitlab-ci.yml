@@ -1,12 +1,16 @@
 # CI/CD pipeline for nuget-check (.NET global tool)
 #
 # Flow:  test  →  pack  →  sbom  →  sbom-publish  →  publish (manual, default branch only)
+#                                                 ↘  mirror-to-github (manual, default branch only)
 #
-#   test          build + xUnit tests w/ coverage, format check, secret + SAST + Sonar scans
-#   pack          `dotnet pack` the .nupkg tool, kept as a job artifact
-#   sbom          generate a CycloneDX SBOM (every pipeline), kept as an artifact
-#   sbom-publish  upload the SBOM to Dependency-Track on the default branch
-#   publish       manual gate that pushes the .nupkg to the private NuGet feed
+#   test            build + xUnit tests w/ coverage, format check, secret + SAST + Sonar scans
+#   pack            `dotnet pack` the .nupkg tool, kept as a job artifact
+#   sbom            generate a CycloneDX SBOM (every pipeline), kept as an artifact
+#   sbom-publish    upload the SBOM to Dependency-Track on the default branch
+#   publish         manual gate that pushes the .nupkg to the private NuGet feed
+#   mirror-to-github  manual gate (default branch only) that pushes main + tags to the
+#                     public GitHub mirror once all core jobs pass; GitHub Actions CI
+#                     (.github/workflows/ci.yml) then runs there
 #
 # Required CI/CD variables (Settings → CI/CD → Variables), "Protected" + "Masked":
 #   REGISTRY_URL          private NuGet feed BASE host, e.g. https://dependably.northwardlabs.ca
@@ -17,6 +21,8 @@
 #   SNYK_TOKEN            Snyk (SAST) token. UNPROTECTED + masked so MR pipelines can scan.
 #   SONAR_HOST_URL        SonarQube server URL (not a secret)
 #   SONAR_TOKEN           SonarQube analysis token (masked)
+#   GITHUB_TOKEN          GitHub PAT with Contents:write (classic: 'repo') on
+#                         dependably/nuget-check, used by mirror-to-github. Masked.
 
 # Run ONE pipeline per change: a merge-request pipeline when an MR is open (so the
 # full test suite runs in — and gates — the MR, not just snyk), the branch pipeline
@@ -47,6 +53,7 @@ stages:
   - sbom
   - sbom-publish
   - publish
+  - mirror
 
 variables:
   DOTNET_CLI_TELEMETRY_OPTOUT: "1"
@@ -263,3 +270,44 @@ publish:
     - FEED="${REGISTRY_URL%/}/nuget/v3/index.json"
     - echo "Publishing $PKG to $FEED"
     - dotnet nuget push "$PKG" --source "$FEED" --api-key "$REGISTRY_KEY" --skip-duplicate
+
+# Mirror the default branch (+ tags) to the public GitHub repo. Manual gate,
+# default branch only. `needs:` lists the deterministic gating jobs so this can
+# only run after they pass (the advisory allow_failure scans — snyk-code,
+# sonarqube-check — and the side-effecting sbom-publish are intentionally not
+# blockers). It runs independently of the `publish` manual gate.
+#
+# GIT_DEPTH 0 fetches full history so the push isn't a shallow-clone fragment.
+# Non-fast-forward pushes fail by design (no --force): GitHub is a downstream
+# mirror of main, so divergence should surface as an error, not silently clobber.
+mirror-to-github:
+  stage: mirror
+  interruptible: false
+  resource_group: mirror-to-github
+  variables:
+    GIT_DEPTH: 0
+  needs:
+    - job: build-test
+    - job: format
+    - job: secret-scan
+    - job: pack
+    - job: sbom
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: manual
+      allow_failure: false
+  script:
+    - |
+      if [ -z "$GITHUB_TOKEN" ]; then
+        echo "ERROR: GITHUB_TOKEN must be set as a CI/CD variable (GitHub PAT with Contents:write / 'repo' on dependably/nuget-check)." >&2
+        exit 1
+      fi
+    - |
+      set -eu
+      # Token is passed via the remote URL (not echoed); GitLab masks the variable in logs.
+      git remote remove github 2>/dev/null || true
+      git remote add github "https://x-access-token:${GITHUB_TOKEN}@github.com/dependably/nuget-check.git"
+      echo "Mirroring ${CI_DEFAULT_BRANCH} + tags to github.com/dependably/nuget-check"
+      git push github "HEAD:refs/heads/${CI_DEFAULT_BRANCH}"
+      git push github --tags
+      git remote remove github
