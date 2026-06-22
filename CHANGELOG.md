@@ -6,7 +6,7 @@ All notable changes to `nuget-check` are documented here. The format is based on
 
 ## [Unreleased]
 
-## [1.1.0]
+## [1.1.0] - 2026-06-21
 
 ### Added
 
@@ -26,6 +26,14 @@ All notable changes to `nuget-check` are documented here. The format is based on
   database with no token required, as an alternative to the default GitHub Advisory source.
   OSV introduced/fixed/last_affected ranges are translated into the comparator syntax the
   existing `VulnerabilityMatcher` understands, so version matching stays centralized.
+
+### Supply chain
+
+- **Signed build provenance (SLSA Build L2).** Released `.nupkg` artifacts are now
+  packed and published from GitHub Actions with keyless (OIDC/sigstore) SLSA build
+  provenance attesting how and where they were built. Consumers can verify the
+  downloaded package with
+  `gh attestation verify <file>.nupkg -R dependably/nuget-check`.
 
 ## [1.0.0] - 2026-06-19
 
