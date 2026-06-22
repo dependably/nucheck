@@ -93,7 +93,9 @@ jobs:
           --results-directory ./coverage
       - name: Upload coverage
         if: always()
-        uses: actions/upload-artifact@v5
+        # v7 is the first upload-artifact line on the Node 24 runtime — v5/v5.0.0
+        # still declare `using: node20` (only v6+ moved to node24).
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage/**/coverage.opencover.xml
