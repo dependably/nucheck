@@ -1,0 +1,31 @@
+root = true
+
+[*.cs]
+charset = utf-8
+indent_style = space
+indent_size = 4
+
+# ---------------------------------------------------------------------------
+# CLI entry point (src/NuGetCheck/Program.cs)
+# ---------------------------------------------------------------------------
+[src/NuGetCheck/Program.cs]
+# Console output IS the product for a CLI tool; writing results/help/errors to
+# stdout/stderr here is by design, not a stray debug statement.
+dotnet_diagnostic.SAST002.severity = none
+# Top-level CLI entry method: there is no caller to thread a CancellationToken
+# from, so accepting one would be dead ceremony.
+dotnet_diagnostic.OP006.severity = none
+
+# ---------------------------------------------------------------------------
+# Test code (tests/**)
+# ---------------------------------------------------------------------------
+[tests/**/*.cs]
+# Assertion / arrange literals (expected counts, sample sizes) are self-
+# documenting in the context of a single test and need not be named constants.
+dotnet_diagnostic.OP004.severity = none
+# [Theory] boolean parameters are data-driven test inputs, not flag-argument
+# API design smells.
+dotnet_diagnostic.OP005.severity = none
+# xUnit [Fact]/[Theory] methods are invoked by the test runner and have no
+# caller to supply a CancellationToken.
+dotnet_diagnostic.OP006.severity = none
