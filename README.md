@@ -116,12 +116,16 @@ Environment:
 
 ### Source-trust policy & `.dependably-check`
 
-Beyond known vulnerabilities, `nuget-check` audits the **effective NuGet package
-sources** for the audited file's directory (the same resolution NuGet itself uses,
-honouring `nuget.config` files up the tree). Every enabled `http(s)` source whose host
-is neither a built-in public host (`api.nuget.org`, `nuget.org`) nor explicitly
-allowlisted is reported as a **policy error**, and the process exits non-zero. Local
-folder feeds and disabled sources are ignored.
+Beyond known vulnerabilities, `nuget-check` audits the **NuGet package sources declared
+within the repository** — the `nuget.config` files from the audited path up to and
+including the repo root. The host machine's user/global NuGet configuration is
+intentionally **out of scope** so the verdict is reproducible and machine-independent
+(the same repo passes or fails identically on every machine and in CI, and auditing a
+stranger's repo never flags your personal feeds). A repo that declares no `nuget.config`
+makes no untrusted-source claim and produces no findings. Every enabled `http(s)` source
+whose host is neither a built-in public host (`api.nuget.org`, `nuget.org`) nor
+explicitly allowlisted is reported as a **policy error**, and the process exits
+non-zero. Local folder feeds and disabled sources are ignored.
 
 Allowlist private/internal registries in a repo-root `.dependably-check` file (JSON),
 shared across the Dependably checker tools. This tool reads the union of
