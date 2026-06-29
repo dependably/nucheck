@@ -29,6 +29,45 @@ public class OsvAdvisoryClientTests
         Assert.Contains("https://example/advisory", advisory.References);
     }
 
+    [Fact]
+    public void ParseOsv_extracts_advisory_id_and_fixed_version()
+    {
+        // The OneVulnBody has id GHSA-..., a fixed:2.0.0 event, and no aliases.
+        var advisory = Assert.Single(OsvAdvisoryClient.ParseOsv(OneVulnBody, "Test.Pkg"));
+
+        Assert.Equal("GHSA-aaaa-bbbb-cccc", advisory.AdvisoryId);
+        Assert.Equal("2.0.0", advisory.FixedVersion);
+        Assert.Null(advisory.Cve); // no CVE alias present -> left null, not fabricated
+    }
+
+    [Fact]
+    public void ParseOsv_extracts_cve_from_aliases_and_ghsa_when_id_is_cve()
+    {
+        // OSV id is a CVE here; the GHSA lives in aliases, and so does the CVE.
+        const string body = """
+{"vulns":[{"id":"CVE-2024-9999","aliases":["GHSA-zzzz-yyyy-xxxx","CVE-2024-9999"],
+  "affected":[{"package":{"ecosystem":"NuGet","name":"P"},
+    "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"1.0.0"},{"fixed":"1.5.0"}]}]}]}]}
+""";
+        var advisory = Assert.Single(OsvAdvisoryClient.ParseOsv(body, "P"));
+
+        Assert.Equal("GHSA-zzzz-yyyy-xxxx", advisory.AdvisoryId); // prefers the GHSA alias
+        Assert.Equal("CVE-2024-9999", advisory.Cve);
+        Assert.Equal("1.5.0", advisory.FixedVersion);
+    }
+
+    [Fact]
+    public void ParseOsv_leaves_fixed_version_null_for_last_affected_ranges()
+    {
+        // last_affected gives an upper bound but is NOT a patched version.
+        const string body = """
+{"vulns":[{"id":"GHSA-q","affected":[{"package":{"ecosystem":"NuGet","name":"P"},
+  "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"1.0.0"},{"last_affected":"1.4.0"}]}]}]}]}
+""";
+        var advisory = Assert.Single(OsvAdvisoryClient.ParseOsv(body, "P"));
+        Assert.Null(advisory.FixedVersion);
+    }
+
     [Theory]
     [InlineData("1.5.0", true)]   // below the fixed 2.0.0
     [InlineData("2.0.0", false)]  // the fix

@@ -44,6 +44,13 @@ public sealed class AuditResult
     /// <summary>Total number of advisories across all vulnerable packages.</summary>
     public int VulnerabilityCount => Vulnerabilities.Sum(v => v.Advisories.Count);
 
+    /// <summary>
+    /// Number of distinct vulnerable packages. This differs from
+    /// <see cref="VulnerabilityCount"/> (which counts advisories): one package can carry
+    /// several advisories. Every formatter reports BOTH so no headline contradicts another.
+    /// </summary>
+    public int VulnerablePackageCount => Vulnerabilities.Count;
+
     /// <summary>Number of policy findings at error severity.</summary>
     public int PolicyErrorCount =>
         PolicyFindings.Count(f => f.Severity.Equals("error", StringComparison.OrdinalIgnoreCase));

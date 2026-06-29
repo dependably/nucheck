@@ -63,7 +63,8 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
         var escaped = packageId.Replace("\\", "\\\\").Replace("\"", "\\\"");
         var query =
             "{ securityVulnerabilities(first: 100, ecosystem: NUGET, package: \"" + escaped + "\") " +
-            "{ nodes { advisory { summary severity references { url } } vulnerableVersionRange } } }";
+            "{ nodes { advisory { ghsaId summary severity identifiers { type value } references { url } } " +
+            "firstPatchedVersion { identifier } vulnerableVersionRange } } }";
 
         var body = await SendWithRetryAsync(() =>
         {
@@ -188,7 +189,10 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
                 GetString(advisory, "summary"),
                 NormalizeSeverity(GetString(advisory, "severity")),
                 GetString(node, "vulnerableVersionRange"),
-                ExtractReferences(advisory)));
+                ExtractReferences(advisory),
+                NullIfEmpty(GetString(advisory, "ghsaId")),
+                ExtractCveFromIdentifiers(advisory),
+                ExtractFirstPatched(node)));
         }
 
         return advisories;
@@ -206,8 +210,8 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
         var advisories = new List<Advisory>();
         foreach (var item in document.RootElement.EnumerateArray())
         {
-            var range = FindRangeForPackage(item, packageId);
-            if (range is null)
+            var vuln = FindVulnForPackage(item, packageId);
+            if (vuln is null)
             {
                 continue;
             }
@@ -215,14 +219,18 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
             advisories.Add(new Advisory(
                 GetString(item, "summary"),
                 NormalizeSeverity(GetString(item, "severity")),
-                range,
-                [GetString(item, "html_url")]));
+                GetString(vuln.Value, "vulnerable_version_range"),
+                [GetString(item, "html_url")],
+                NullIfEmpty(GetString(item, "ghsa_id")),
+                NullIfEmpty(GetString(item, "cve_id")),
+                ExtractRestFirstPatched(vuln.Value)));
         }
 
         return advisories;
     }
 
-    private static string? FindRangeForPackage(JsonElement advisory, string packageId)
+    /// <summary>The matching package's <c>vulnerabilities[]</c> entry, or null when absent.</summary>
+    private static JsonElement? FindVulnForPackage(JsonElement advisory, string packageId)
     {
         if (!advisory.TryGetProperty("vulnerabilities", out var vulns) || vulns.ValueKind != JsonValueKind.Array)
         {
@@ -234,12 +242,58 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
             if (vuln.TryGetProperty("package", out var pkg)
                 && GetString(pkg, "name").Equals(packageId, StringComparison.OrdinalIgnoreCase))
             {
-                return GetString(vuln, "vulnerable_version_range");
+                return vuln;
             }
         }
 
         return null;
     }
+
+    /// <summary>The GraphQL node's <c>firstPatchedVersion.identifier</c>, or null.</summary>
+    private static string? ExtractFirstPatched(JsonElement node)
+        => node.TryGetProperty("firstPatchedVersion", out var fpv) && fpv.ValueKind == JsonValueKind.Object
+            ? NullIfEmpty(GetString(fpv, "identifier"))
+            : null;
+
+    /// <summary>
+    /// The REST <c>first_patched_version</c>, tolerating both shapes GitHub uses: a plain
+    /// string (global advisories API) or a <c>{ "identifier": "x" }</c> object.
+    /// </summary>
+    private static string? ExtractRestFirstPatched(JsonElement vuln)
+    {
+        if (!vuln.TryGetProperty("first_patched_version", out var fpv))
+        {
+            return null;
+        }
+
+        return fpv.ValueKind switch
+        {
+            JsonValueKind.String => NullIfEmpty(fpv.GetString()!),
+            JsonValueKind.Object => NullIfEmpty(GetString(fpv, "identifier")),
+            _ => null,
+        };
+    }
+
+    /// <summary>The CVE id from the GraphQL advisory's <c>identifiers</c> array, or null.</summary>
+    private static string? ExtractCveFromIdentifiers(JsonElement advisory)
+    {
+        if (!advisory.TryGetProperty("identifiers", out var ids) || ids.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        foreach (var identifier in ids.EnumerateArray())
+        {
+            if (GetString(identifier, "type").Equals("CVE", StringComparison.OrdinalIgnoreCase))
+            {
+                return NullIfEmpty(GetString(identifier, "value"));
+            }
+        }
+
+        return null;
+    }
+
+    private static string? NullIfEmpty(string value) => string.IsNullOrEmpty(value) ? null : value;
 
     private static List<string> ExtractReferences(JsonElement advisory)
     {

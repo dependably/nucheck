@@ -138,6 +138,64 @@ public class GitHubAdvisoryClientTests
     }
 
     [Fact]
+    public void ParseGraphQl_extracts_ghsa_id_cve_and_first_patched_version()
+    {
+        const string body = """
+{"data":{"securityVulnerabilities":{"nodes":[
+  {"advisory":{"ghsaId":"GHSA-aaaa-bbbb-cccc","summary":"Bad","severity":"HIGH",
+    "identifiers":[{"type":"GHSA","value":"GHSA-aaaa-bbbb-cccc"},{"type":"CVE","value":"CVE-2024-1234"}],
+    "references":[{"url":"https://example/1"}]},
+   "firstPatchedVersion":{"identifier":"2.0.1"},"vulnerableVersionRange":">= 1.0.0, < 2.0.1"}
+]}}}
+""";
+        var advisory = Assert.Single(GitHubAdvisoryClient.ParseGraphQl(body));
+
+        Assert.Equal("GHSA-aaaa-bbbb-cccc", advisory.AdvisoryId);
+        Assert.Equal("CVE-2024-1234", advisory.Cve);
+        Assert.Equal("2.0.1", advisory.FixedVersion);
+    }
+
+    [Fact]
+    public void ParseGraphQl_leaves_fields_null_when_absent()
+    {
+        // No ghsaId, no CVE identifier, no firstPatchedVersion -> all appended fields null.
+        var advisory = Assert.Single(GitHubAdvisoryClient.ParseGraphQl(GraphQlBody));
+
+        Assert.Null(advisory.AdvisoryId);
+        Assert.Null(advisory.Cve);
+        Assert.Null(advisory.FixedVersion);
+    }
+
+    [Fact]
+    public void ParseRest_extracts_ghsa_id_cve_and_first_patched_version_string()
+    {
+        // The global advisories API gives first_patched_version as a plain string.
+        const string body = """
+[{"summary":"Bad","severity":"high","html_url":"https://example/2","ghsa_id":"GHSA-1111-2222-3333","cve_id":"CVE-2024-5678",
+  "vulnerabilities":[{"package":{"ecosystem":"nuget","name":"Pkg"},"vulnerable_version_range":"< 2.0","first_patched_version":"2.0.0"}]}]
+""";
+        var advisory = Assert.Single(GitHubAdvisoryClient.ParseRest(body, "Pkg"));
+
+        Assert.Equal("GHSA-1111-2222-3333", advisory.AdvisoryId);
+        Assert.Equal("CVE-2024-5678", advisory.Cve);
+        Assert.Equal("2.0.0", advisory.FixedVersion);
+    }
+
+    [Fact]
+    public void ParseRest_extracts_first_patched_version_object_shape()
+    {
+        // The repository advisories API gives first_patched_version as {identifier}.
+        const string body = """
+[{"summary":"Bad","severity":"low","html_url":"u","ghsa_id":"GHSA-x","cve_id":null,
+  "vulnerabilities":[{"package":{"ecosystem":"nuget","name":"Pkg"},"vulnerable_version_range":"< 3.0","first_patched_version":{"identifier":"3.0.0"}}]}]
+""";
+        var advisory = Assert.Single(GitHubAdvisoryClient.ParseRest(body, "Pkg"));
+
+        Assert.Equal("3.0.0", advisory.FixedVersion);
+        Assert.Null(advisory.Cve); // explicit JSON null -> left null
+    }
+
+    [Fact]
     public void ParseRest_normalises_medium_severity_to_moderate()
     {
         const string body = """

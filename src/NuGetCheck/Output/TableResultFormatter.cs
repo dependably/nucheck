@@ -12,7 +12,8 @@ public sealed class TableResultFormatter : IResultFormatter
         builder.AppendLine("NUGET AUDIT RESULTS");
         builder.AppendLine("===================");
         builder.AppendLine($"Total Packages:         {result.TotalPackages}");
-        builder.AppendLine($"Vulnerabilities Found:  {result.VulnerabilityCount}");
+        builder.AppendLine($"Vulnerable Packages:    {result.VulnerablePackageCount}");
+        builder.AppendLine($"Advisories Found:       {result.VulnerabilityCount}");
         builder.AppendLine($"Policy Findings:        {result.PolicyFindings.Count}");
         builder.AppendLine($"Possibly Unused:        {result.UnusedPackages.Count} (heuristic, advisory only)");
         builder.AppendLine("-------------------");
@@ -30,6 +31,11 @@ public sealed class TableResultFormatter : IResultFormatter
                 foreach (var advisory in vulnerability.Advisories)
                 {
                     builder.AppendLine($"   [{advisory.Severity}] {advisory.Summary}");
+                    var detail = AdvisoryDetail(advisory);
+                    if (detail.Length > 0)
+                    {
+                        builder.AppendLine($"      {detail}");
+                    }
                 }
 
                 index++;
@@ -39,6 +45,31 @@ public sealed class TableResultFormatter : IResultFormatter
         AppendPolicyFindings(builder, result);
         AppendUnusedPackages(builder, result);
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// The actionable one-liner for an advisory: discrete advisory id, CVE, and the fixed
+    /// version where each is known. Returns empty when the source supplied none of them.
+    /// </summary>
+    private static string AdvisoryDetail(Models.Advisory advisory)
+    {
+        var parts = new List<string>(3);
+        if (!string.IsNullOrEmpty(advisory.AdvisoryId))
+        {
+            parts.Add(advisory.AdvisoryId);
+        }
+
+        if (!string.IsNullOrEmpty(advisory.Cve))
+        {
+            parts.Add(advisory.Cve);
+        }
+
+        if (!string.IsNullOrEmpty(advisory.FixedVersion))
+        {
+            parts.Add($"fixed in {advisory.FixedVersion}");
+        }
+
+        return string.Join(" | ", parts);
     }
 
     private static void AppendPolicyFindings(StringBuilder builder, AuditResult result)

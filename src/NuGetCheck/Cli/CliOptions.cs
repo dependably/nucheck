@@ -21,6 +21,7 @@ public sealed class CliOptions
         ["-v"] = o => o.Verbose = true,
         ["--help"] = o => o.ShowHelp = true,
         ["-h"] = o => o.ShowHelp = true,
+        ["--version"] = o => o.ShowVersion = true,
     };
 
     public string? FilePath { get; private set; }
@@ -43,6 +44,9 @@ public sealed class CliOptions
     public bool Verbose { get; private set; }
 
     public bool ShowHelp { get; private set; }
+
+    /// <summary>True when <c>--version</c> was passed: print the version and exit 0.</summary>
+    public bool ShowVersion { get; private set; }
 
     /// <summary>
     /// A usage error produced while parsing (e.g. an unknown option), or null when the

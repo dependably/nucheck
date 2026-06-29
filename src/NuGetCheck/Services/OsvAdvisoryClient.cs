@@ -87,10 +87,14 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
             var severity = NormalizeSeverity(GetNestedString(vuln, "database_specific", "severity"));
             var summary = BuildSummary(id, vuln);
             var references = ExtractReferences(id, vuln);
+            var advisoryId = ExtractAdvisoryId(id, vuln);
+            var cve = ExtractCve(vuln);
 
-            foreach (var range in AffectedRanges(vuln, packageId))
+            // Each affected interval carries its own "fixed" event, so the patched
+            // version is tracked alongside the comparator it belongs to.
+            foreach (var (range, fixedVersion) in AffectedRanges(vuln, packageId))
             {
-                advisories.Add(new Advisory(summary, severity, range, references));
+                advisories.Add(new Advisory(summary, severity, range, references, advisoryId, cve, fixedVersion));
             }
         }
 
@@ -98,10 +102,46 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
     }
 
     /// <summary>
-    /// Yield a comparator string (per <see cref="VulnerabilityMatcher"/>) for every
-    /// affected interval that applies to <paramref name="packageId"/> in the NuGet ecosystem.
+    /// The discrete advisory id: OSV's primary <c>id</c> when it is a GHSA, else a
+    /// GHSA found among <c>aliases</c>, else the primary id (null when none).
     /// </summary>
-    private static IEnumerable<string> AffectedRanges(JsonElement vuln, string packageId)
+    private static string? ExtractAdvisoryId(string id, JsonElement vuln)
+    {
+        if (id.StartsWith("GHSA-", StringComparison.OrdinalIgnoreCase))
+        {
+            return id;
+        }
+
+        var ghsa = Aliases(vuln).FirstOrDefault(a => a.StartsWith("GHSA-", StringComparison.OrdinalIgnoreCase));
+        return ghsa ?? (string.IsNullOrEmpty(id) ? null : id);
+    }
+
+    /// <summary>The CVE id from OSV's <c>aliases</c> array, or null when none is listed.</summary>
+    private static string? ExtractCve(JsonElement vuln)
+        => Aliases(vuln).FirstOrDefault(a => a.StartsWith("CVE-", StringComparison.OrdinalIgnoreCase));
+
+    private static IEnumerable<string> Aliases(JsonElement vuln)
+    {
+        if (!vuln.TryGetProperty("aliases", out var aliases) || aliases.ValueKind != JsonValueKind.Array)
+        {
+            yield break;
+        }
+
+        foreach (var alias in aliases.EnumerateArray())
+        {
+            if (alias.ValueKind == JsonValueKind.String)
+            {
+                yield return alias.GetString()!;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Yield a comparator string (per <see cref="VulnerabilityMatcher"/>) — paired with the
+    /// first patched version for that interval, where OSV provides one — for every affected
+    /// interval that applies to <paramref name="packageId"/> in the NuGet ecosystem.
+    /// </summary>
+    private static IEnumerable<(string Range, string? Fixed)> AffectedRanges(JsonElement vuln, string packageId)
     {
         if (!vuln.TryGetProperty("affected", out var affected) || affected.ValueKind != JsonValueKind.Array)
         {
@@ -118,7 +158,7 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
             && GetString(package, "ecosystem").Equals(NuGetEcosystem, StringComparison.OrdinalIgnoreCase)
             && GetString(package, "name").Equals(packageId, StringComparison.OrdinalIgnoreCase);
 
-    private static IEnumerable<string> ComparatorsForAffected(JsonElement entry)
+    private static IEnumerable<(string Range, string? Fixed)> ComparatorsForAffected(JsonElement entry)
     {
         var fromRanges = RangeComparators(entry).ToList();
 
@@ -126,18 +166,21 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
         return fromRanges.Count > 0 ? fromRanges : ExplicitVersionComparators(entry);
     }
 
-    private static IEnumerable<string> RangeComparators(JsonElement entry)
+    private static IEnumerable<(string Range, string? Fixed)> RangeComparators(JsonElement entry)
         => entry.TryGetProperty("ranges", out var ranges) && ranges.ValueKind == JsonValueKind.Array
             ? ranges.EnumerateArray().SelectMany(IntervalsFromEvents)
             : [];
 
-    private static IEnumerable<string> ExplicitVersionComparators(JsonElement entry)
+    private static IEnumerable<(string Range, string? Fixed)> ExplicitVersionComparators(JsonElement entry)
         => entry.TryGetProperty("versions", out var versions) && versions.ValueKind == JsonValueKind.Array
-            ? versions.EnumerateArray().Where(v => v.ValueKind == JsonValueKind.String).Select(v => $"= {v.GetString()}")
+            ? versions.EnumerateArray().Where(v => v.ValueKind == JsonValueKind.String).Select(v => ($"= {v.GetString()}", (string?)null))
             : [];
 
-    /// <summary>Translate an OSV range's introduced/fixed/last_affected events into comparator strings.</summary>
-    private static IEnumerable<string> IntervalsFromEvents(JsonElement range)
+    /// <summary>
+    /// Translate an OSV range's introduced/fixed/last_affected events into comparator
+    /// strings, carrying the <c>fixed</c> version of each interval as its patched version.
+    /// </summary>
+    private static IEnumerable<(string Range, string? Fixed)> IntervalsFromEvents(JsonElement range)
     {
         // Only version-ordered ranges are comparable with NuGet.Versioning.
         var type = GetString(range, "type");
@@ -163,13 +206,15 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
             }
             else if (ev.TryGetProperty("fixed", out var fixedVersion))
             {
-                yield return Comparator(lower, fixedVersion.GetString(), upperInclusive: false);
+                var fix = fixedVersion.GetString();
+                yield return (Comparator(lower, fix, upperInclusive: false), fix);
                 open = false;
                 lower = null;
             }
             else if (ev.TryGetProperty("last_affected", out var lastAffected))
             {
-                yield return Comparator(lower, lastAffected.GetString(), upperInclusive: true);
+                // last_affected gives an upper bound but is NOT the patched version.
+                yield return (Comparator(lower, lastAffected.GetString(), upperInclusive: true), null);
                 open = false;
                 lower = null;
             }
@@ -177,7 +222,7 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
 
         if (open)
         {
-            yield return Comparator(lower, upper: null, upperInclusive: false);
+            yield return (Comparator(lower, upper: null, upperInclusive: false), null);
         }
     }
 
