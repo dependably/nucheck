@@ -1,10 +1,15 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <!-- Test on every framework the tool ships (net8.0 LTS + net10.0), so the net8 build is
+         actually exercised, not just compiled. -->
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <!-- Only the .NET 10 runtime is installed in some environments; let the net8 test host roll
+         forward to it so `dotnet test` runs both target frameworks without a net8 runtime. -->
+    <RollForward>Major</RollForward>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 
