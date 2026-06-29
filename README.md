@@ -31,7 +31,10 @@ correctly handles NuGet's 4-part versions (e.g. `1.8.3.1`) and interval ranges
   public (`api.nuget.org` / `nuget.org`) and not allowlisted in `.dependably-check`.
 - **Unused-package check (advisory)**: heuristically detects direct `<PackageReference>`
   packages whose namespace does not appear in `.cs` source files. Never exits non-zero.
-  Suppressible per-package via `ignoreUnusedPackages` in `.dependably-check`.
+  Dev/build/analyzer-only references (`PrivateAssets="all"`, analyzer/build-only
+  `Include`/`ExcludeAssets`, and a built-in allowlist of common analyzer/source-generator
+  packages) are excluded by default. Further suppressible per-package via
+  `ignoreUnusedPackages` in `.dependably-check`.
 - **Shared config**: reads the repo-root `.dependably-check` (JSON), discovered by walking
   up the directory tree, or pointed at explicitly with `--config`.
 - **CI-friendly**: exits `1` when any vulnerability OR any policy error is found, `0` otherwise.
@@ -153,8 +156,21 @@ heuristic has real false-positive risk: build-tool, analyzer, MSBuild-task, and
 `PrivateAssets` packages have no runtime namespace, and packages whose NuGet id differs
 from their namespace root will also be flagged erroneously.
 
-Suppress false positives per-package via `ignoreUnusedPackages` in `.dependably-check`
-(union of `common` and `nuget` sections):
+To keep the signal trustworthy, references that are *expected* to have no runtime
+namespace are excluded by default and never reported:
+
+- references marked as not flowing to consumers via MSBuild asset metadata —
+  `PrivateAssets="all"` (attribute or child element), `ExcludeAssets` dropping
+  `runtime`/`compile`, or `IncludeAssets` limited to analyzer/build assets; and
+- a small built-in allowlist of build/analyzer/source-generator packages that authors
+  often add without `PrivateAssets`: ids ending in `.Analyzers` / `.SourceGenerators`,
+  `StyleCop.Analyzers`, `Microsoft.CodeAnalysis.Analyzers`,
+  `Microsoft.CodeAnalysis.NetAnalyzers`, `Microsoft.NET.Test.Sdk`, `coverlet.collector`,
+  `coverlet.msbuild`, `Nullable`, `PolySharp`, `GitVersion.MsBuild`, and
+  `Microsoft.SourceLink.*`.
+
+Suppress remaining false positives per-package via `ignoreUnusedPackages` in
+`.dependably-check` (union of `common` and `nuget` sections):
 
 ```json
 {
