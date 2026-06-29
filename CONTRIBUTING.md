@@ -11,7 +11,7 @@ Thanks for contributing! This is a native .NET tool — here's how to get set up
 ## Setup
 
 ```bash
-git clone https://gitlab.northwardlabs.ca/moonlitlabs/nuget-check.git
+git clone https://github.com/dependably/nuget-check.git
 cd nuget-check
 git config core.hooksPath .githooks   # install the pre-commit hook
 dotnet restore NuGetCheck.slnx

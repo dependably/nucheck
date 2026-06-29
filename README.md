@@ -40,11 +40,19 @@ correctly handles NuGet's 4-part versions (e.g. `1.8.3.1`) and interval ranges
 
 ## Installation
 
-`Dependably.NuGetCheck` is published to the private feed. Install it as a global tool:
+**Once published to nuget.org**, install `Dependably.NuGetCheck` as a global tool
+straight from the public feed:
 
 ```bash
-dotnet tool install --global Dependably.NuGetCheck \
-  --add-source https://dependably.northwardlabs.ca/nuget/v3/index.json
+dotnet tool install --global Dependably.NuGetCheck
+```
+
+**From source (works today)** — build the package locally and install it from a local
+feed:
+
+```bash
+dotnet pack src/NuGetCheck/NuGetCheck.csproj -c Release -o artifacts
+dotnet tool install --global --add-source ./artifacts Dependably.NuGetCheck
 ```
 
 Then the `nuget-check` command is on your PATH:
@@ -54,8 +62,24 @@ export GITHUB_TOKEN=your_token
 nuget-check ./packages.config
 ```
 
-> The `--add-source` URL is the registry's NuGet v3 feed. Adjust it to the actual
-> feed endpoint if it differs.
+> ### Heads-up: source-trust policy fails the build on private feeds by default
+>
+> `nuget-check` audits the NuGet package sources configured for the audited project and,
+> **by default, FAILS (exits non-zero) on any source whose host is not public**
+> (`api.nuget.org` / `nuget.org`) and not allowlisted. If your project restores from a
+> private, company, GitHub Packages, or Azure Artifacts feed, permit it **before** you
+> run by adding its host to `allowedRegistryHosts` in a `.dependably-check` file at your
+> repo root:
+>
+> ```json
+> {
+>   "common": { "allowedRegistryHosts": ["nuget.mycompany.com"] }
+> }
+> ```
+>
+> This is intentional, on-by-default behavior — see
+> [Source-trust policy & `.dependably-check`](#source-trust-policy--dependably-check)
+> for the full rules.
 
 ## Usage
 
@@ -145,7 +169,7 @@ project is clean — wire it straight into a CI gate.
 ## Building from source
 
 ```bash
-git clone https://gitlab.northwardlabs.ca/moonlitlabs/nuget-check.git
+git clone https://github.com/dependably/nuget-check.git
 cd nuget-check
 dotnet build NuGetCheck.slnx -c Release
 dotnet test  NuGetCheck.slnx -c Release        # run the xUnit suite
