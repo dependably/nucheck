@@ -17,6 +17,14 @@ public sealed record SourceFinding(
     string Message,
     string Severity = "error");
 
+/// <summary>
+/// An advisory-only finding indicating a package id that could not be detected in any
+/// .cs source file under the scan root. This is heuristic: build-tool, analyzer, and
+/// MSBuild-task packages often match. Suppress via <c>ignoreUnusedPackages</c> in
+/// <c>.dependably-check</c>. Never causes the process to exit non-zero.
+/// </summary>
+public sealed record UnusedPackageFinding(string Id, string Message);
+
 /// <summary>The outcome of auditing a packages file.</summary>
 public sealed class AuditResult
 {
@@ -27,6 +35,12 @@ public sealed class AuditResult
     /// <summary>Policy findings (e.g. untrusted package sources). Empty by default.</summary>
     public IReadOnlyList<SourceFinding> PolicyFindings { get; init; } = [];
 
+    /// <summary>
+    /// Advisory-only heuristic findings for packages that appear unreferenced in source.
+    /// These never cause the process to exit non-zero. Empty by default.
+    /// </summary>
+    public IReadOnlyList<UnusedPackageFinding> UnusedPackages { get; init; } = [];
+
     /// <summary>Total number of advisories across all vulnerable packages.</summary>
     public int VulnerabilityCount => Vulnerabilities.Sum(v => v.Advisories.Count);
 
@@ -34,7 +48,10 @@ public sealed class AuditResult
     public int PolicyErrorCount =>
         PolicyFindings.Count(f => f.Severity.Equals("error", StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>True when the audit should fail the process (a vulnerability or a policy error).</summary>
+    /// <summary>
+    /// True when the audit should fail the process (a vulnerability or a policy error).
+    /// Unused-package findings are advisory only and never contribute here.
+    /// </summary>
     public bool HasFailures => VulnerabilityCount > 0 || PolicyErrorCount > 0;
 
     /// <summary>
@@ -63,6 +80,7 @@ public sealed class AuditResult
             TotalPackages = TotalPackages,
             Vulnerabilities = filtered,
             PolicyFindings = PolicyFindings,
+            UnusedPackages = UnusedPackages,
         };
     }
 }

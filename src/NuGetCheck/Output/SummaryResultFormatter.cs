@@ -29,6 +29,7 @@ public sealed class SummaryResultFormatter : IResultFormatter
         }
 
         AppendPolicyFindings(builder, result);
+        AppendUnusedPackages(builder, result);
         return builder.ToString();
     }
 
@@ -44,6 +45,21 @@ public sealed class SummaryResultFormatter : IResultFormatter
         foreach (var finding in result.PolicyFindings)
         {
             builder.AppendLine($"  • [{finding.Severity}] {finding.Message}");
+        }
+    }
+
+    private static void AppendUnusedPackages(StringBuilder builder, AuditResult result)
+    {
+        if (result.UnusedPackages.Count == 0)
+        {
+            return;
+        }
+
+        builder.AppendLine();
+        builder.AppendLine($"ℹ Possibly unused packages (heuristic) — {result.UnusedPackages.Count} finding(s):");
+        foreach (var finding in result.UnusedPackages)
+        {
+            builder.AppendLine($"  • {finding.Message}");
         }
     }
 }

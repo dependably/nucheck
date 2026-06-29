@@ -94,4 +94,66 @@ public class FormatterTests
         Assert.Equal("private", finding.GetProperty("source").GetString());
         Assert.Equal("error", finding.GetProperty("severity").GetString());
     }
+
+    private static AuditResult UnusedResult() => new()
+    {
+        TotalPackages = 2,
+        Vulnerabilities = [],
+        PolicyFindings = [],
+        UnusedPackages =
+        [
+            new UnusedPackageFinding("Serilog", "Package 'Serilog' does not appear to be referenced (heuristic)."),
+        ],
+    };
+
+    [Fact]
+    public void Summary_formatter_renders_unused_packages()
+    {
+        var output = new SummaryResultFormatter().Format(UnusedResult());
+
+        Assert.Contains("Possibly unused", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("heuristic", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Serilog", output);
+    }
+
+    [Fact]
+    public void Table_formatter_renders_unused_packages()
+    {
+        var output = new TableResultFormatter().Format(UnusedResult());
+
+        Assert.Contains("POSSIBLY UNUSED", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("heuristic", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Serilog", output);
+        // Count line shows the advisory label
+        Assert.Contains("advisory only", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Json_formatter_renders_unused_packages()
+    {
+        var output = new JsonResultFormatter().Format(UnusedResult());
+
+        using var document = JsonDocument.Parse(output);
+        Assert.Equal(1, document.RootElement.GetProperty("unusedPackageCount").GetInt32());
+        var arr = document.RootElement.GetProperty("unusedPackages");
+        Assert.Equal(1, arr.GetArrayLength());
+        Assert.Equal("Serilog", arr[0].GetProperty("id").GetString());
+        Assert.Contains("heuristic", arr[0].GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Summary_formatter_does_not_render_unused_section_when_none()
+    {
+        // No unused packages → the advisory section should not appear.
+        var output = new SummaryResultFormatter().Format(CleanResult());
+        Assert.DoesNotContain("Possibly unused", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Table_formatter_shows_zero_count_for_unused_even_when_none()
+    {
+        var output = new TableResultFormatter().Format(CleanResult());
+        Assert.Contains("Possibly Unused:", output);
+        Assert.Contains("0", output);
+    }
 }

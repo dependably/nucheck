@@ -6,6 +6,30 @@ All notable changes to `nuget-check` are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Unused-package check (advisory only).** `nuget-check` now heuristically detects
+  NuGet packages declared as direct `<PackageReference>` entries in `*.csproj` files
+  (and `Directory.Packages.props` for central package management) under the audited
+  file's directory whose namespace cannot be found in any `.cs` source file. Findings
+  appear in all three output formats as a clearly-labelled advisory section
+  ("Possibly unused packages — heuristic"). This check reads **direct** package
+  references only, never the transitive lock-file closure, to avoid false-positives on
+  transitively-resolved deps.
+
+  The check is **advisory only**: it never changes the process exit code. Build-tool,
+  analyzer, MSBuild-task, and `PrivateAssets` packages commonly produce false positives
+  because they have no runtime namespace. Suppress individual packages via
+  `ignoreUnusedPackages` in `.dependably-check` (union of `common` and `nuget`
+  sections, same pattern as `allowedRegistryHosts`):
+
+  ```json
+  {
+    "common": { "ignoreUnusedPackages": ["StyleCop.Analyzers"] },
+    "nuget":  { "ignoreUnusedPackages": ["Microsoft.CodeAnalysis.Analyzers"] }
+  }
+  ```
+
 ## [1.1.0] - 2026-06-21
 
 ### Added

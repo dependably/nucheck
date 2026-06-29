@@ -141,6 +141,91 @@ public class DependablyCheckConfigTests : IDisposable
             () => DependablyCheckConfig.Load("/no/such/.dependably-check", NewTempDir()));
     }
 
+    // -----------------------------------------------------------------
+    // ignoreUnusedPackages
+    // -----------------------------------------------------------------
+
+    [Fact]
+    public void Load_unions_common_and_nuget_ignoreUnusedPackages()
+    {
+        var dir = NewTempDir();
+        Write(dir, """
+        {
+          "common": { "ignoreUnusedPackages": ["StyleCop.Analyzers"] },
+          "nuget":  { "ignoreUnusedPackages": ["Microsoft.CodeAnalysis.Analyzers"] }
+        }
+        """);
+
+        var config = DependablyCheckConfig.Load(null, dir);
+
+        Assert.Contains("StyleCop.Analyzers", config.IgnoreUnusedPackages);
+        Assert.Contains("Microsoft.CodeAnalysis.Analyzers", config.IgnoreUnusedPackages);
+        Assert.Equal(2, config.IgnoreUnusedPackages.Count);
+    }
+
+    [Fact]
+    public void Load_ignoreUnusedPackages_dedupes_case_insensitively()
+    {
+        var dir = NewTempDir();
+        Write(dir, """
+        {
+          "common": { "ignoreUnusedPackages": ["StyleCop.Analyzers"] },
+          "nuget":  { "ignoreUnusedPackages": ["stylecop.analyzers"] }
+        }
+        """);
+
+        var config = DependablyCheckConfig.Load(null, dir);
+
+        Assert.Single(config.IgnoreUnusedPackages);
+    }
+
+    [Fact]
+    public void Load_returns_empty_ignoreUnusedPackages_when_section_absent()
+    {
+        var dir = NewTempDir();
+        Write(dir, """{ "common": { "allowedRegistryHosts": ["host.example"] } }""");
+
+        var config = DependablyCheckConfig.Load(null, dir);
+
+        Assert.Empty(config.IgnoreUnusedPackages);
+    }
+
+    [Fact]
+    public void Empty_config_has_empty_ignoreUnusedPackages()
+    {
+        Assert.Empty(DependablyCheckConfig.Empty.IgnoreUnusedPackages);
+    }
+
+    [Fact]
+    public void Load_ignoreUnusedPackages_from_common_only()
+    {
+        var dir = NewTempDir();
+        Write(dir, """
+        {
+          "common": { "ignoreUnusedPackages": ["CommonOnly.Pkg"] }
+        }
+        """);
+
+        var config = DependablyCheckConfig.Load(null, dir);
+
+        Assert.Equal(["CommonOnly.Pkg"], config.IgnoreUnusedPackages);
+    }
+
+    [Fact]
+    public void Load_ignoreUnusedPackages_from_nuget_only()
+    {
+        var dir = NewTempDir();
+        Write(dir, """
+        {
+          "nuget": { "ignoreUnusedPackages": ["NugetOnly.Pkg"] }
+        }
+        """);
+
+        var config = DependablyCheckConfig.Load(null, dir);
+
+        Assert.Equal(["NugetOnly.Pkg"], config.IgnoreUnusedPackages);
+    }
+
     public void Dispose()
     {
         GC.SuppressFinalize(this);

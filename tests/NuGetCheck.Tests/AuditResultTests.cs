@@ -72,6 +72,24 @@ public class AuditResultTests
     }
 
     [Fact]
+    public void HasFailures_false_when_only_unused_packages_found()
+    {
+        // Unused-package findings are advisory only and must never flip the exit code.
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities = [],
+            PolicyFindings = [],
+            UnusedPackages = [new UnusedPackageFinding("Foo.Bar", "heuristic message")],
+        };
+
+        Assert.False(result.HasFailures);
+        Assert.Equal(0, result.VulnerabilityCount);
+        Assert.Equal(0, result.PolicyErrorCount);
+        Assert.Single(result.UnusedPackages);
+    }
+
+    [Fact]
     public void FilterBySeverity_preserves_policy_findings()
     {
         var result = new AuditResult
@@ -84,5 +102,22 @@ public class AuditResultTests
         var filtered = result.FilterBySeverity("high");
 
         Assert.Single(filtered.PolicyFindings);
+    }
+
+    [Fact]
+    public void FilterBySeverity_preserves_unused_packages()
+    {
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities = Build().Vulnerabilities,
+            PolicyFindings = [],
+            UnusedPackages = [new UnusedPackageFinding("Foo.Bar", "msg")],
+        };
+
+        var filtered = result.FilterBySeverity("high");
+
+        Assert.Single(filtered.UnusedPackages);
+        Assert.Equal("Foo.Bar", filtered.UnusedPackages[0].Id);
     }
 }
