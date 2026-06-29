@@ -13,9 +13,12 @@ public sealed class DependablyCheckConfig
     /// <summary>The config file name discovered by walking up the directory tree.</summary>
     public const string FileName = ".dependably-check";
 
-    private DependablyCheckConfig(IReadOnlyList<string> allowedRegistryHosts)
+    private DependablyCheckConfig(
+        IReadOnlyList<string> allowedRegistryHosts,
+        IReadOnlyList<string> ignoreUnusedPackages)
     {
         AllowedRegistryHosts = allowedRegistryHosts;
+        IgnoreUnusedPackages = ignoreUnusedPackages;
     }
 
     /// <summary>
@@ -25,8 +28,17 @@ public sealed class DependablyCheckConfig
     /// </summary>
     public IReadOnlyList<string> AllowedRegistryHosts { get; }
 
-    /// <summary>An empty config (no allowlisted hosts), used when no file is found.</summary>
-    public static DependablyCheckConfig Empty { get; } = new([]);
+    /// <summary>
+    /// Package ids that should never be reported as unused, regardless of whether they
+    /// appear in source. The union of the config's <c>common</c> and <c>nuget</c>
+    /// <c>ignoreUnusedPackages</c>, de-duplicated case-insensitively. Useful for
+    /// build-tool, analyzer, MSBuild-task, and <c>PrivateAssets</c> packages that
+    /// have no runtime namespace.
+    /// </summary>
+    public IReadOnlyList<string> IgnoreUnusedPackages { get; }
+
+    /// <summary>An empty config (no allowlisted hosts, no ignored packages), used when no file is found.</summary>
+    public static DependablyCheckConfig Empty { get; } = new([], []);
 
     /// <summary>
     /// Loads the config. When <paramref name="explicitPath"/> is given it is read
@@ -90,12 +102,18 @@ public sealed class DependablyCheckConfig
             var root = document.RootElement;
 
             var hosts = new List<string>();
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seenHosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            AppendHosts(root, "common", hosts, seen);
-            AppendHosts(root, "nuget", hosts, seen);
+            AppendStringArray(root, "common", "allowedRegistryHosts", hosts, seenHosts);
+            AppendStringArray(root, "nuget", "allowedRegistryHosts", hosts, seenHosts);
 
-            return new DependablyCheckConfig(hosts);
+            var ignored = new List<string>();
+            var seenIgnored = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            AppendStringArray(root, "common", "ignoreUnusedPackages", ignored, seenIgnored);
+            AppendStringArray(root, "nuget", "ignoreUnusedPackages", ignored, seenIgnored);
+
+            return new DependablyCheckConfig(hosts, ignored);
         }
         catch (JsonException ex)
         {
@@ -103,28 +121,33 @@ public sealed class DependablyCheckConfig
         }
     }
 
-    private static void AppendHosts(JsonElement root, string section, List<string> hosts, HashSet<string> seen)
+    private static void AppendStringArray(
+        JsonElement root,
+        string section,
+        string arrayKey,
+        List<string> values,
+        HashSet<string> seen)
     {
         if (root.ValueKind != JsonValueKind.Object
             || !root.TryGetProperty(section, out var sectionElement)
             || sectionElement.ValueKind != JsonValueKind.Object
-            || !sectionElement.TryGetProperty("allowedRegistryHosts", out var hostsElement)
-            || hostsElement.ValueKind != JsonValueKind.Array)
+            || !sectionElement.TryGetProperty(arrayKey, out var arrayElement)
+            || arrayElement.ValueKind != JsonValueKind.Array)
         {
             return;
         }
 
-        foreach (var element in hostsElement.EnumerateArray())
+        foreach (var element in arrayElement.EnumerateArray())
         {
             if (element.ValueKind != JsonValueKind.String)
             {
                 continue;
             }
 
-            var host = element.GetString();
-            if (!string.IsNullOrWhiteSpace(host) && seen.Add(host))
+            var value = element.GetString();
+            if (!string.IsNullOrWhiteSpace(value) && seen.Add(value))
             {
-                hosts.Add(host);
+                values.Add(value);
             }
         }
     }

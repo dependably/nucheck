@@ -58,11 +58,13 @@ public static class Program
             }
 
             var policyFindings = SourceTrustService.Check(checkDirectory, config.AllowedRegistryHosts);
+            var unusedPackages = UnusedPackageService.Check(checkDirectory, config.IgnoreUnusedPackages);
             result = new AuditResult
             {
                 TotalPackages = result.TotalPackages,
                 Vulnerabilities = result.Vulnerabilities,
                 PolicyFindings = policyFindings,
+                UnusedPackages = unusedPackages,
             };
 
             Console.WriteLine(FormatterFactory.Get(options.Format).Format(result));
@@ -139,6 +141,18 @@ Policy checks:
   source whose host is not public (api.nuget.org / nuget.org) and not allowlisted
   in .dependably-check (common.allowedRegistryHosts ∪ nuget.allowedRegistryHosts).
   An untrusted source is an error and exits non-zero.
+
+Unused-package check (advisory only, never exits non-zero):
+  nuget-check heuristically detects packages declared as direct <PackageReference>
+  in *.csproj files under the scan root (the audited file's directory) whose
+  namespace does not appear in any .cs source file. Build-tool, analyzer, MSBuild-
+  task, and PrivateAssets packages commonly trigger false positives. Suppress
+  individual packages via ignoreUnusedPackages in .dependably-check:
+
+    {
+      "common": { "ignoreUnusedPackages": ["StyleCop.Analyzers"] },
+      "nuget":  { "ignoreUnusedPackages": ["Microsoft.CodeAnalysis.Analyzers"] }
+    }
 
 Environment Variables:
   GITHUB_TOKEN               GitHub personal access token (required for the github source)

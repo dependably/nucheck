@@ -14,6 +14,7 @@ public sealed class TableResultFormatter : IResultFormatter
         builder.AppendLine($"Total Packages:         {result.TotalPackages}");
         builder.AppendLine($"Vulnerabilities Found:  {result.VulnerabilityCount}");
         builder.AppendLine($"Policy Findings:        {result.PolicyFindings.Count}");
+        builder.AppendLine($"Possibly Unused:        {result.UnusedPackages.Count} (heuristic, advisory only)");
         builder.AppendLine("-------------------");
 
         if (result.Vulnerabilities.Count == 0)
@@ -36,6 +37,7 @@ public sealed class TableResultFormatter : IResultFormatter
         }
 
         AppendPolicyFindings(builder, result);
+        AppendUnusedPackages(builder, result);
         return builder.ToString();
     }
 
@@ -51,6 +53,21 @@ public sealed class TableResultFormatter : IResultFormatter
         foreach (var finding in result.PolicyFindings)
         {
             builder.AppendLine($"   [{finding.Severity}] {finding.Source} -> {finding.Host}: {finding.Message}");
+        }
+    }
+
+    private static void AppendUnusedPackages(StringBuilder builder, AuditResult result)
+    {
+        if (result.UnusedPackages.Count == 0)
+        {
+            return;
+        }
+
+        builder.AppendLine("-------------------");
+        builder.AppendLine("POSSIBLY UNUSED PACKAGES (HEURISTIC — ADVISORY ONLY)");
+        foreach (var finding in result.UnusedPackages)
+        {
+            builder.AppendLine($"   {finding.Id}: {finding.Message}");
         }
     }
 }

@@ -22,6 +22,9 @@ correctly handles NuGet's 4-part versions (e.g. `1.8.3.1`) and interval ranges
 - **Severity filtering**: `--severity critical|high|moderate|low`.
 - **Source-trust policy**: flags any configured NuGet package source whose host is not
   public (`api.nuget.org` / `nuget.org`) and not allowlisted in `.dependably-check`.
+- **Unused-package check (advisory)**: heuristically detects direct `<PackageReference>`
+  packages whose namespace does not appear in `.cs` source files. Never exits non-zero.
+  Suppressible per-package via `ignoreUnusedPackages` in `.dependably-check`.
 - **Shared config**: reads the repo-root `.dependably-check` (JSON), discovered by walking
   up the directory tree, or pointed at explicitly with `--config`.
 - **CI-friendly**: exits `1` when any vulnerability OR any policy error is found, `0` otherwise.
@@ -97,6 +100,28 @@ shared across the Dependably checker tools. This tool reads the union of
 
 The file is discovered by walking up from the current directory (stopping at the repo
 root, i.e. a directory containing `.git`), or pointed at explicitly with `--config`.
+
+### Unused-package check
+
+`nuget-check` also heuristically scans for `<PackageReference>` entries in `*.csproj`
+files (and `Directory.Packages.props`) under the audited file's directory that do not
+appear to be referenced in any `.cs` source file. This surfaces potentially dead
+dependencies that can be removed to reduce attack surface and build times.
+
+**This check is advisory only — it never causes the process to exit non-zero.** The
+heuristic has real false-positive risk: build-tool, analyzer, MSBuild-task, and
+`PrivateAssets` packages have no runtime namespace, and packages whose NuGet id differs
+from their namespace root will also be flagged erroneously.
+
+Suppress false positives per-package via `ignoreUnusedPackages` in `.dependably-check`
+(union of `common` and `nuget` sections):
+
+```json
+{
+  "common": { "ignoreUnusedPackages": ["StyleCop.Analyzers", "SonarAnalyzer.CSharp"] },
+  "nuget":  { "ignoreUnusedPackages": ["Microsoft.CodeAnalysis.Analyzers"] }
+}
+```
 
 ### Examples
 
