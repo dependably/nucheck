@@ -1,9 +1,9 @@
-# nuget-check
+# nucheck
 
 A native **.NET global tool** that audits NuGet dependencies for known
 vulnerabilities — like `npm audit`, but for the .NET ecosystem.
 
-`nuget-check` reads your installed packages (`packages.config`, `packages.lock.json`,
+`nucheck` reads your installed packages (`packages.config`, `packages.lock.json`,
 or a `.csproj` / `Directory.Packages.props` using `<PackageReference>` / Central Package
 Management), queries the [GitHub Advisory Database](https://github.com/advisories)
 for the **NuGet** ecosystem, and reports any package whose installed version falls
@@ -64,31 +64,31 @@ correctly handles NuGet's 4-part versions (e.g. `1.8.3.1`) and interval ranges
 
 ## Installation
 
-**Once published to nuget.org**, install `Dependably.NuGetCheck` as a global tool
+**Once published to nuget.org**, install `Dependably.NuCheck` as a global tool
 straight from the public feed:
 
 ```bash
-dotnet tool install --global Dependably.NuGetCheck
+dotnet tool install --global Dependably.NuCheck
 ```
 
 **From source (works today)** — build the package locally and install it from a local
 feed:
 
 ```bash
-dotnet pack src/NuGetCheck/NuGetCheck.csproj -c Release -o artifacts
-dotnet tool install --global --add-source ./artifacts Dependably.NuGetCheck
+dotnet pack src/Dependably.NuCheck/Dependably.NuCheck.csproj -c Release -o artifacts
+dotnet tool install --global --add-source ./artifacts Dependably.NuCheck
 ```
 
-Then the `nuget-check` command is on your PATH:
+Then the `nucheck` command is on your PATH:
 
 ```bash
 export GITHUB_TOKEN=your_token
-nuget-check ./packages.config
+nucheck ./packages.config
 ```
 
 > ### Heads-up: source-trust policy fails the build on private feeds by default
 >
-> `nuget-check` audits the NuGet package sources configured for the audited project and,
+> `nucheck` audits the NuGet package sources configured for the audited project and,
 > **by default, FAILS (exits non-zero) on any source whose host is not public**
 > (`api.nuget.org` / `nuget.org`) and not allowlisted. If your project restores from a
 > private, company, GitHub Packages, or Azure Artifacts feed, permit it **before** you
@@ -108,7 +108,7 @@ nuget-check ./packages.config
 ## Usage
 
 ```
-nuget-check <path-to-packages-file> [options]
+nucheck <path-to-packages-file> [options]
 
 Arguments:
   <path-to-packages-file>    Path to packages.config, packages.lock.json, or a
@@ -135,7 +135,7 @@ Environment:
 
 ### Source-trust policy & `.dependably-check`
 
-Beyond known vulnerabilities, `nuget-check` audits the **NuGet package sources declared
+Beyond known vulnerabilities, `nucheck` audits the **NuGet package sources declared
 within the repository** — the `nuget.config` files from the audited path up to and
 including the repo root. The host machine's user/global NuGet configuration is
 intentionally **out of scope** so the verdict is reproducible and machine-independent
@@ -162,7 +162,7 @@ root, i.e. a directory containing `.git`), or pointed at explicitly with `--conf
 
 ### Unused-package check
 
-`nuget-check` also heuristically scans for `<PackageReference>` entries in `*.csproj`
+`nucheck` also heuristically scans for `<PackageReference>` entries in `*.csproj`
 files (and `Directory.Packages.props`) under the audited file's directory that do not
 appear to be referenced in any `.cs` source file. This surfaces potentially dead
 dependencies that can be removed to reduce attack surface and build times.
@@ -199,16 +199,16 @@ Suppress remaining false positives per-package via `ignoreUnusedPackages` in
 
 ```bash
 # Default human-readable output
-nuget-check ./packages.config
+nucheck ./packages.config
 
 # OSV.dev source — no GITHUB_TOKEN needed
-nuget-check ./packages.lock.json --source osv
+nucheck ./packages.lock.json --source osv
 
 # JSON output (for piping into other tools / CI)
-nuget-check ./packages.lock.json --format json
+nucheck ./packages.lock.json --format json
 
 # Only high-severity findings, table layout
-nuget-check ./packages.config --format table --severity high
+nucheck ./packages.config --format table --severity high
 ```
 
 ### JSON output
@@ -220,7 +220,7 @@ the same way. The six core keys — `tool`, `toolVersion`, `schemaVersion`, `tar
 
 ```json
 {
-  "tool": "nuget-check",
+  "tool": "nucheck",
   "toolVersion": "1.1.1",
   "schemaVersion": "1.0",
   "target": "packages.config",
@@ -285,13 +285,13 @@ rules you give.
 
 ```bash
 # Only fail the build on high/critical vulnerabilities (ignore moderate/low for gating)
-nuget-check ./packages.lock.json --fail-on severity=high
+nucheck ./packages.lock.json --fail-on severity=high
 
 # Tolerate up to 3 known vulnerabilities before failing
-nuget-check ./packages.lock.json --fail-on count=3
+nucheck ./packages.lock.json --fail-on count=3
 
 # Combine: fail on any critical, OR on more than 5 findings total
-nuget-check ./packages.lock.json --fail-on severity=critical --fail-on count=5
+nucheck ./packages.lock.json --fail-on severity=critical --fail-on count=5
 ```
 
 Exit codes wire straight into a CI gate:
@@ -305,30 +305,30 @@ Exit codes wire straight into a CI gate:
 ## Building from source
 
 ```bash
-git clone https://github.com/dependably/nuget-check.git
-cd nuget-check
-dotnet build NuGetCheck.slnx -c Release
-dotnet test  NuGetCheck.slnx -c Release        # run the xUnit suite
-dotnet run --project src/NuGetCheck -- ./examples/packages.config
+git clone https://github.com/dependably/nucheck.git
+cd nucheck
+dotnet build Dependably.NuCheck.slnx -c Release
+dotnet test  Dependably.NuCheck.slnx -c Release        # run the xUnit suite
+dotnet run --project src/Dependably.NuCheck -- ./examples/packages.config
 ```
 
 Pack the tool locally:
 
 ```bash
-dotnet pack src/NuGetCheck/NuGetCheck.csproj -c Release -o artifacts
-dotnet tool install --global --add-source ./artifacts Dependably.NuGetCheck
+dotnet pack src/Dependably.NuCheck/Dependably.NuCheck.csproj -c Release -o artifacts
+dotnet tool install --global --add-source ./artifacts Dependably.NuCheck
 ```
 
 ## Project layout
 
 ```
-src/NuGetCheck/        # the tool
+src/Dependably.NuCheck/        # the tool
   Program.cs           # CLI entry point + orchestration
   Cli/CliOptions.cs    # argument parsing
   Services/            # PackageFileReader, GitHubAdvisoryClient, VulnerabilityMatcher, AuditService
   Output/              # human / table / json formatters
   Models/              # PackageRef, Advisory, AuditResult, Severity (the suite ladder)
-tests/NuGetCheck.Tests # xUnit tests (fakes for HttpClient + advisory source)
+tests/Dependably.NuCheck.Tests # xUnit tests (fakes for HttpClient + advisory source)
 ```
 
 See [docs/API.md](docs/API.md) for the internal architecture and the key types.

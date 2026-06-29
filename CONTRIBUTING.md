@@ -1,4 +1,4 @@
-# Contributing to nuget-check
+# Contributing to nucheck
 
 Thanks for contributing! This is a native .NET tool — here's how to get set up.
 
@@ -11,10 +11,10 @@ Thanks for contributing! This is a native .NET tool — here's how to get set up
 ## Setup
 
 ```bash
-git clone https://github.com/dependably/nuget-check.git
-cd nuget-check
+git clone https://github.com/dependably/nucheck.git
+cd nucheck
 git config core.hooksPath .githooks   # install the pre-commit hook
-dotnet restore NuGetCheck.slnx
+dotnet restore Dependably.NuCheck.slnx
 ```
 
 Dependencies restore from public `nuget.org` only (see `NuGet.config`), so no
@@ -23,16 +23,16 @@ private-feed auth is needed to build.
 ## Day-to-day
 
 ```bash
-dotnet build NuGetCheck.slnx -c Release
-dotnet test  NuGetCheck.slnx -c Release
-dotnet format NuGetCheck.slnx --verify-no-changes   # style gate (CI runs this)
-dotnet run --project src/NuGetCheck -- ./examples/packages.config
+dotnet build Dependably.NuCheck.slnx -c Release
+dotnet test  Dependably.NuCheck.slnx -c Release
+dotnet format Dependably.NuCheck.slnx --verify-no-changes   # style gate (CI runs this)
+dotnet run --project src/Dependably.NuCheck -- ./examples/packages.config
 ```
 
 Coverage locally:
 
 ```bash
-dotnet test NuGetCheck.slnx -c Release \
+dotnet test Dependably.NuCheck.slnx -c Release \
   --settings coverlet.runsettings --collect:"XPlat Code Coverage" --results-directory ./coverage
 ```
 

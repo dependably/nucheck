@@ -1,4 +1,4 @@
-# CI/CD pipeline for nuget-check (.NET global tool)
+# CI/CD pipeline for nucheck (.NET global tool)
 #
 # Flow:  test  →  pack  →  sbom  →  sbom-publish  →  publish (manual, default branch only)
 #                                                 ↘  mirror-to-github (manual, default branch only)
@@ -22,7 +22,7 @@
 #   SONAR_HOST_URL        SonarQube server URL (not a secret)
 #   SONAR_TOKEN           SonarQube analysis token (masked)
 #   GITHUB_TOKEN          GitHub PAT with Contents:write (classic: 'repo') on
-#                         dependably/nuget-check, used by mirror-to-github. Masked.
+#                         dependably/nucheck, used by mirror-to-github. Masked.
 
 # Run ONE pipeline per change: a merge-request pipeline when an MR is open (so the
 # full test suite runs in — and gates — the MR, not just snyk), the branch pipeline
@@ -65,8 +65,8 @@ variables:
   cache:
     key:
       files:
-        - src/NuGetCheck/NuGetCheck.csproj
-        - tests/NuGetCheck.Tests/NuGetCheck.Tests.csproj
+        - src/Dependably.NuCheck/Dependably.NuCheck.csproj
+        - tests/Dependably.NuCheck.Tests/Dependably.NuCheck.Tests.csproj
     paths:
       - .nuget/packages/
 
@@ -76,10 +76,10 @@ build-test:
   script:
     # --locked-mode fails the build if packages.lock.json is out of date with the
     # csproj — i.e. a dependency drifted or was tampered with without a committed lock.
-    - dotnet restore NuGetCheck.slnx --locked-mode
-    - dotnet build NuGetCheck.slnx -c Release --no-restore
+    - dotnet restore Dependably.NuCheck.slnx --locked-mode
+    - dotnet build Dependably.NuCheck.slnx -c Release --no-restore
     # coverlet.runsettings emits opencover (for Sonar) + cobertura (for GitLab).
-    - dotnet test NuGetCheck.slnx -c Release --no-build
+    - dotnet test Dependably.NuCheck.slnx -c Release --no-build
       --settings coverlet.runsettings --collect:"XPlat Code Coverage"
       --results-directory ./coverage
   artifacts:
@@ -96,7 +96,7 @@ format:
   stage: test
   <<: *dotnet_cache
   script:
-    - dotnet format NuGetCheck.slnx --verify-no-changes
+    - dotnet format Dependably.NuCheck.slnx --verify-no-changes
 
 # Secret scan — fail the pipeline if a committed secret is detected. Pinned by
 # digest so the scanner version can't drift. GIT_DEPTH 0 fetches full history;
@@ -162,8 +162,8 @@ sonarqube-check:
       /d:sonar.host.url="$SONAR_HOST_URL"
       /d:sonar.login="$SONAR_TOKEN"
       /d:sonar.cs.opencover.reportsPaths="**/coverage.opencover.xml"
-    - dotnet build NuGetCheck.slnx -c Release
-    - dotnet test NuGetCheck.slnx -c Release --no-build
+    - dotnet build Dependably.NuCheck.slnx -c Release
+    - dotnet test Dependably.NuCheck.slnx -c Release --no-build
       --settings coverlet.runsettings --collect:"XPlat Code Coverage"
       --results-directory ./coverage
     - dotnet sonarscanner end /d:sonar.login="$SONAR_TOKEN"
@@ -173,7 +173,7 @@ pack:
   stage: pack
   <<: *dotnet_cache
   script:
-    - dotnet pack src/NuGetCheck/NuGetCheck.csproj -c Release -o artifacts
+    - dotnet pack src/Dependably.NuCheck/Dependably.NuCheck.csproj -c Release -o artifacts
   artifacts:
     paths:
       - artifacts/*.nupkg
@@ -186,12 +186,12 @@ sbom:
   stage: sbom
   <<: *dotnet_cache
   script:
-    - dotnet restore NuGetCheck.slnx --locked-mode
+    - dotnet restore Dependably.NuCheck.slnx --locked-mode
     - dotnet tool install --global CycloneDX
     - export PATH="$PATH:$HOME/.dotnet/tools"
     # -spv 1.6: CycloneDX v6 defaults to spec 1.7, which the Dependency-Track
     # server rejects ("Unrecognized specVersion 1.7"). Pin to 1.6 (what DT accepts).
-    - dotnet CycloneDX NuGetCheck.slnx -o . -fn sbom.json -F Json -spv 1.6
+    - dotnet CycloneDX Dependably.NuCheck.slnx -o . -fn sbom.json -F Json -spv 1.6
   artifacts:
     paths:
       - sbom.json
@@ -226,7 +226,7 @@ sbom-publish:
         exit 1
       fi
       BASE="${dependencyTrack_url%/}"
-      PROJECT="Dependably.NuGetCheck"
+      PROJECT="Dependably.NuCheck"
       VERSION=latest
       echo "Publishing SBOM ($(wc -c < sbom.json) bytes) for $PROJECT@$VERSION to $BASE"
       status=$(curl -sS -o /tmp/bom.out -w '%{http_code}' \
@@ -298,15 +298,15 @@ mirror-to-github:
   script:
     - |
       if [ -z "$GITHUB_TOKEN" ]; then
-        echo "ERROR: GITHUB_TOKEN must be set as a CI/CD variable (GitHub PAT with Contents:write / 'repo' on dependably/nuget-check)." >&2
+        echo "ERROR: GITHUB_TOKEN must be set as a CI/CD variable (GitHub PAT with Contents:write / 'repo' on dependably/nucheck)." >&2
         exit 1
       fi
     - |
       set -eu
       # Token is passed via the remote URL (not echoed); GitLab masks the variable in logs.
       git remote remove github 2>/dev/null || true
-      git remote add github "https://x-access-token:${GITHUB_TOKEN}@github.com/dependably/nuget-check.git"
-      echo "Mirroring ${CI_DEFAULT_BRANCH} + tags to github.com/dependably/nuget-check"
+      git remote add github "https://x-access-token:${GITHUB_TOKEN}@github.com/dependably/nucheck.git"
+      echo "Mirroring ${CI_DEFAULT_BRANCH} + tags to github.com/dependably/nucheck"
       git push github "HEAD:refs/heads/${CI_DEFAULT_BRANCH}"
       git push github --tags
       git remote remove github

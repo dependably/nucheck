@@ -1,7 +1,7 @@
-# GitHub Actions CI for nuget-check (.NET global tool)
+# GitHub Actions CI for nucheck (.NET global tool)
 #
 # This is the public-facing CI that runs on the GitHub mirror
-# (github.com/dependably/nuget-check). GitLab remains the source of truth; its
+# (github.com/dependably/nucheck). GitLab remains the source of truth; its
 # pipeline mirrors `main` here via a manual `mirror-to-github` job, and GitHub
 # CI then runs on the pushed commit and on community pull requests.
 #
@@ -73,8 +73,8 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "10.0.x"
-      - run: dotnet restore NuGetCheck.slnx --locked-mode
-      - run: dotnet format NuGetCheck.slnx --verify-no-changes --no-restore
+      - run: dotnet restore Dependably.NuCheck.slnx --locked-mode
+      - run: dotnet format Dependably.NuCheck.slnx --verify-no-changes --no-restore
 
   build-test:
     runs-on: ubuntu-latest
@@ -85,10 +85,10 @@ jobs:
           dotnet-version: "10.0.x"
       # --locked-mode fails the restore if packages.lock.json drifted from the
       # csproj — i.e. a dependency changed or was tampered with without a committed lock.
-      - run: dotnet restore NuGetCheck.slnx --locked-mode
-      - run: dotnet build NuGetCheck.slnx -c Release --no-restore
+      - run: dotnet restore Dependably.NuCheck.slnx --locked-mode
+      - run: dotnet build Dependably.NuCheck.slnx -c Release --no-restore
       - run: >-
-          dotnet test NuGetCheck.slnx -c Release --no-build
+          dotnet test Dependably.NuCheck.slnx -c Release --no-build
           --settings coverlet.runsettings --collect:"XPlat Code Coverage"
           --results-directory ./coverage
       - name: Upload coverage
@@ -105,7 +105,7 @@ jobs:
   # tag, and only after the gating jobs pass. The attestation is generated with
   # GitHub's keyless OIDC/sigstore flow (no stored signing key), covers the exact
   # packed .nupkg by digest, and is retrievable by any consumer with:
-  #   gh attestation verify <file>.nupkg -R dependably/nuget-check
+  #   gh attestation verify <file>.nupkg -R dependably/nucheck
   # This is what raises the released artifact from SLSA Build L0 to L2.
   release:
     needs: [secret-scan, format, build-test]
@@ -120,11 +120,11 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "10.0.x"
-      - run: dotnet restore NuGetCheck.slnx --locked-mode
+      - run: dotnet restore Dependably.NuCheck.slnx --locked-mode
       # Pack ONCE into artifacts/. Every later step (attest, push, release upload)
       # consumes these exact bytes — nothing is rebuilt, so the provenance covers
       # precisely what ships.
-      - run: dotnet pack src/NuGetCheck/NuGetCheck.csproj -c Release --no-restore -o artifacts
+      - run: dotnet pack src/Dependably.NuCheck/Dependably.NuCheck.csproj -c Release --no-restore -o artifacts
       # Signed build provenance over the packed .nupkg, by digest. Pinned to a
       # full commit SHA (the one third-party-style action this job adds).
       - name: Attest build provenance

@@ -6,9 +6,9 @@ indent_style = space
 indent_size = 4
 
 # ---------------------------------------------------------------------------
-# CLI entry point (src/NuGetCheck/Program.cs)
+# CLI entry point (src/Dependably.NuCheck/Program.cs)
 # ---------------------------------------------------------------------------
-[src/NuGetCheck/Program.cs]
+[src/Dependably.NuCheck/Program.cs]
 # Console output IS the product for a CLI tool; writing results/help/errors to
 # stdout/stderr here is by design, not a stray debug statement.
 dotnet_diagnostic.SAST002.severity = none

@@ -1,6 +1,6 @@
 # Architecture & internals
 
-`nuget-check` is a small, dependency-injected console app. The flow is:
+`nucheck` is a small, dependency-injected console app. The flow is:
 
 ```
 args ──▶ CliOptions.Parse ──▶ PackageFileReader.Read ──▶ AuditService.AuditAsync ──▶ IResultFormatter.Format ──▶ stdout
@@ -20,7 +20,7 @@ to `AuditResult.HasFailures` (any vulnerability or policy error). With rules it 
 and `count=<N>` (vulnerability count exceeds N). The gate always evaluates the full,
 unfiltered result; `--severity` is only a display filter and never affects the exit code.
 
-## Key types (`namespace NuGetCheck`)
+## Key types (`namespace Dependably.NuCheck`)
 
 ### `Cli.CliOptions`
 Table-driven argument parser. `Parse(IEnumerable<string>)` returns the options
