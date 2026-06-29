@@ -103,6 +103,54 @@ public class ProgramTests : IDisposable
     }
 
     [Fact]
+    public void Fail_on_severity_high_ignores_moderate_vuln_for_gating()
+    {
+        // The default would trip on any vuln; --fail-on severity=high relaxes the gate so a
+        // moderate-only finding no longer fails the build (it still appears in the output).
+        var path = WritePackagesConfig("Moderate.Pkg", "1.5.0");
+        var source = Source(("Moderate.Pkg", new Advisory("Meh", "moderate", ">= 1.0.0, < 2.0.0", ["u"])));
+
+        var (exit, output, _) = Run([path, "--fail-on", "severity=high", "--format", "json"], _ => source);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("Moderate.Pkg", output);            // still printed
+        Assert.Contains("\"exitCode\": 0", output);          // JSON mirrors the real exit code
+    }
+
+    [Fact]
+    public void Fail_on_severity_high_still_trips_on_high_vuln()
+    {
+        var path = WritePackagesConfig("High.Pkg", "1.5.0");
+        var source = Source(("High.Pkg", new Advisory("Boom", "high", ">= 1.0.0, < 2.0.0", ["u"])));
+
+        var (exit, _, _) = Run([path, "--fail-on", "severity=high"], _ => source);
+
+        Assert.Equal(1, exit);
+    }
+
+    [Fact]
+    public void Fail_on_count_trips_when_vulnerability_count_exceeds_threshold()
+    {
+        var path = WritePackagesConfig("Vuln.Pkg", "1.5.0");
+        var source = Source(("Vuln.Pkg", new Advisory("Boom", "high", ">= 1.0.0, < 2.0.0", ["u"])));
+
+        // One advisory: count=1 (>1 is false) does not trip; count=0 (>0 is true) does.
+        Assert.Equal(0, Run([path, "--fail-on", "count=1"], _ => source).Exit);
+        Assert.Equal(1, Run([path, "--fail-on", "count=0"], _ => source).Exit);
+    }
+
+    [Fact]
+    public void Fail_on_bad_value_is_usage_error_exits_two()
+    {
+        var path = WritePackagesConfig("Safe.Pkg", "1.0.0");
+        var (exit, output, error) = Run([path, "--fail-on", "severity=bogus"], _ => Source());
+
+        Assert.Equal(2, exit);
+        Assert.Contains("--fail-on", error);
+        Assert.Contains("Usage:", output);
+    }
+
+    [Fact]
     public void Untrusted_source_fails_clean_audit()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"nugetcheck-{Guid.NewGuid():N}");

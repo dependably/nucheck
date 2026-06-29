@@ -12,6 +12,7 @@ public sealed class CliOptions
         ["--severity"] = (o, v) => o.Severity = v,
         ["--source"] = (o, v) => o.Source = v,
         ["--config"] = (o, v) => o.ConfigPath = v,
+        ["--fail-on"] = (o, v) => o.ApplyFailOn(v),
     };
 
     private static readonly Dictionary<string, Action<CliOptions>> BoolFlags = new(StringComparer.Ordinal)
@@ -38,6 +39,20 @@ public sealed class CliOptions
     /// discovered by walking up from the current directory.
     /// </summary>
     public string? ConfigPath { get; private set; }
+
+    /// <summary>
+    /// The CI gate level set by <c>--fail-on severity=&lt;level&gt;</c>: a normalised ladder
+    /// word, or null when the severity gate was not configured. When set, the build fails
+    /// only if a finding is at-or-above this level (this RELAXES or RAISES the gate; the
+    /// display <see cref="Severity"/> filter is separate and never affects the gate).
+    /// </summary>
+    public string? FailOnSeverity { get; private set; }
+
+    /// <summary>
+    /// The CI gate count set by <c>--fail-on count=&lt;N&gt;</c>: fail when the total
+    /// vulnerability finding count exceeds <c>N</c>, or null when not configured.
+    /// </summary>
+    public int? FailOnCount { get; private set; }
 
     public bool UseRest { get; private set; }
 
@@ -88,5 +103,52 @@ public sealed class CliOptions
         }
 
         return options;
+    }
+
+    /// <summary>
+    /// Apply one repeatable <c>--fail-on &lt;key&gt;=&lt;value&gt;</c> gate rule. Recognises
+    /// <c>severity=&lt;critical|high|moderate|low|info&gt;</c> and <c>count=&lt;N&gt;</c>.
+    /// A missing <c>=</c>, an unknown key, or an out-of-range value is a usage error
+    /// (the first such error wins, routed through the exit-2 path like any other).
+    /// </summary>
+    private void ApplyFailOn(string spec)
+    {
+        var separator = spec.IndexOf('=');
+        if (separator <= 0 || separator == spec.Length - 1)
+        {
+            Error ??= $"invalid --fail-on '{spec}': expected <key>=<value> (e.g. severity=high or count=0)";
+            return;
+        }
+
+        var key = spec[..separator].Trim().ToLowerInvariant();
+        var value = spec[(separator + 1)..].Trim();
+
+        switch (key)
+        {
+            case "severity":
+                var level = Models.Severity.ParseLevel(value);
+                if (level is null)
+                {
+                    Error ??= $"invalid --fail-on severity '{value}': use critical, high, moderate, low, or info";
+                    return;
+                }
+
+                FailOnSeverity = level;
+                break;
+
+            case "count":
+                if (!int.TryParse(value, out var count) || count < 0)
+                {
+                    Error ??= $"invalid --fail-on count '{value}': expected a non-negative integer";
+                    return;
+                }
+
+                FailOnCount = count;
+                break;
+
+            default:
+                Error ??= $"unknown --fail-on key '{key}': use severity or count";
+                break;
+        }
     }
 }

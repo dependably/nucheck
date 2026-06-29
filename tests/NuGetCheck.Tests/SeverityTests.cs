@@ -21,4 +21,38 @@ public class SeverityTests
     {
         Assert.Equal(expected, Severity.Normalize(raw));
     }
+
+    [Fact]
+    public void Rank_orders_the_ladder_highest_to_lowest()
+    {
+        Assert.True(Severity.Rank(Severity.Critical) > Severity.Rank(Severity.High));
+        Assert.True(Severity.Rank(Severity.High) > Severity.Rank(Severity.Moderate));
+        Assert.True(Severity.Rank(Severity.Moderate) > Severity.Rank(Severity.Low));
+        Assert.True(Severity.Rank(Severity.Low) > Severity.Rank(Severity.Info));
+    }
+
+    [Theory]
+    [InlineData("critical", "critical")]
+    [InlineData("high", "high")]
+    [InlineData("moderate", "moderate")]
+    [InlineData("medium", "moderate")]   // alias
+    [InlineData("low", "low")]
+    [InlineData("info", "info")]
+    [InlineData("HIGH", "high")]          // case-insensitive
+    [InlineData(" high ", "high")]        // trimmed
+    public void ParseLevel_accepts_ladder_words(string raw, string expected)
+    {
+        Assert.Equal(expected, Severity.ParseLevel(raw));
+    }
+
+    [Theory]
+    [InlineData("warning")]   // not a ladder word (unlike Normalize, not coerced to info)
+    [InlineData("bogus")]
+    [InlineData("error")]     // a raw source word, not a gate level
+    [InlineData("")]
+    [InlineData(null)]
+    public void ParseLevel_rejects_non_ladder_words(string? raw)
+    {
+        Assert.Null(Severity.ParseLevel(raw));
+    }
 }

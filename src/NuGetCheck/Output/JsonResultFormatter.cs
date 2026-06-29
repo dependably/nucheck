@@ -18,11 +18,20 @@ public sealed class JsonResultFormatter : IResultFormatter
 
     private readonly string _toolVersion;
     private readonly string _target;
+    private readonly int? _exitCode;
 
-    public JsonResultFormatter(string toolVersion, string target)
+    /// <param name="exitCode">
+    /// The real process exit code to embed in <c>summary.exitCode</c>. When null (the
+    /// default), it is derived from <see cref="AuditResult.HasFailures"/> — but the CI gate
+    /// can diverge from that (a relaxed <c>--fail-on severity</c>, or a <c>--severity</c>
+    /// display filter), so <see cref="Program"/> passes the gate's decision explicitly to
+    /// keep <c>summary.exitCode</c> equal to the actual exit code.
+    /// </param>
+    public JsonResultFormatter(string toolVersion, string target, int? exitCode = null)
     {
         _toolVersion = toolVersion;
         _target = target;
+        _exitCode = exitCode;
     }
 
     public string Format(AuditResult result)
@@ -98,9 +107,9 @@ public sealed class JsonResultFormatter : IResultFormatter
             }));
         }
 
-        // The JSON is only emitted on the success path; the real exit code is then 1 when
-        // the audit has failures (vuln or policy error), else 0 — kept in sync with Program.
-        var exitCode = result.HasFailures ? 1 : 0;
+        // The JSON is only emitted on the success path. Program passes the gate's real exit
+        // code; when absent we fall back to the default rule (1 on any vuln or policy error).
+        var exitCode = _exitCode ?? (result.HasFailures ? 1 : 0);
 
         var envelope = new
         {
