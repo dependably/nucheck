@@ -65,4 +65,43 @@ public class CliOptionsTests
     {
         Assert.Null(CliOptions.Parse(["./p.config"]).ConfigPath);
     }
+
+    [Fact]
+    public void Parse_clean_args_have_no_error()
+    {
+        Assert.Null(CliOptions.Parse(["./p.config", "--format", "json", "--verbose"]).Error);
+    }
+
+    [Theory]
+    [InlineData("--bogus")]
+    [InlineData("-x")]
+    [InlineData("--formatt")] // typo of --format
+    public void Parse_rejects_unknown_flag(string flag)
+    {
+        // Previously an unrecognized -/-- token was silently ignored. It is now a usage
+        // error so a typo cannot pass unnoticed and exit 0.
+        var options = CliOptions.Parse(["./p.config", flag]);
+
+        Assert.NotNull(options.Error);
+        Assert.Contains(flag, options.Error);
+        Assert.Equal("./p.config", options.FilePath); // positional path is still captured
+    }
+
+    [Fact]
+    public void Parse_unknown_flag_does_not_consume_following_value()
+    {
+        // A bogus flag must not swallow the manifest path that follows it.
+        var options = CliOptions.Parse(["--bogus", "./p.config"]);
+
+        Assert.NotNull(options.Error);
+        Assert.Equal("./p.config", options.FilePath);
+    }
+
+    [Fact]
+    public void Parse_reports_first_unknown_flag()
+    {
+        var options = CliOptions.Parse(["./p.config", "--first-bad", "--second-bad"]);
+
+        Assert.Contains("--first-bad", options.Error);
+    }
 }

@@ -123,6 +123,18 @@ public class ProgramTests : IDisposable
     }
 
     [Fact]
+    public void Unknown_flag_exits_one_with_usage_error()
+    {
+        // A bogus flag alongside a valid manifest must NOT silently exit 0.
+        var path = WritePackagesConfig("Safe.Pkg", "1.0.0");
+        var (exit, output, error) = Run([path, "--bogus"], _ => Source());
+
+        Assert.Equal(1, exit);
+        Assert.Contains("unknown option: '--bogus'", error);
+        Assert.Contains("Usage:", output);
+    }
+
+    [Fact]
     public void File_error_exits_one()
     {
         var (exit, _, error) = Run(["/no/such/file.config"], _ => Source());

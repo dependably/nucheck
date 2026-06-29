@@ -44,6 +44,13 @@ public sealed class CliOptions
 
     public bool ShowHelp { get; private set; }
 
+    /// <summary>
+    /// A usage error produced while parsing (e.g. an unknown option), or null when the
+    /// arguments parsed cleanly. The first error wins. <see cref="Program"/> routes a
+    /// non-null value through the usage-error path (message to stderr, help, exit 1).
+    /// </summary>
+    public string? Error { get; private set; }
+
     public static CliOptions Parse(IEnumerable<string> args)
     {
         var options = new CliOptions();
@@ -64,7 +71,13 @@ public sealed class CliOptions
             {
                 setBool(options);
             }
-            else if (!arg.StartsWith('-') && options.FilePath is null)
+            else if (arg.StartsWith('-'))
+            {
+                // An unrecognized -/-- token is a typo or an unsupported flag; reject it
+                // (first error wins) rather than silently dropping it and exiting 0.
+                options.Error ??= $"unknown option: '{arg}'";
+            }
+            else if (options.FilePath is null)
             {
                 options.FilePath = arg;
             }

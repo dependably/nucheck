@@ -25,6 +25,13 @@ public static class Program
             return 0;
         }
 
+        if (options.Error is not null)
+        {
+            Console.Error.WriteLine($"Error: {options.Error}");
+            Console.WriteLine(HelpText);
+            return 1;
+        }
+
         if (options.FilePath is null)
         {
             Console.Error.WriteLine("Error: path to a packages file is required.");
