@@ -1,3 +1,4 @@
+using System.Reflection;
 using NuGetCheck.Cli;
 using NuGetCheck.Config;
 using NuGetCheck.Models;
@@ -8,12 +9,37 @@ namespace NuGetCheck;
 
 public static class Program
 {
-    public static Task<int> Main(string[] args) => RunAsync(args);
+    /// <summary>Process exit codes, per the Dependably suite convention.</summary>
+    private const int ExitClean = 0;          // no findings
+    private const int ExitFindings = 1;       // vulnerabilities or policy errors (block)
+    private const int ExitError = 2;          // usage error OR operational/internal error
 
     /// <summary>
-    /// Runs the audit and returns the process exit code (1 when vulnerabilities are
-    /// found or an error occurs, 0 otherwise). <paramref name="sourceFactory"/> lets
-    /// tests inject a fake advisory source instead of hitting a live database.
+    /// Top-level entry point. Wraps <see cref="RunAsync"/> so that ANY unexpected
+    /// exception — even one escaping outside the inner try (e.g. config load, source
+    /// construction) — is mapped to the operational-error exit code (2) rather than
+    /// crashing with a stack trace.
+    /// </summary>
+    public static async Task<int> Main(string[] args)
+    {
+        try
+        {
+            return await RunAsync(args).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Error: {ex.Message}");
+            return ExitError;
+        }
+    }
+
+    /// <summary>
+    /// Runs the audit and returns the process exit code: 0 clean, 1 when vulnerabilities
+    /// or policy errors are found (block), 2 for a usage error (bad flag / missing
+    /// manifest) or an operational error (unreadable/unsupported manifest, scan failure,
+    /// internal exception). <c>--help</c>/<c>--version</c> exit 0.
+    /// <paramref name="sourceFactory"/> lets tests inject a fake advisory source instead
+    /// of hitting a live database.
     /// </summary>
     public static async Task<int> RunAsync(string[] args, Func<CliOptions, IAdvisorySource>? sourceFactory = null)
     {
@@ -22,27 +48,36 @@ public static class Program
         if (options.ShowHelp)
         {
             Console.WriteLine(HelpText);
-            return 0;
+            return ExitClean;
+        }
+
+        if (options.ShowVersion)
+        {
+            Console.WriteLine(VersionText);
+            return ExitClean;
         }
 
         if (options.Error is not null)
         {
+            // Usage error (unknown/invalid flag) -> exit 2.
             Console.Error.WriteLine($"Error: {options.Error}");
             Console.WriteLine(HelpText);
-            return 1;
+            return ExitError;
         }
 
         if (options.FilePath is null)
         {
+            // Usage error (missing manifest argument) -> exit 2.
             Console.Error.WriteLine("Error: path to a packages file is required.");
             Console.WriteLine(HelpText);
-            return 1;
+            return ExitError;
         }
 
         var source = sourceFactory is not null ? sourceFactory(options) : CreateSource(options);
         if (source is null)
         {
-            return 1;
+            // Unknown --source / missing token: an operational/usage error -> exit 2.
+            return ExitError;
         }
 
         try
@@ -75,12 +110,33 @@ public static class Program
             };
 
             Console.WriteLine(FormatterFactory.Get(options.Format).Format(result));
-            return result.HasFailures ? 1 : 0;
+            return result.HasFailures ? ExitFindings : ExitClean;
         }
         catch (Exception ex)
         {
+            // Operational error: unreadable/bad/unsupported manifest, scan failure, etc. -> exit 2.
             Console.Error.WriteLine($"Error: {ex.Message}");
-            return 1;
+            return ExitError;
+        }
+    }
+
+    /// <summary>The tool name and version (assembly informational version, sans build metadata).</summary>
+    private static string VersionText
+    {
+        get
+        {
+            var assembly = typeof(Program).Assembly;
+            var informational = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+            var version = informational ?? assembly.GetName().Version?.ToString() ?? "unknown";
+
+            // Strip any "+<git sha>" source-revision suffix the SDK appends.
+            var plus = version.IndexOf('+');
+            if (plus >= 0)
+            {
+                version = version[..plus];
+            }
+
+            return $"nuget-check {version}";
         }
     }
 
@@ -148,6 +204,7 @@ Options:
   --rest                     Use the GitHub REST API instead of GraphQL (github source)
   --verbose, -v              Write progress to stderr
   --help, -h                 Show this help message
+  --version                  Print the tool version and exit
 
 Policy checks:
   In addition to vulnerabilities, nuget-check flags any configured NuGet package

@@ -46,23 +46,33 @@ public class ProgramTests : IDisposable
     }
 
     [Fact]
-    public void Missing_path_exits_one()
+    public void Version_prints_and_exits_zero()
     {
+        var (exit, output, _) = Run(["--version"], _ => Source());
+        Assert.Equal(0, exit);
+        Assert.Contains("nuget-check", output);
+    }
+
+    [Fact]
+    public void Missing_path_is_usage_error_exits_two()
+    {
+        // Suite convention: a missing manifest argument is a usage error -> exit 2.
         var (exit, _, error) = Run([], _ => Source());
-        Assert.Equal(1, exit);
+        Assert.Equal(2, exit);
         Assert.Contains("path to a packages file", error);
     }
 
     [Fact]
-    public void Missing_token_exits_one()
+    public void Missing_token_exits_two()
     {
         var original = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
         Environment.SetEnvironmentVariable("GITHUB_TOKEN", null);
         try
         {
-            // No factory -> Program tries to build the real GitHub source and stops on the missing token.
+            // No factory -> Program tries to build the real GitHub source and stops on the
+            // missing token. A missing-credential operational error is exit 2, not 1.
             var (exit, _, error) = Run(["whatever.config"], null);
-            Assert.Equal(1, exit);
+            Assert.Equal(2, exit);
             Assert.Contains("GITHUB_TOKEN", error);
         }
         finally
@@ -123,22 +133,40 @@ public class ProgramTests : IDisposable
     }
 
     [Fact]
-    public void Unknown_flag_exits_one_with_usage_error()
+    public void Unknown_flag_is_usage_error_exits_two()
     {
-        // A bogus flag alongside a valid manifest must NOT silently exit 0.
+        // A bogus flag alongside a valid manifest must NOT silently exit 0; a usage error
+        // is exit 2 under the suite convention (was 1 before the P1 alignment).
         var path = WritePackagesConfig("Safe.Pkg", "1.0.0");
         var (exit, output, error) = Run([path, "--bogus"], _ => Source());
 
-        Assert.Equal(1, exit);
+        Assert.Equal(2, exit);
         Assert.Contains("unknown option: '--bogus'", error);
         Assert.Contains("Usage:", output);
     }
 
     [Fact]
-    public void File_error_exits_one()
+    public void File_error_is_operational_error_exits_two()
     {
+        // A missing/unreadable manifest is an operational error -> exit 2 (was 1).
         var (exit, _, error) = Run(["/no/such/file.config"], _ => Source());
-        Assert.Equal(1, exit);
+        Assert.Equal(2, exit);
+        Assert.Contains("Error:", error);
+    }
+
+    [Fact]
+    public void Unsupported_manifest_is_operational_error_exits_two()
+    {
+        // Junk that is recognised as neither packages.config/.lock.json nor a project
+        // file is an operational error (the scanner refuses to fail open) -> exit 2.
+        var dir = Path.Combine(Path.GetTempPath(), $"nugetcheck-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        _tempDirs.Add(dir);
+        var path = Path.Combine(dir, "garbage.txt");
+        File.WriteAllText(path, "this is not a manifest");
+
+        var (exit, _, error) = Run([path], _ => Source());
+        Assert.Equal(2, exit);
         Assert.Contains("Error:", error);
     }
 

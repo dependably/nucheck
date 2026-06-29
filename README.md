@@ -37,7 +37,13 @@ correctly handles NuGet's 4-part versions (e.g. `1.8.3.1`) and interval ranges
   `ignoreUnusedPackages` in `.dependably-check`.
 - **Shared config**: reads the repo-root `.dependably-check` (JSON), discovered by walking
   up the directory tree, or pointed at explicitly with `--config`.
-- **CI-friendly**: exits `1` when any vulnerability OR any policy error is found, `0` otherwise.
+- **Actionable advisories**: each finding carries its discrete advisory id (GHSA), CVE
+  (where available), and the **fixed version** to upgrade to — surfaced in `table` and
+  `json`, with the fix mentioned in `summary`. Populated from both GitHub and OSV.
+- **CI-friendly exit codes** (Dependably suite convention): `0` clean · `1` vulnerability
+  or policy finding (block) · `2` usage error (bad/unknown flag, missing manifest argument)
+  or operational error (unreadable/unsupported manifest, scan failure, internal exception).
+  `--help` and `--version` exit `0`.
 
 ## Requirements
 
@@ -112,6 +118,7 @@ Options:
   --rest                     Use the GitHub REST API instead of GraphQL (github source)
   --verbose, -v              Write progress to stderr
   --help, -h                 Show help
+  --version                  Print the tool version and exit
 
 Environment:
   GITHUB_TOKEN               GitHub personal access token (required for the github source)
@@ -195,8 +202,13 @@ nuget-check ./packages.lock.json --format json
 nuget-check ./packages.config --format table --severity high
 ```
 
-Exit code is `1` when vulnerabilities are found (or on error) and `0` when the
-project is clean — wire it straight into a CI gate.
+Exit codes wire straight into a CI gate:
+
+| Code | Meaning |
+| ---- | ------- |
+| `0`  | Clean — no vulnerabilities and no policy errors (also `--help` / `--version`). |
+| `1`  | One or more vulnerabilities **or** policy errors found (block the build). |
+| `2`  | Usage error (bad/unknown flag, missing manifest argument) or operational error (unreadable/unsupported manifest, scan failure, internal exception). |
 
 ## Building from source
 

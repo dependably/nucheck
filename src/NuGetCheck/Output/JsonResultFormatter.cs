@@ -16,6 +16,9 @@ public sealed class JsonResultFormatter : IResultFormatter
             vulnerabilityCount = result.VulnerabilityCount,
             policyErrorCount = result.PolicyErrorCount,
             unusedPackageCount = result.UnusedPackages.Count,
+            // Appended (kept after the original counts) so consumers reading by name stay
+            // stable. vulnerabilityCount counts advisories; this counts distinct packages.
+            vulnerablePackageCount = result.VulnerablePackageCount,
             vulnerabilities = result.Vulnerabilities.Select(v => new
             {
                 id = v.Id,
@@ -26,6 +29,10 @@ public sealed class JsonResultFormatter : IResultFormatter
                     severity = a.Severity,
                     vulnerableVersionRange = a.VulnerableVersionRange,
                     references = a.References,
+                    // Appended actionable fields; null when the source did not supply them.
+                    advisoryId = a.AdvisoryId,
+                    cve = a.Cve,
+                    fixedVersion = a.FixedVersion,
                 }),
             }),
             policyFindings = result.PolicyFindings.Select(f => new

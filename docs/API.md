@@ -9,13 +9,16 @@ args ──▶ CliOptions.Parse ──▶ PackageFileReader.Read ──▶ Audit
                                                               └─ VulnerabilityMatcher.IsVulnerable     (NuGet.Versioning)
 ```
 
-Exit code: `1` if `AuditResult.VulnerabilityCount > 0` or an error is thrown, else `0`.
+Exit code (Dependably suite convention): `0` clean; `1` when `AuditResult.HasFailures`
+(a vulnerability or a policy error); `2` for a usage error (bad/unknown flag, missing
+manifest argument) or an operational error (unreadable/unsupported manifest, scan
+failure, internal exception). `--help` / `--version` exit `0`.
 
 ## Key types (`namespace NuGetCheck`)
 
 ### `Cli.CliOptions`
 Table-driven argument parser. `Parse(IEnumerable<string>)` returns the options
-(`FilePath`, `Format`, `Severity`, `UseRest`, `Verbose`, `ShowHelp`). No growing
+(`FilePath`, `Format`, `Severity`, `UseRest`, `Verbose`, `ShowHelp`, `ShowVersion`). No growing
 if/else chain and no loop-counter mutation, so it stays simple and testable.
 
 ### `Services.PackageFileReader`
@@ -49,10 +52,14 @@ tested with an in-memory `FakeAdvisorySource`.
 
 ### `Models`
 - `PackageRef(string Id, NuGetVersion Version)`
-- `Advisory(string Summary, string Severity, string VulnerableVersionRange, IReadOnlyList<string> References)`
+- `Advisory(string Summary, string Severity, string VulnerableVersionRange, IReadOnlyList<string> References, string? AdvisoryId = null, string? Cve = null, string? FixedVersion = null)`
+  — the last three are appended actionable fields (GHSA id, CVE, first patched version),
+  populated from GitHub (`ghsaId` / `identifiers` / `firstPatchedVersion`) and OSV
+  (`aliases` / `affected[].ranges[].events[].fixed`); null where the source omits them.
 - `PackageVulnerability(string Id, string Version, IReadOnlyList<Advisory> Advisories)`
-- `AuditResult { TotalPackages, Vulnerabilities, VulnerabilityCount }` with
-  `FilterBySeverity(string?)`.
+- `AuditResult { TotalPackages, Vulnerabilities, VulnerabilityCount, VulnerablePackageCount }`
+  with `FilterBySeverity(string?)`. `VulnerabilityCount` counts advisories;
+  `VulnerablePackageCount` counts distinct packages — every formatter reports both.
 
 ### `Output`
 `IResultFormatter` with `Summary`/`Table`/`Json` implementations, selected by

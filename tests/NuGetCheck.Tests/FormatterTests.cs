@@ -18,6 +18,68 @@ public class FormatterTests
 
     private static AuditResult CleanResult() => new() { TotalPackages = 3, Vulnerabilities = [] };
 
+    // One package, two advisories — exercises the package-vs-advisory count distinction
+    // and carries the appended actionable fields (advisoryId / cve / fixedVersion).
+    private static AuditResult ActionableResult() => new()
+    {
+        TotalPackages = 4,
+        Vulnerabilities =
+        [
+            new PackageVulnerability("Newtonsoft.Json", "11.0.2",
+            [
+                new Advisory("Denial of service", "high", ">= 1.0.0, < 13.0.1", ["https://example/1"],
+                    AdvisoryId: "GHSA-aaaa-bbbb-cccc", Cve: "CVE-2024-0001", FixedVersion: "13.0.1"),
+                new Advisory("Second issue", "moderate", ">= 1.0.0, < 12.0.0", ["https://example/2"],
+                    AdvisoryId: "GHSA-dddd-eeee-ffff", Cve: null, FixedVersion: "12.0.0"),
+            ]),
+        ],
+    };
+
+    [Fact]
+    public void Json_formatter_emits_advisory_id_cve_and_fixed_version()
+    {
+        var output = new JsonResultFormatter().Format(ActionableResult());
+
+        using var document = JsonDocument.Parse(output);
+        var root = document.RootElement;
+        // Both counts are present and explicit: 1 package, 2 advisories.
+        Assert.Equal(1, root.GetProperty("vulnerablePackageCount").GetInt32());
+        Assert.Equal(2, root.GetProperty("vulnerabilityCount").GetInt32());
+
+        var issue = root.GetProperty("vulnerabilities")[0].GetProperty("issues")[0];
+        Assert.Equal("GHSA-aaaa-bbbb-cccc", issue.GetProperty("advisoryId").GetString());
+        Assert.Equal("CVE-2024-0001", issue.GetProperty("cve").GetString());
+        Assert.Equal("13.0.1", issue.GetProperty("fixedVersion").GetString());
+
+        // A field the source did not supply is emitted as JSON null, never fabricated.
+        var second = root.GetProperty("vulnerabilities")[0].GetProperty("issues")[1];
+        Assert.Equal(JsonValueKind.Null, second.GetProperty("cve").ValueKind);
+    }
+
+    [Fact]
+    public void Table_formatter_shows_both_counts_and_actionable_fields()
+    {
+        var output = new TableResultFormatter().Format(ActionableResult());
+
+        Assert.Contains("Vulnerable Packages:    1", output);
+        Assert.Contains("Advisories Found:       2", output);
+        Assert.Contains("GHSA-aaaa-bbbb-cccc", output);
+        Assert.Contains("CVE-2024-0001", output);
+        Assert.Contains("fixed in 13.0.1", output);
+    }
+
+    [Fact]
+    public void Summary_formatter_reports_both_counts_and_fixed_version()
+    {
+        var output = new SummaryResultFormatter().Format(ActionableResult());
+
+        // Headline reports both packages and advisories so it cannot contradict table/json.
+        Assert.Contains("1 vulnerable package(s)", output);
+        Assert.Contains("2 advisory(ies)", output);
+        Assert.Contains("Fixed in:", output);
+        Assert.Contains("13.0.1", output);
+    }
+
     [Theory]
     [InlineData("json", typeof(JsonResultFormatter))]
     [InlineData("JSON", typeof(JsonResultFormatter))]
@@ -49,7 +111,10 @@ public class FormatterTests
 
         var vulnerable = new SummaryResultFormatter().Format(VulnerableResult());
         Assert.Contains("Newtonsoft.Json", vulnerable);
-        Assert.Contains("known vulnerabilities", vulnerable);
+        // Headline wording changed in the P1 work to report BOTH counts explicitly
+        // ("N vulnerable package(s), M advisory(ies)") so no format contradicts another.
+        Assert.Contains("vulnerable package(s)", vulnerable);
+        Assert.Contains("advisory(ies)", vulnerable);
     }
 
     [Fact]

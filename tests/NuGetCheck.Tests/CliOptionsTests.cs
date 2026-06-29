@@ -39,6 +39,15 @@ public class CliOptionsTests
     }
 
     [Fact]
+    public void Parse_recognises_version()
+    {
+        var options = CliOptions.Parse(["--version"]);
+        Assert.True(options.ShowVersion);
+        Assert.False(options.ShowHelp);
+        Assert.Null(options.Error);
+    }
+
+    [Fact]
     public void Parse_ignores_value_flag_without_argument()
     {
         var options = CliOptions.Parse(["--format"]);

@@ -17,7 +17,11 @@ public sealed class SummaryResultFormatter : IResultFormatter
         }
         else
         {
-            builder.AppendLine($"⚠ Found {result.Vulnerabilities.Count} package(s) with known vulnerabilities:");
+            // Report BOTH counts so this headline cannot contradict the table/json formats,
+            // which count advisories: one package can carry several advisories.
+            builder.AppendLine(
+                $"⚠ Found {result.VulnerablePackageCount} vulnerable package(s), " +
+                $"{result.VulnerabilityCount} advisory(ies):");
             builder.AppendLine();
 
             foreach (var vulnerability in result.Vulnerabilities)
@@ -25,6 +29,16 @@ public sealed class SummaryResultFormatter : IResultFormatter
                 builder.AppendLine($"  • {vulnerability.Id} ({vulnerability.Version})");
                 var severities = string.Join(", ", vulnerability.Advisories.Select(a => a.Severity));
                 builder.AppendLine($"    Issues: {vulnerability.Advisories.Count} | Severity: {severities}");
+
+                var fixes = vulnerability.Advisories
+                    .Select(a => a.FixedVersion)
+                    .Where(v => !string.IsNullOrEmpty(v))
+                    .Distinct()
+                    .ToList();
+                if (fixes.Count > 0)
+                {
+                    builder.AppendLine($"    Fixed in: {string.Join(", ", fixes)}");
+                }
             }
         }
 
