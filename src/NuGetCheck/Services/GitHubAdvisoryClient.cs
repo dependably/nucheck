@@ -26,10 +26,14 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
     private const string RestUrl = "https://api.github.com/advisories";
 
     // Cap any single backoff wait so a hostile or buggy Retry-After can't stall the CLI.
-    private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(60);
+    private const int MaxBackoffSeconds = 60;
+    private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(MaxBackoffSeconds);
 
     // Cap how much of an API error body is echoed into an exception message.
     private const int MaxErrorBodyLength = 500;
+
+    // Default number of retry attempts for transient failures.
+    private const int DefaultMaxRetries = 3;
 
     private readonly HttpClient _http;
     private readonly string _token;
@@ -41,7 +45,7 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
         HttpClient http,
         string token,
         bool useRest = false,
-        int maxRetries = 3,
+        int maxRetries = DefaultMaxRetries,
         Func<TimeSpan, CancellationToken, Task>? delay = null)
     {
         _http = http;

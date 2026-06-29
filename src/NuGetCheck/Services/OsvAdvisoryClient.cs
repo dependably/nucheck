@@ -22,7 +22,11 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
     private const string NuGetEcosystem = "NuGet";
 
     // Cap any single backoff wait so a hostile or buggy Retry-After can't stall the CLI.
-    private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(60);
+    private const int MaxBackoffSeconds = 60;
+    private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(MaxBackoffSeconds);
+
+    // Default number of retry attempts for transient failures.
+    private const int DefaultMaxRetries = 3;
 
     private readonly HttpClient _http;
     private readonly int _maxRetries;
@@ -30,7 +34,7 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
 
     public OsvAdvisoryClient(
         HttpClient http,
-        int maxRetries = 3,
+        int maxRetries = DefaultMaxRetries,
         Func<TimeSpan, CancellationToken, Task>? delay = null)
     {
         _http = http;
