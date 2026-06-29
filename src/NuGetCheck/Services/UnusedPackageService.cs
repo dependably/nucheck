@@ -11,6 +11,20 @@ namespace NuGetCheck.Services;
 /// cause the process to exit non-zero — build-tool, analyzer, and MSBuild-task packages
 /// frequently trigger false positives.
 /// </summary>
+/// <remarks>
+/// To keep the heuristic trustworthy, references that are <em>expected</em> to have no
+/// runtime namespace are excluded up-front and never reported:
+/// <list type="bullet">
+///   <item>references marked as not flowing to consumers via MSBuild asset metadata —
+///     <c>PrivateAssets="all"</c> (attribute or child element), or
+///     <c>IncludeAssets</c>/<c>ExcludeAssets</c> indicating analyzers/build-only assets
+///     with the runtime/compile assets excluded; and</item>
+///   <item>a small built-in allowlist of common build/analyzer/source-generator package
+///     ids (see <see cref="IsKnownBuildOrAnalyzerId"/>).</item>
+/// </list>
+/// Both are in addition to — not a replacement for — the user-supplied
+/// <c>ignoreUnusedPackages</c> suppression list.
+/// </remarks>
 public static class UnusedPackageService
 {
     /// <summary>
@@ -162,12 +176,153 @@ public static class UnusedPackageService
             .Where(e => e.Name.LocalName.Equals("PackageReference", StringComparison.OrdinalIgnoreCase)))
         {
             // <PackageReference Include="Foo.Bar" Version="..." />
-            var include = element.Attribute("Include")?.Value;
-            if (!string.IsNullOrWhiteSpace(include))
+            var include = element.Attribute("Include")?.Value
+                ?? element.Attribute("Update")?.Value;
+            if (string.IsNullOrWhiteSpace(include))
             {
-                yield return include;
+                continue;
+            }
+
+            // Skip dev/build/analyzer-only references — these are EXPECTED to have no
+            // runtime namespace, so flagging them as "unused" is a false positive.
+            if (IsDevBuildOnlyReference(element) || IsKnownBuildOrAnalyzerId(include))
+            {
+                continue;
+            }
+
+            yield return include;
+        }
+    }
+
+    /// <summary>
+    /// Returns true when a <c>&lt;PackageReference&gt;</c> declares — via MSBuild asset
+    /// metadata — that it does not contribute runtime/compile assets, i.e. it is a
+    /// dev/build/analyzer-only dependency that does not flow to consumers. Such packages
+    /// legitimately surface no <c>using</c> namespace and must not be flagged as unused.
+    /// Recognised markers (attribute or child element form):
+    /// <list type="bullet">
+    ///   <item><c>PrivateAssets="all"</c> — the explicit "does not flow to consumers" flag;</item>
+    ///   <item><c>ExcludeAssets</c> excluding <c>runtime</c> (and/or <c>compile</c>); and</item>
+    ///   <item><c>IncludeAssets</c> limited to build/analyzer assets (<c>analyzers</c>/<c>build</c>/…)
+    ///     with neither <c>runtime</c> nor <c>compile</c> (the namespace-bearing assets) included.</item>
+    /// </list>
+    /// </summary>
+    private static bool IsDevBuildOnlyReference(XElement element)
+    {
+        var privateAssets = ReadAssetMetadata(element, "PrivateAssets");
+        if (privateAssets.Contains("all"))
+        {
+            return true;
+        }
+
+        // ExcludeAssets that drops runtime/compile means no namespace flows in.
+        var excludeAssets = ReadAssetMetadata(element, "ExcludeAssets");
+        if (excludeAssets.Contains("all")
+            || excludeAssets.Contains("runtime")
+            || excludeAssets.Contains("compile"))
+        {
+            return true;
+        }
+
+        // IncludeAssets restricted to build/analyzer assets, with the namespace-bearing
+        // runtime/compile assets NOT included (e.g. "analyzers; build; buildtransitive").
+        var includeAssets = ReadAssetMetadata(element, "IncludeAssets");
+        if (includeAssets.Count > 0
+            && !includeAssets.Contains("all")
+            && !includeAssets.Contains("runtime")
+            && !includeAssets.Contains("compile")
+            && (includeAssets.Contains("analyzers")
+                || includeAssets.Contains("build")
+                || includeAssets.Contains("buildtransitive")
+                || includeAssets.Contains("buildmultitargeting")))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Reads an MSBuild asset list (<c>PrivateAssets</c>/<c>IncludeAssets</c>/<c>ExcludeAssets</c>)
+    /// from either an attribute or a child element, returning the semicolon-separated tokens
+    /// lower-cased for case-insensitive comparison.
+    /// </summary>
+    private static HashSet<string> ReadAssetMetadata(XElement element, string name)
+    {
+        var raw = element.Attribute(name)?.Value
+            ?? element.Elements()
+                .FirstOrDefault(e => e.Name.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase))
+                ?.Value;
+
+        var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return tokens;
+        }
+
+        foreach (var token in raw.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            tokens.Add(token);
+        }
+
+        return tokens;
+    }
+
+    /// <summary>
+    /// Suffixes and exact ids of common build/analyzer/source-generator packages that have
+    /// no runtime namespace and are therefore expected to produce no <c>using</c> usage,
+    /// even when authors add them WITHOUT <c>PrivateAssets</c> metadata. Matched
+    /// case-insensitively by id or suffix. Kept deliberately small; further packages remain
+    /// suppressible via <c>ignoreUnusedPackages</c> in <c>.dependably-check</c>.
+    /// </summary>
+    private static readonly string[] KnownBuildOrAnalyzerSuffixes =
+    [
+        ".Analyzers",
+        ".SourceGenerators",
+    ];
+
+    private static readonly HashSet<string> KnownBuildOrAnalyzerIds =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            "StyleCop.Analyzers",
+            "Microsoft.CodeAnalysis.Analyzers",
+            "Microsoft.CodeAnalysis.NetAnalyzers",
+            "Microsoft.NET.Test.Sdk",
+            "coverlet.collector",
+            "coverlet.msbuild",
+            "Nullable",
+            "PolySharp",
+            "GitVersion.MsBuild",
+        };
+
+    /// <summary>
+    /// Returns true for ids in the built-in build/analyzer allowlist (see
+    /// <see cref="KnownBuildOrAnalyzerIds"/> / <see cref="KnownBuildOrAnalyzerSuffixes"/>),
+    /// e.g. <c>StyleCop.Analyzers</c>, ids ending in <c>.Analyzers</c>/<c>.SourceGenerators</c>,
+    /// or any <c>Microsoft.SourceLink.*</c> provider.
+    /// </summary>
+    private static bool IsKnownBuildOrAnalyzerId(string id)
+    {
+        if (KnownBuildOrAnalyzerIds.Contains(id))
+        {
+            return true;
+        }
+
+        // Microsoft.SourceLink.* (GitHub, GitLab, Bitbucket, AzureRepos, …) — build-only.
+        if (id.StartsWith("Microsoft.SourceLink.", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        foreach (var suffix in KnownBuildOrAnalyzerSuffixes)
+        {
+            if (id.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
             }
         }
+
+        return false;
     }
 
     private static IReadOnlySet<string> CollectNamespaceUsages(string scanDirectory)
