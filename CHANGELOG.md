@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `nuget-check` are documented here. The format is based on
+All notable changes to `nucheck` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -8,6 +8,11 @@ All notable changes to `nuget-check` are documented here. The format is based on
 
 ### Changed
 
+- **Renamed to `Dependably.NuCheck` (command `nucheck`).** The NuGet package id changes
+  from `Dependably.NuGetCheck` to `Dependably.NuCheck`, the global-tool command from
+  `nuget-check` to `nucheck`, and the C# root namespace from `NuGetCheck` to
+  `Dependably.NuCheck`. Reinstall with `dotnet tool install -g Dependably.NuCheck` and
+  invoke as `nucheck`.
 - **`--format json` now emits the shared Dependably finding schema v1 envelope.** This is a
   **breaking** change to the JSON shape. The output is one object with the suite-uniform core
   keys `tool` / `toolVersion` / `schemaVersion` (`"1.0"`) / `target` / `summary` / `findings`.
@@ -34,7 +39,7 @@ All notable changes to `nuget-check` are documented here. The format is based on
   filter** only and no longer influences the exit code; the gate always evaluates the full,
   unfiltered result, and the JSON `summary.exitCode` mirrors the real process exit code.
 
-- **Unused-package check (advisory only).** `nuget-check` now heuristically detects
+- **Unused-package check (advisory only).** `nucheck` now heuristically detects
   NuGet packages declared as direct `<PackageReference>` entries in `*.csproj` files
   (and `Directory.Packages.props` for central package management) under the audited
   file's directory whose namespace cannot be found in any `.cs` source file. Findings
@@ -60,7 +65,7 @@ All notable changes to `nuget-check` are documented here. The format is based on
 
 ### Added
 
-- **Source-trust policy check.** `nuget-check` now audits the effective NuGet package
+- **Source-trust policy check.** `nucheck` now audits the effective NuGet package
   sources for the audited file's directory (resolved via the native `NuGet.Configuration`
   API) and flags any enabled `http(s)` source whose host is neither a built-in public host
   (`api.nuget.org` / `nuget.org`) nor explicitly allowlisted. An untrusted source is an
@@ -83,7 +88,7 @@ All notable changes to `nuget-check` are documented here. The format is based on
   packed and published from GitHub Actions with keyless (OIDC/sigstore) SLSA build
   provenance attesting how and where they were built. Consumers can verify the
   downloaded package with
-  `gh attestation verify <file>.nupkg -R dependably/nuget-check`.
+  `gh attestation verify <file>.nupkg -R dependably/nucheck`.
 
 ## [1.0.0] - 2026-06-19
 

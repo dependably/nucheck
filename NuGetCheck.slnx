@@ -1,8 +1,0 @@
-<Solution>
-  <Folder Name="/src/">
-    <Project Path="src/NuGetCheck/NuGetCheck.csproj" />
-  </Folder>
-  <Folder Name="/tests/">
-    <Project Path="tests/NuGetCheck.Tests/NuGetCheck.Tests.csproj" />
-  </Folder>
-</Solution>

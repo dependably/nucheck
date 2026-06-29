@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Dependably.NuCheck/Dependably.NuCheck.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Dependably.NuCheck.Tests/Dependably.NuCheck.Tests.csproj" />
+  </Folder>
+</Solution>

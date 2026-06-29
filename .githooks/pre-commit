@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Pre-commit hook for nuget-check (tracked; install by running
+# Pre-commit hook for nucheck (tracked; install by running
 # `git config core.hooksPath .githooks`).
 # Gates a commit on `dotnet format` (hard gate) and runs the tests (advisory).
 
@@ -13,18 +13,18 @@ fi
 
 # 1. Formatting — hard gate
 echo "📝 Verifying formatting (dotnet format)..."
-dotnet format NuGetCheck.slnx --verify-no-changes
+dotnet format Dependably.NuCheck.slnx --verify-no-changes
 if [ $? -ne 0 ]; then
-  echo "❌ Formatting issues. Run 'dotnet format NuGetCheck.slnx' before committing."
+  echo "❌ Formatting issues. Run 'dotnet format Dependably.NuCheck.slnx' before committing."
   exit 1
 fi
 
 # 2. Test suite — advisory only (never blocks)
 echo "⚡ Running tests..."
-dotnet test NuGetCheck.slnx -c Release 2>/dev/null
+dotnet test Dependably.NuCheck.slnx -c Release 2>/dev/null
 if [ $? -ne 0 ]; then
   echo "⚠️  Some tests failed. Review the output above."
-  echo "💡 Run 'dotnet test NuGetCheck.slnx' for the full suite."
+  echo "💡 Run 'dotnet test Dependably.NuCheck.slnx' for the full suite."
   # Don't exit 1 here — allow commit with warning
 fi
 
