@@ -6,6 +6,10 @@ namespace NuGetCheck.Tests;
 
 public class FormatterTests
 {
+    // The JSON formatter now needs the tool version and the scanned target for the shared
+    // envelope. Tests pin a fixed version/target so assertions are deterministic.
+    private static JsonResultFormatter Json() => new("9.9.9", "packages.config");
+
     private static AuditResult VulnerableResult() => new()
     {
         TotalPackages = 2,
@@ -36,24 +40,83 @@ public class FormatterTests
     };
 
     [Fact]
-    public void Json_formatter_emits_advisory_id_cve_and_fixed_version()
+    public void Json_envelope_has_the_six_core_keys()
     {
-        var output = new JsonResultFormatter().Format(ActionableResult());
-
-        using var document = JsonDocument.Parse(output);
+        using var document = JsonDocument.Parse(Json().Format(VulnerableResult()));
         var root = document.RootElement;
-        // Both counts are present and explicit: 1 package, 2 advisories.
-        Assert.Equal(1, root.GetProperty("vulnerablePackageCount").GetInt32());
-        Assert.Equal(2, root.GetProperty("vulnerabilityCount").GetInt32());
 
-        var issue = root.GetProperty("vulnerabilities")[0].GetProperty("issues")[0];
-        Assert.Equal("GHSA-aaaa-bbbb-cccc", issue.GetProperty("advisoryId").GetString());
-        Assert.Equal("CVE-2024-0001", issue.GetProperty("cve").GetString());
-        Assert.Equal("13.0.1", issue.GetProperty("fixedVersion").GetString());
+        Assert.Equal("nuget-check", root.GetProperty("tool").GetString());
+        Assert.Equal("9.9.9", root.GetProperty("toolVersion").GetString());
+        Assert.Equal("1.0", root.GetProperty("schemaVersion").GetString());
+        Assert.Equal("packages.config", root.GetProperty("target").GetString());
+        Assert.True(root.TryGetProperty("summary", out _));
+        Assert.Equal(JsonValueKind.Array, root.GetProperty("findings").ValueKind);
+    }
+
+    [Fact]
+    public void Json_summary_counts_match_findings_and_exit_code()
+    {
+        using var document = JsonDocument.Parse(Json().Format(ActionableResult()));
+        var root = document.RootElement;
+        var summary = root.GetProperty("summary");
+
+        Assert.Equal(4, summary.GetProperty("scanned").GetInt32());                 // packages audited
+        var findingsLength = root.GetProperty("findings").GetArrayLength();
+        Assert.Equal(2, findingsLength);                                            // one per advisory
+        Assert.Equal(findingsLength, summary.GetProperty("findings").GetInt32());   // findings == length
+        Assert.Equal(1, summary.GetProperty("exitCode").GetInt32());               // vulns -> exit 1
+
+        var bySeverity = summary.GetProperty("bySeverity");
+        Assert.Equal(1, bySeverity.GetProperty("high").GetInt32());
+        Assert.Equal(1, bySeverity.GetProperty("moderate").GetInt32());
+        Assert.Equal(0, bySeverity.GetProperty("critical").GetInt32());
+
+        // bySeverity buckets sum to the findings count.
+        var sum = bySeverity.GetProperty("critical").GetInt32()
+                  + bySeverity.GetProperty("high").GetInt32()
+                  + bySeverity.GetProperty("moderate").GetInt32()
+                  + bySeverity.GetProperty("low").GetInt32()
+                  + bySeverity.GetProperty("info").GetInt32();
+        Assert.Equal(findingsLength, sum);
+    }
+
+    [Fact]
+    public void Json_vulnerability_finding_has_schema_shape_and_extra()
+    {
+        using var document = JsonDocument.Parse(Json().Format(ActionableResult()));
+        var finding = document.RootElement.GetProperty("findings")[0];
+
+        Assert.Equal("high", finding.GetProperty("severity").GetString());
+        Assert.Equal("GHSA-aaaa-bbbb-cccc", finding.GetProperty("ruleId").GetString()); // GHSA when available
+        Assert.Equal("vulnerability", finding.GetProperty("category").GetString());
+        Assert.Equal("Denial of service", finding.GetProperty("message").GetString());  // advisory title
+        Assert.Equal(JsonValueKind.Null, finding.GetProperty("location").ValueKind);    // not file-scoped
+        Assert.Equal("upgrade to 13.0.1", finding.GetProperty("remediation").GetString());
+
+        var extra = finding.GetProperty("extra");
+        Assert.Equal("Newtonsoft.Json", extra.GetProperty("package").GetString());
+        Assert.Equal("11.0.2", extra.GetProperty("installedVersion").GetString());
+        Assert.Equal("13.0.1", extra.GetProperty("fixedVersion").GetString());
+        Assert.Equal("GHSA-aaaa-bbbb-cccc", extra.GetProperty("advisoryId").GetString());
+        Assert.Equal("CVE-2024-0001", extra.GetProperty("cve").GetString());
+        Assert.Equal(">= 1.0.0, < 13.0.1", extra.GetProperty("vulnerableRange").GetString());
+        Assert.Equal("https://example/1", extra.GetProperty("references")[0].GetString());
 
         // A field the source did not supply is emitted as JSON null, never fabricated.
-        var second = root.GetProperty("vulnerabilities")[0].GetProperty("issues")[1];
-        Assert.Equal(JsonValueKind.Null, second.GetProperty("cve").ValueKind);
+        var second = document.RootElement.GetProperty("findings")[1];
+        Assert.Equal(JsonValueKind.Null, second.GetProperty("extra").GetProperty("cve").ValueKind);
+    }
+
+    [Fact]
+    public void Json_clean_result_has_no_findings_and_exit_zero()
+    {
+        using var document = JsonDocument.Parse(Json().Format(CleanResult()));
+        var root = document.RootElement;
+
+        Assert.Equal(0, root.GetProperty("findings").GetArrayLength());
+        Assert.Equal(0, root.GetProperty("summary").GetProperty("findings").GetInt32());
+        Assert.Equal(0, root.GetProperty("summary").GetProperty("exitCode").GetInt32());
+        Assert.Equal(3, root.GetProperty("summary").GetProperty("scanned").GetInt32());
     }
 
     [Fact]
@@ -84,24 +147,12 @@ public class FormatterTests
     [InlineData("json", typeof(JsonResultFormatter))]
     [InlineData("JSON", typeof(JsonResultFormatter))]
     [InlineData("table", typeof(TableResultFormatter))]
-    [InlineData("summary", typeof(SummaryResultFormatter))]
+    [InlineData("human", typeof(SummaryResultFormatter))]
     [InlineData("unknown", typeof(SummaryResultFormatter))]
     [InlineData(null, typeof(SummaryResultFormatter))]
     public void Factory_selects_formatter(string? format, Type expected)
     {
-        Assert.IsType(expected, FormatterFactory.Get(format));
-    }
-
-    [Fact]
-    public void Json_formatter_emits_parseable_json_with_counts()
-    {
-        var output = new JsonResultFormatter().Format(VulnerableResult());
-
-        using var document = JsonDocument.Parse(output);
-        Assert.Equal(2, document.RootElement.GetProperty("totalPackages").GetInt32());
-        Assert.Equal(1, document.RootElement.GetProperty("vulnerabilityCount").GetInt32());
-        Assert.Equal("Newtonsoft.Json",
-            document.RootElement.GetProperty("vulnerabilities")[0].GetProperty("id").GetString());
+        Assert.IsType(expected, FormatterFactory.Get(format, "9.9.9", "packages.config"));
     }
 
     [Fact]
@@ -111,8 +162,7 @@ public class FormatterTests
 
         var vulnerable = new SummaryResultFormatter().Format(VulnerableResult());
         Assert.Contains("Newtonsoft.Json", vulnerable);
-        // Headline wording changed in the P1 work to report BOTH counts explicitly
-        // ("N vulnerable package(s), M advisory(ies)") so no format contradicts another.
+        // Headline wording reports BOTH counts explicitly so no format contradicts another.
         Assert.Contains("vulnerable package(s)", vulnerable);
         Assert.Contains("advisory(ies)", vulnerable);
     }
@@ -138,26 +188,33 @@ public class FormatterTests
     };
 
     [Fact]
-    public void Summary_formatter_renders_policy_findings()
+    public void Summary_formatter_renders_policy_findings_with_ladder_severity()
     {
         var output = new SummaryResultFormatter().Format(PolicyResult());
 
         Assert.Contains("policy finding", output);
         Assert.Contains("nuget.evil.example", output);
-        Assert.Contains("[error]", output);
+        // Source-trust "error" maps onto the ladder as "high".
+        Assert.Contains("[high]", output);
     }
 
     [Fact]
-    public void Json_formatter_renders_policy_findings()
+    public void Json_renders_policy_finding_as_policy_category()
     {
-        var output = new JsonResultFormatter().Format(PolicyResult());
+        using var document = JsonDocument.Parse(Json().Format(PolicyResult()));
+        var root = document.RootElement;
 
-        using var document = JsonDocument.Parse(output);
-        Assert.Equal(1, document.RootElement.GetProperty("policyErrorCount").GetInt32());
-        var finding = document.RootElement.GetProperty("policyFindings")[0];
-        Assert.Equal("nuget.evil.example", finding.GetProperty("host").GetString());
-        Assert.Equal("private", finding.GetProperty("source").GetString());
-        Assert.Equal("error", finding.GetProperty("severity").GetString());
+        Assert.Equal(1, root.GetProperty("findings").GetArrayLength());
+        // A policy error fails the audit -> exit 1.
+        Assert.Equal(1, root.GetProperty("summary").GetProperty("exitCode").GetInt32());
+
+        var finding = root.GetProperty("findings")[0];
+        Assert.Equal("policy", finding.GetProperty("category").GetString());
+        Assert.Equal("high", finding.GetProperty("severity").GetString());
+        Assert.Equal("untrusted-source", finding.GetProperty("ruleId").GetString());
+        Assert.Equal(JsonValueKind.Null, finding.GetProperty("location").ValueKind);
+        Assert.Equal("nuget.evil.example", finding.GetProperty("extra").GetProperty("host").GetString());
+        Assert.Equal("private", finding.GetProperty("extra").GetProperty("source").GetString());
     }
 
     private static AuditResult UnusedResult() => new()
@@ -189,27 +246,27 @@ public class FormatterTests
         Assert.Contains("POSSIBLY UNUSED", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("heuristic", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Serilog", output);
-        // Count line shows the advisory label
         Assert.Contains("advisory only", output, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void Json_formatter_renders_unused_packages()
+    public void Json_renders_unused_package_as_info_finding()
     {
-        var output = new JsonResultFormatter().Format(UnusedResult());
+        using var document = JsonDocument.Parse(Json().Format(UnusedResult()));
+        var root = document.RootElement;
 
-        using var document = JsonDocument.Parse(output);
-        Assert.Equal(1, document.RootElement.GetProperty("unusedPackageCount").GetInt32());
-        var arr = document.RootElement.GetProperty("unusedPackages");
-        Assert.Equal(1, arr.GetArrayLength());
-        Assert.Equal("Serilog", arr[0].GetProperty("id").GetString());
-        Assert.Contains("heuristic", arr[0].GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+        // Unused findings are advisory only — they never fail the audit.
+        Assert.Equal(0, root.GetProperty("summary").GetProperty("exitCode").GetInt32());
+        var finding = root.GetProperty("findings")[0];
+        Assert.Equal("unused", finding.GetProperty("category").GetString());
+        Assert.Equal("info", finding.GetProperty("severity").GetString());
+        Assert.Equal("Serilog", finding.GetProperty("extra").GetProperty("package").GetString());
+        Assert.Contains("heuristic", finding.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
     public void Summary_formatter_does_not_render_unused_section_when_none()
     {
-        // No unused packages → the advisory section should not appear.
         var output = new SummaryResultFormatter().Format(CleanResult());
         Assert.DoesNotContain("Possibly unused", output, StringComparison.OrdinalIgnoreCase);
     }

@@ -10,7 +10,7 @@ public class CliOptionsTests
         var options = CliOptions.Parse(["./packages.config"]);
 
         Assert.Equal("./packages.config", options.FilePath);
-        Assert.Equal("summary", options.Format);
+        Assert.Equal("human", options.Format);
         Assert.Null(options.Severity);
         Assert.False(options.UseRest);
         Assert.False(options.Verbose);
@@ -51,7 +51,7 @@ public class CliOptionsTests
     public void Parse_ignores_value_flag_without_argument()
     {
         var options = CliOptions.Parse(["--format"]);
-        Assert.Equal("summary", options.Format);
+        Assert.Equal("human", options.Format);
     }
 
     [Fact]
