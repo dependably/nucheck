@@ -25,7 +25,9 @@ correctly handles NuGet's 4-part versions (e.g. `1.8.3.1`) and interval ranges
   packages are not expanded) — and version ranges / floating versions are audited at their
   declared **lower bound**, not the version a restore would resolve. For exact resolved
   versions, point the tool at a `packages.lock.json`.
-- **Output formats**: `summary` (default), `table`, `json`.
+- **Output formats**: `human` (default), `table`, `json`. `--format json` emits the shared
+  Dependably finding schema v1 envelope (see [JSON output](#json-output)) so any suite tool's
+  JSON parses the same way.
 - **Severity filtering**: `--severity critical|high|moderate|low`.
 - **Source-trust policy**: flags any configured NuGet package source whose host is not
   public (`api.nuget.org` / `nuget.org`) and not allowlisted in `.dependably-check`.
@@ -39,7 +41,7 @@ correctly handles NuGet's 4-part versions (e.g. `1.8.3.1`) and interval ranges
   up the directory tree, or pointed at explicitly with `--config`.
 - **Actionable advisories**: each finding carries its discrete advisory id (GHSA), CVE
   (where available), and the **fixed version** to upgrade to — surfaced in `table` and
-  `json`, with the fix mentioned in `summary`. Populated from both GitHub and OSV.
+  `json`, with the fix mentioned in `human`. Populated from both GitHub and OSV.
 - **CI-friendly exit codes** (Dependably suite convention): `0` clean · `1` vulnerability
   or policy finding (block) · `2` usage error (bad/unknown flag, missing manifest argument)
   or operational error (unreadable/unsupported manifest, scan failure, internal exception).
@@ -112,7 +114,7 @@ Arguments:
 
 Options:
   --source <name>            Advisory source: github (default), osv
-  --format <type>            Output format: summary, table, json (default: summary)
+  --format <type>            Output format: human, table, json (default: human)
   --severity <level>         Filter by severity: critical, high, moderate, low
   --config <path>            Path to a .dependably-check config file (otherwise discovered)
   --rest                     Use the GitHub REST API instead of GraphQL (github source)
@@ -189,7 +191,7 @@ Suppress remaining false positives per-package via `ignoreUnusedPackages` in
 ### Examples
 
 ```bash
-# Default summary
+# Default human-readable output
 nuget-check ./packages.config
 
 # OSV.dev source — no GITHUB_TOKEN needed
@@ -201,6 +203,60 @@ nuget-check ./packages.lock.json --format json
 # Only high-severity findings, table layout
 nuget-check ./packages.config --format table --severity high
 ```
+
+### JSON output
+
+`--format json` writes **one** JSON object to stdout (progress/errors go to stderr),
+following the shared **Dependably finding schema v1** so every tool in the suite parses
+the same way. The six core keys — `tool`, `toolVersion`, `schemaVersion`, `target`,
+`summary`, `findings` — are uniform; tool-specific data lives under each finding's `extra`.
+
+```json
+{
+  "tool": "nuget-check",
+  "toolVersion": "1.1.1",
+  "schemaVersion": "1.0",
+  "target": "packages.config",
+  "summary": {
+    "scanned": 1,
+    "findings": 1,
+    "bySeverity": { "critical": 0, "high": 1, "moderate": 0, "low": 0, "info": 0 },
+    "exitCode": 1
+  },
+  "findings": [
+    {
+      "severity": "high",
+      "ruleId": "GHSA-5crp-9r3c-p9vr",
+      "category": "vulnerability",
+      "message": "GHSA-5crp-9r3c-p9vr: Improper Handling of Exceptional Conditions in Newtonsoft.Json",
+      "location": null,
+      "remediation": "upgrade to 13.0.1",
+      "extra": {
+        "package": "Newtonsoft.Json",
+        "installedVersion": "11.0.2",
+        "fixedVersion": "13.0.1",
+        "advisoryId": "GHSA-5crp-9r3c-p9vr",
+        "cve": "CVE-2024-21907",
+        "vulnerableRange": "< 13.0.1",
+        "references": ["https://osv.dev/vulnerability/GHSA-5crp-9r3c-p9vr"]
+      }
+    }
+  ]
+}
+```
+
+Notes:
+
+- `summary.scanned` = number of packages audited; `summary.findings` always equals
+  `findings.length` (the JSON list is never truncated); `summary.exitCode` equals the real
+  process exit code (`0`/`1`/`2`).
+- `severity` is always one of the suite ladder strings `critical | high | moderate | low | info`.
+  nuget mapping: `critical/high/moderate/low` kept, `medium`→`moderate`, `unknown`→`info`.
+  These same words are used in the `human` and `table` outputs.
+- Finding `category` is `vulnerability` (an advisory), `policy` (an untrusted package source —
+  `extra` carries `host`/`source`), or `unused` (a heuristic unused-package finding, always
+  `info`). For a vulnerability, `ruleId` is the GHSA id when available (else the CVE);
+  `location` is `null` because package findings are not file-scoped.
 
 Exit codes wire straight into a CI gate:
 
@@ -234,8 +290,8 @@ src/NuGetCheck/        # the tool
   Program.cs           # CLI entry point + orchestration
   Cli/CliOptions.cs    # argument parsing
   Services/            # PackageFileReader, GitHubAdvisoryClient, VulnerabilityMatcher, AuditService
-  Output/              # summary / table / json formatters
-  Models/              # PackageRef, Advisory, AuditResult
+  Output/              # human / table / json formatters
+  Models/              # PackageRef, Advisory, AuditResult, Severity (the suite ladder)
 tests/NuGetCheck.Tests # xUnit tests (fakes for HttpClient + advisory source)
 ```
 

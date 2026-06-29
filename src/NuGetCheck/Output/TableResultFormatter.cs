@@ -30,7 +30,7 @@ public sealed class TableResultFormatter : IResultFormatter
                 builder.AppendLine($"{index}. {vulnerability.Id} ({vulnerability.Version})");
                 foreach (var advisory in vulnerability.Advisories)
                 {
-                    builder.AppendLine($"   [{advisory.Severity}] {advisory.Summary}");
+                    builder.AppendLine($"   [{Severity.Normalize(advisory.Severity)}] {advisory.Summary}");
                     var detail = AdvisoryDetail(advisory);
                     if (detail.Length > 0)
                     {
@@ -83,7 +83,7 @@ public sealed class TableResultFormatter : IResultFormatter
         builder.AppendLine("POLICY FINDINGS");
         foreach (var finding in result.PolicyFindings)
         {
-            builder.AppendLine($"   [{finding.Severity}] {finding.Source} -> {finding.Host}: {finding.Message}");
+            builder.AppendLine($"   [{Severity.Normalize(finding.Severity)}] {finding.Source} -> {finding.Host}: {finding.Message}");
         }
     }
 

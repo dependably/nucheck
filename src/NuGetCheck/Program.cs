@@ -109,7 +109,7 @@ public static class Program
                 UnusedPackages = unusedPackages,
             };
 
-            Console.WriteLine(FormatterFactory.Get(options.Format).Format(result));
+            Console.WriteLine(FormatterFactory.Get(options.Format, ToolVersion, options.FilePath).Format(result));
             return result.HasFailures ? ExitFindings : ExitClean;
         }
         catch (Exception ex)
@@ -121,7 +121,10 @@ public static class Program
     }
 
     /// <summary>The tool name and version (assembly informational version, sans build metadata).</summary>
-    private static string VersionText
+    private static string VersionText => $"nuget-check {ToolVersion}";
+
+    /// <summary>The bare semver version string (no tool name, no "+&lt;git sha&gt;" suffix).</summary>
+    private static string ToolVersion
     {
         get
         {
@@ -136,7 +139,7 @@ public static class Program
                 version = version[..plus];
             }
 
-            return $"nuget-check {version}";
+            return version;
         }
     }
 
@@ -197,7 +200,7 @@ Arguments:
 
 Options:
   --source <name>            Advisory source: github (default), osv
-  --format <type>            Output format: summary, table, json (default: summary)
+  --format <type>            Output format: human, table, json (default: human)
   --severity <level>         Filter by severity: critical, high, moderate, low
   --config <path>            Path to a .dependably-check config file. When omitted, the
                              file is discovered by walking up from the current directory.

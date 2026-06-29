@@ -27,7 +27,7 @@ public sealed class SummaryResultFormatter : IResultFormatter
             foreach (var vulnerability in result.Vulnerabilities)
             {
                 builder.AppendLine($"  • {vulnerability.Id} ({vulnerability.Version})");
-                var severities = string.Join(", ", vulnerability.Advisories.Select(a => a.Severity));
+                var severities = string.Join(", ", vulnerability.Advisories.Select(a => Severity.Normalize(a.Severity)));
                 builder.AppendLine($"    Issues: {vulnerability.Advisories.Count} | Severity: {severities}");
 
                 var fixes = vulnerability.Advisories
@@ -58,7 +58,7 @@ public sealed class SummaryResultFormatter : IResultFormatter
         builder.AppendLine($"⚠ Found {result.PolicyFindings.Count} policy finding(s):");
         foreach (var finding in result.PolicyFindings)
         {
-            builder.AppendLine($"  • [{finding.Severity}] {finding.Message}");
+            builder.AppendLine($"  • [{Severity.Normalize(finding.Severity)}] {finding.Message}");
         }
     }
 

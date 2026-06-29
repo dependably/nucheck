@@ -26,7 +26,7 @@ public sealed class CliOptions
 
     public string? FilePath { get; private set; }
 
-    public string Format { get; private set; } = "summary";
+    public string Format { get; private set; } = "human";
 
     public string? Severity { get; private set; }
 

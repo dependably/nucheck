@@ -6,6 +6,23 @@ All notable changes to `nuget-check` are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **`--format json` now emits the shared Dependably finding schema v1 envelope.** This is a
+  **breaking** change to the JSON shape. The output is one object with the suite-uniform core
+  keys `tool` / `toolVersion` / `schemaVersion` (`"1.0"`) / `target` / `summary` / `findings`.
+  `summary` reports `scanned` (packages audited), `findings` (== `findings.length`),
+  `bySeverity` (the five ladder buckets), and `exitCode` (the real process exit code). Each
+  finding follows the schema Finding shape; vulnerability advisory data moves under
+  `extra` (`package`, `installedVersion`, `fixedVersion`, `advisoryId`, `cve`,
+  `vulnerableRange`, `references`). Untrusted package sources are `category: "policy"`
+  findings and heuristic unused packages are `category: "unused"` (`info`).
+- **One severity ladder across the suite:** `critical > high > moderate > low > info`. nuget
+  severities map onto it (`medium`→`moderate`, `unknown`→`info`; the policy word `error`→`high`).
+  The `human` and `table` outputs print the ladder words too.
+- **`--format` token renamed `summary` → `human`** (the default). `table` and `json` are
+  unchanged. Any unrecognised token still falls back to the human formatter.
+
 ### Added
 
 - **Unused-package check (advisory only).** `nuget-check` now heuristically detects
