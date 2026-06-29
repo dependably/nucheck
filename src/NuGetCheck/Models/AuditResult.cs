@@ -62,6 +62,70 @@ public sealed class AuditResult
     public bool HasFailures => VulnerabilityCount > 0 || PolicyErrorCount > 0;
 
     /// <summary>
+    /// Evaluate the unified CI gate and return true when the build should fail (exit 1).
+    /// <para>
+    /// With NO <c>--fail-on</c> rule (<paramref name="failOnSeverity"/> and
+    /// <paramref name="failOnCount"/> both null) the default holds: any vulnerability or
+    /// policy error trips (<see cref="HasFailures"/>).
+    /// </para>
+    /// <para>
+    /// With one or more rules, the gate is exactly the union (OR) of the rules — it
+    /// REPLACES the default. <c>severity</c> trips when any finding (vulnerability advisory
+    /// or policy finding) is at-or-above the level on the suite ladder; <c>count</c> trips
+    /// when the vulnerability count exceeds N. This is what lets a user relax the gate
+    /// (e.g. <c>severity=high</c> ignores moderate/low vulns for gating, though they still
+    /// appear in output).
+    /// </para>
+    /// </summary>
+    public bool GateTrips(string? failOnSeverity, int? failOnCount)
+    {
+        if (failOnSeverity is null && failOnCount is null)
+        {
+            return HasFailures;
+        }
+
+        var trips = false;
+
+        if (failOnSeverity is not null)
+        {
+            trips |= MaxFindingRank() >= Severity.Rank(failOnSeverity);
+        }
+
+        if (failOnCount is not null)
+        {
+            trips |= VulnerabilityCount > failOnCount.Value;
+        }
+
+        return trips;
+    }
+
+    /// <summary>
+    /// The highest severity rank across every gating finding — vulnerability advisories and
+    /// policy findings (a policy finding's <c>error</c> severity maps to <c>high</c>).
+    /// Returns 0 when there are no findings. Unused-package findings are advisory only and
+    /// are never considered.
+    /// </summary>
+    private int MaxFindingRank()
+    {
+        var max = 0;
+
+        foreach (var package in Vulnerabilities)
+        {
+            foreach (var advisory in package.Advisories)
+            {
+                max = Math.Max(max, Severity.Rank(Severity.Normalize(advisory.Severity)));
+            }
+        }
+
+        foreach (var finding in PolicyFindings)
+        {
+            max = Math.Max(max, Severity.Rank(Severity.Normalize(finding.Severity)));
+        }
+
+        return max;
+    }
+
+    /// <summary>
     /// Return a copy keeping only advisories of the given severity (case-insensitive).
     /// A null/blank severity returns this result unchanged.
     /// </summary>

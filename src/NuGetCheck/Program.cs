@@ -88,8 +88,7 @@ public static class Program
                 Console.Error.WriteLine($"Read {packages.Count} package(s) from {options.FilePath}");
             }
 
-            var result = await new AuditService(source).AuditAsync(packages).ConfigureAwait(false);
-            result = result.FilterBySeverity(options.Severity);
+            var audit = await new AuditService(source).AuditAsync(packages).ConfigureAwait(false);
 
             var checkDirectory = ResolveCheckDirectory(options.FilePath);
             var config = DependablyCheckConfig.Load(options.ConfigPath, checkDirectory);
@@ -101,16 +100,24 @@ public static class Program
 
             var policyFindings = SourceTrustService.Check(checkDirectory, config.AllowedRegistryHosts);
             var unusedPackages = UnusedPackageService.Check(checkDirectory, config.IgnoreUnusedPackages);
-            result = new AuditResult
+            var result = new AuditResult
             {
-                TotalPackages = result.TotalPackages,
-                Vulnerabilities = result.Vulnerabilities,
+                TotalPackages = audit.TotalPackages,
+                Vulnerabilities = audit.Vulnerabilities,
                 PolicyFindings = policyFindings,
                 UnusedPackages = unusedPackages,
             };
 
-            Console.WriteLine(FormatterFactory.Get(options.Format, ToolVersion, options.FilePath).Format(result));
-            return result.HasFailures ? ExitFindings : ExitClean;
+            // The CI gate (--fail-on, or the default any-vuln-or-policy rule) always
+            // evaluates the UNFILTERED result so a display filter cannot hide a failure.
+            var exitCode = result.GateTrips(options.FailOnSeverity, options.FailOnCount) ? ExitFindings : ExitClean;
+
+            // --severity is a DISPLAY filter only: it narrows what is printed, never the gate.
+            // The formatter is handed the real exit code so JSON's summary.exitCode matches.
+            var display = result.FilterBySeverity(options.Severity);
+            Console.WriteLine(FormatterFactory.Get(options.Format, ToolVersion, options.FilePath, exitCode).Format(display));
+
+            return exitCode;
         }
         catch (Exception ex)
         {
@@ -204,6 +211,16 @@ Options:
   --severity <level>         Filter by severity: critical, high, moderate, low
   --config <path>            Path to a .dependably-check config file. When omitted, the
                              file is discovered by walking up from the current directory.
+  --fail-on <key>=<value>    CI gate (repeatable). Without it, ANY vulnerability or policy
+                             error fails the build (exit 1) — the default. Each rule below
+                             REPLACES that default; the build fails if ANY rule trips:
+                               severity=<critical|high|moderate|low|info>
+                                     fail only when a finding is at-or-above this level
+                                     (relaxes/raises the gate, e.g. severity=high ignores
+                                     moderate/low vulns for gating — they still print).
+                               count=<N>
+                                     fail when the vulnerability count exceeds N.
+                             Distinct from --severity, which only filters what is printed.
   --rest                     Use the GitHub REST API instead of GraphQL (github source)
   --verbose, -v              Write progress to stderr
   --help, -h                 Show this help message
@@ -235,5 +252,7 @@ Examples:
   nuget-check ./packages.lock.json --source osv --format json
   nuget-check ./packages.config --severity high
   nuget-check ./packages.config --config ./.dependably-check
+  nuget-check ./packages.config --fail-on severity=high   # ignore moderate/low for gating
+  nuget-check ./packages.config --fail-on count=0         # fail on any vulnerability
 """;
 }

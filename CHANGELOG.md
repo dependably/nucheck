@@ -25,6 +25,15 @@ All notable changes to `nuget-check` are documented here. The format is based on
 
 ### Added
 
+- **Unified `--fail-on <key>=<value>` CI gate (repeatable).** The single suite-wide gate
+  mechanism. `severity=<critical|high|moderate|low|info>` fails the build only on findings
+  at-or-above the level (relax or raise the gate — relaxed-out vulnerabilities still print);
+  `count=<N>` fails when the vulnerability count exceeds `N`. Multiple rules are OR-ed. With
+  no `--fail-on`, the default is unchanged — any vulnerability or policy error fails (exit
+  `1`). A bad key/value is a usage error (exit `2`). `--severity` remains a **display
+  filter** only and no longer influences the exit code; the gate always evaluates the full,
+  unfiltered result, and the JSON `summary.exitCode` mirrors the real process exit code.
+
 - **Unused-package check (advisory only).** `nuget-check` now heuristically detects
   NuGet packages declared as direct `<PackageReference>` entries in `*.csproj` files
   (and `Directory.Packages.props` for central package management) under the audited

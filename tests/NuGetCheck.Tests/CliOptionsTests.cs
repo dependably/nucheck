@@ -113,4 +113,70 @@ public class CliOptionsTests
 
         Assert.Contains("--first-bad", options.Error);
     }
+
+    [Fact]
+    public void Parse_fail_on_defaults_to_null()
+    {
+        var options = CliOptions.Parse(["./p.config"]);
+
+        Assert.Null(options.FailOnSeverity);
+        Assert.Null(options.FailOnCount);
+        Assert.Null(options.Error);
+    }
+
+    [Theory]
+    [InlineData("critical", "critical")]
+    [InlineData("high", "high")]
+    [InlineData("moderate", "moderate")]
+    [InlineData("medium", "moderate")]  // alias normalised onto the ladder
+    [InlineData("low", "low")]
+    [InlineData("info", "info")]
+    [InlineData("HIGH", "high")]        // case-insensitive
+    public void Parse_fail_on_severity_sets_gate_level(string value, string expected)
+    {
+        var options = CliOptions.Parse(["./p.config", "--fail-on", $"severity={value}"]);
+
+        Assert.Null(options.Error);
+        Assert.Equal(expected, options.FailOnSeverity);
+        Assert.Null(options.FailOnCount);
+    }
+
+    [Theory]
+    [InlineData("0", 0)]
+    [InlineData("5", 5)]
+    public void Parse_fail_on_count_sets_gate_count(string value, int expected)
+    {
+        var options = CliOptions.Parse(["./p.config", "--fail-on", $"count={value}"]);
+
+        Assert.Null(options.Error);
+        Assert.Equal(expected, options.FailOnCount);
+        Assert.Null(options.FailOnSeverity);
+    }
+
+    [Fact]
+    public void Parse_fail_on_is_repeatable()
+    {
+        var options = CliOptions.Parse(
+            ["./p.config", "--fail-on", "severity=high", "--fail-on", "count=3"]);
+
+        Assert.Null(options.Error);
+        Assert.Equal("high", options.FailOnSeverity);
+        Assert.Equal(3, options.FailOnCount);
+    }
+
+    [Theory]
+    [InlineData("severity=bogus")]   // not a ladder word
+    [InlineData("severity=")]        // missing value
+    [InlineData("count=-1")]         // negative
+    [InlineData("count=abc")]        // not a number
+    [InlineData("count=")]           // missing value
+    [InlineData("warnings=5")]       // unknown key
+    [InlineData("nokey")]            // no '='
+    public void Parse_fail_on_bad_value_is_usage_error(string spec)
+    {
+        var options = CliOptions.Parse(["./p.config", "--fail-on", spec]);
+
+        Assert.NotNull(options.Error);
+        Assert.Contains("--fail-on", options.Error);
+    }
 }

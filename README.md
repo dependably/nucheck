@@ -28,7 +28,13 @@ correctly handles NuGet's 4-part versions (e.g. `1.8.3.1`) and interval ranges
 - **Output formats**: `human` (default), `table`, `json`. `--format json` emits the shared
   Dependably finding schema v1 envelope (see [JSON output](#json-output)) so any suite tool's
   JSON parses the same way.
-- **Severity filtering**: `--severity critical|high|moderate|low`.
+- **Severity filtering**: `--severity critical|high|moderate|low` — a DISPLAY filter that
+  narrows what is printed. It is distinct from the CI gate (`--fail-on`) and never changes
+  the exit code.
+- **Unified CI gate**: `--fail-on <key>=<value>` (repeatable) — the one suite-wide gate
+  mechanism. `severity=<level>` fails only on findings at-or-above a level (relax/raise the
+  gate); `count=<N>` fails when the vulnerability count exceeds N. See
+  [CI gate](#ci-gate--fail-on).
 - **Source-trust policy**: flags any configured NuGet package source whose host is not
   public (`api.nuget.org` / `nuget.org`) and not allowlisted in `.dependably-check`.
 - **Unused-package check (advisory)**: heuristically detects direct `<PackageReference>`
@@ -117,6 +123,7 @@ Options:
   --format <type>            Output format: human, table, json (default: human)
   --severity <level>         Filter by severity: critical, high, moderate, low
   --config <path>            Path to a .dependably-check config file (otherwise discovered)
+  --fail-on <key>=<value>    CI gate (repeatable): severity=<level> or count=<N>
   --rest                     Use the GitHub REST API instead of GraphQL (github source)
   --verbose, -v              Write progress to stderr
   --help, -h                 Show help
@@ -258,13 +265,42 @@ Notes:
   `info`). For a vulnerability, `ruleId` is the GHSA id when available (else the CVE);
   `location` is `null` because package findings are not file-scoped.
 
+### CI gate (`--fail-on`)
+
+`--fail-on <key>=<value>` is the single, suite-wide CI gate. It is **repeatable**, and the
+process exits `1` if **any** rule trips:
+
+| Rule | Trips when |
+| ---- | ---------- |
+| `severity=<critical\|high\|moderate\|low\|info>` | a finding's severity is **at-or-above** the level on the suite ladder. A relaxed level (e.g. `severity=high`) ignores moderate/low vulnerabilities **for gating** — they still appear in the output. A policy finding (untrusted source) carries `error` severity, which maps to `high`. |
+| `count=<N>` | the total **vulnerability** count exceeds `N` (e.g. `count=0` fails on any vulnerability). |
+
+With **no** `--fail-on`, the default holds: **any** vulnerability or policy error fails the
+build (exit `1`). Supplying `--fail-on` **replaces** that default with the union of the
+rules you give.
+
+`--fail-on` is the gate; `--severity` is only a display filter. They are independent — a
+`--severity` filter narrows what is printed but never changes the exit code, and the JSON
+`summary.exitCode` always equals the real process exit code.
+
+```bash
+# Only fail the build on high/critical vulnerabilities (ignore moderate/low for gating)
+nuget-check ./packages.lock.json --fail-on severity=high
+
+# Tolerate up to 3 known vulnerabilities before failing
+nuget-check ./packages.lock.json --fail-on count=3
+
+# Combine: fail on any critical, OR on more than 5 findings total
+nuget-check ./packages.lock.json --fail-on severity=critical --fail-on count=5
+```
+
 Exit codes wire straight into a CI gate:
 
 | Code | Meaning |
 | ---- | ------- |
-| `0`  | Clean — no vulnerabilities and no policy errors (also `--help` / `--version`). |
-| `1`  | One or more vulnerabilities **or** policy errors found (block the build). |
-| `2`  | Usage error (bad/unknown flag, missing manifest argument) or operational error (unreadable/unsupported manifest, scan failure, internal exception). |
+| `0`  | Clean — no gating findings (also `--help` / `--version`). |
+| `1`  | A gating finding (a vulnerability or policy error by default, or whatever `--fail-on` selects) — block the build. |
+| `2`  | Usage error (bad/unknown flag, bad `--fail-on` value, missing manifest argument) or operational error (unreadable/unsupported manifest, scan failure, internal exception). |
 
 ## Building from source
 

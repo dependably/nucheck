@@ -104,6 +104,74 @@ public class AuditResultTests
         Assert.Single(filtered.PolicyFindings);
     }
 
+    // ---- the unified --fail-on gate -------------------------------------------------
+
+    private static AuditResult WithVuln(string severity) => new()
+    {
+        TotalPackages = 1,
+        Vulnerabilities =
+        [
+            new PackageVulnerability("Pkg", "1.0.0", [new Advisory("x", severity, ">= 1.0", [])]),
+        ],
+    };
+
+    [Fact]
+    public void GateTrips_with_no_rules_falls_back_to_default_any_failure()
+    {
+        // No --fail-on: a vulnerability trips, a clean result does not.
+        Assert.True(WithVuln("low").GateTrips(null, null));
+        Assert.False(new AuditResult { TotalPackages = 1 }.GateTrips(null, null));
+    }
+
+    [Fact]
+    public void GateTrips_severity_relaxes_below_the_level()
+    {
+        // --fail-on severity=high ignores a moderate-only vuln for gating (exit 0) ...
+        Assert.False(WithVuln("moderate").GateTrips("high", null));
+        // ... but trips on a high one (exit 1).
+        Assert.True(WithVuln("high").GateTrips("high", null));
+        // ... and on anything above it.
+        Assert.True(WithVuln("critical").GateTrips("high", null));
+    }
+
+    [Fact]
+    public void GateTrips_severity_normalises_raw_finding_words()
+    {
+        // A raw "medium" finding ranks as moderate, so severity=high does not trip on it.
+        Assert.False(WithVuln("medium").GateTrips("high", null));
+    }
+
+    [Fact]
+    public void GateTrips_severity_considers_policy_findings()
+    {
+        // A policy finding's "error" severity maps to high, so severity=high still gates it.
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities = [],
+            PolicyFindings = [new SourceFinding("h", "s", "m")],
+        };
+
+        Assert.True(result.GateTrips("high", null));
+        Assert.False(result.GateTrips("critical", null));
+    }
+
+    [Theory]
+    [InlineData(0, true)]   // 2 advisories > 0  -> trip
+    [InlineData(2, false)]  // 2 advisories > 2  -> no trip
+    [InlineData(1, true)]   // 2 advisories > 1  -> trip
+    public void GateTrips_count_trips_when_vulnerability_count_exceeds_n(int n, bool expected)
+    {
+        Assert.Equal(expected, Build().GateTrips(null, n));
+    }
+
+    [Fact]
+    public void GateTrips_rules_are_ored_together()
+    {
+        // A moderate-only vuln: severity=high alone would not trip, but count=0 does.
+        Assert.True(WithVuln("moderate").GateTrips("high", 0));
+    }
+
     [Fact]
     public void FilterBySeverity_preserves_unused_packages()
     {

@@ -30,4 +30,35 @@ public static class Severity
         "warning" => Low,
         _ => Info,            // "unknown", null, blank, or anything unrecognised
     };
+
+    /// <summary>
+    /// Numeric rank for at-or-above comparisons (the CI gate). Higher = more severe:
+    /// <c>critical</c>=5, <c>high</c>=4, <c>moderate</c>=3, <c>low</c>=2, <c>info</c>=1.
+    /// Expects an already-normalised ladder word; anything else ranks as <c>info</c>.
+    /// </summary>
+    public static int Rank(string normalized) => normalized switch
+    {
+        Critical => 5,
+        High => 4,
+        Moderate => 3,
+        Low => 2,
+        _ => 1,               // info
+    };
+
+    /// <summary>
+    /// Parse a gate level for <c>--fail-on severity=&lt;level&gt;</c>. Accepts the five
+    /// ladder words (plus <c>medium</c> as an alias for <c>moderate</c>) and returns the
+    /// canonical word; returns <c>null</c> for anything else so the caller can raise a
+    /// usage error. Unlike <see cref="Normalize"/>, this does NOT swallow a typo into
+    /// <c>info</c> — an invalid gate level must be rejected, not silently accepted.
+    /// </summary>
+    public static string? ParseLevel(string? raw) => raw?.Trim().ToLowerInvariant() switch
+    {
+        "critical" => Critical,
+        "high" => High,
+        "moderate" or "medium" => Moderate,
+        "low" => Low,
+        "info" => Info,
+        _ => null,
+    };
 }

@@ -7,10 +7,10 @@ namespace NuGetCheck.Output;
 /// </summary>
 public static class FormatterFactory
 {
-    public static IResultFormatter Get(string? format, string toolVersion, string target) =>
+    public static IResultFormatter Get(string? format, string toolVersion, string target, int? exitCode = null) =>
         format?.ToLowerInvariant() switch
         {
-            "json" => new JsonResultFormatter(toolVersion, target),
+            "json" => new JsonResultFormatter(toolVersion, target, exitCode),
             "table" => new TableResultFormatter(),
             _ => new SummaryResultFormatter(),
         };
