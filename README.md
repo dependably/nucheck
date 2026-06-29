@@ -3,8 +3,9 @@
 A native **.NET global tool** that audits NuGet dependencies for known
 vulnerabilities — like `npm audit`, but for the .NET ecosystem.
 
-`nuget-check` reads your installed packages (`packages.config` or
-`packages.lock.json`), queries the [GitHub Advisory Database](https://github.com/advisories)
+`nuget-check` reads your installed packages (`packages.config`, `packages.lock.json`,
+or a `.csproj` / `Directory.Packages.props` using `<PackageReference>` / Central Package
+Management), queries the [GitHub Advisory Database](https://github.com/advisories)
 for the **NuGet** ecosystem, and reports any package whose installed version falls
 within a known vulnerable range.
 
@@ -17,7 +18,13 @@ correctly handles NuGet's 4-part versions (e.g. `1.8.3.1`) and interval ranges
 - **Native .NET** — installs and runs as a `dotnet tool`, no Node required.
 - **Correct version matching** via `NuGet.Versioning` (4-part versions, intervals).
 - **Authoritative data** from the GitHub Advisory Database (GraphQL by default, REST via `--rest`).
-- **Manifest support**: `packages.config` (XML) and `packages.lock.json`.
+- **Manifest support**: `packages.config` (XML), `packages.lock.json`, and `<Project>`-rooted
+  `.csproj` / `.props` carrying `<PackageReference>` / `<PackageVersion>` (Central Package
+  Management, including `Directory.Packages.props`). The `.csproj` / `.props` reader is a
+  static parse — no MSBuild evaluation (properties, `Condition`s, imports, SDK-implicit
+  packages are not expanded) — and version ranges / floating versions are audited at their
+  declared **lower bound**, not the version a restore would resolve. For exact resolved
+  versions, point the tool at a `packages.lock.json`.
 - **Output formats**: `summary` (default), `table`, `json`.
 - **Severity filtering**: `--severity critical|high|moderate|low`.
 - **Source-trust policy**: flags any configured NuGet package source whose host is not
@@ -87,7 +94,12 @@ nuget-check ./packages.config
 nuget-check <path-to-packages-file> [options]
 
 Arguments:
-  <path-to-packages-file>    Path to packages.config or packages.lock.json
+  <path-to-packages-file>    Path to packages.config, packages.lock.json, or a
+                             .csproj / Directory.Packages.props (PackageReference /
+                             Central Package Management). .csproj / .props are parsed
+                             statically (no MSBuild evaluation); version ranges &
+                             floating versions are audited at their declared LOWER
+                             BOUND. For exact resolved versions, use a packages.lock.json.
 
 Options:
   --source <name>            Advisory source: github (default), osv

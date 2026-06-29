@@ -5,6 +5,7 @@ namespace NuGetCheck.Tests;
 public class PackageFileReaderTests : IDisposable
 {
     private readonly List<string> _tempFiles = [];
+    private readonly List<string> _tempDirs = [];
 
     [Fact]
     public void Read_parses_packages_config_including_four_part_versions()
@@ -92,11 +93,15 @@ public class PackageFileReaderTests : IDisposable
         Assert.Equal("Newtonsoft.Json", package.Id);
     }
 
+    // Wave 2 change: Central Package Management and bare <PackageReference> are now
+    // SUPPORTED. The two tests below previously asserted these formats THREW
+    // "Unsupported manifest" (Wave 1, fail-closed). They are now positive tests proving
+    // the formats parse.
     [Fact]
-    public void Read_fails_closed_on_directory_packages_props()
+    public void Read_parses_directory_packages_props_as_central_versions()
     {
-        // Central Package Management file: a <Project> root, NOT a manifest we parse.
-        // This must error rather than silently report "0 packages / all secure".
+        // Central Package Management file: a <Project> root whose <PackageVersion>
+        // entries ARE the package set to audit.
         var path = WriteTemp(".props", """
 <?xml version="1.0" encoding="utf-8"?>
 <Project>
@@ -106,14 +111,17 @@ public class PackageFileReaderTests : IDisposable
 </Project>
 """);
 
-        var ex = Assert.Throws<InvalidDataException>(() => PackageFileReader.Read(path));
-        Assert.Contains("Unsupported manifest", ex.Message);
+        var packages = PackageFileReader.Read(path);
+
+        var package = Assert.Single(packages);
+        Assert.Equal("Newtonsoft.Json", package.Id);
+        Assert.Equal("11.0.2", package.Version.ToString());
     }
 
     [Fact]
-    public void Read_fails_closed_on_csproj_packagereference()
+    public void Read_parses_csproj_packagereference()
     {
-        // A <Project>-rooted .csproj with bare <PackageReference> is not yet supported.
+        // A <Project>-rooted .csproj with a bare <PackageReference> is now audited.
         var path = WriteTemp(".csproj", """
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Microsoft.NET.Sdk">
@@ -123,8 +131,11 @@ public class PackageFileReaderTests : IDisposable
 </Project>
 """);
 
-        var ex = Assert.Throws<InvalidDataException>(() => PackageFileReader.Read(path));
-        Assert.Contains("Unsupported manifest", ex.Message);
+        var packages = PackageFileReader.Read(path);
+
+        var package = Assert.Single(packages);
+        Assert.Equal("Newtonsoft.Json", package.Id);
+        Assert.Equal("11.0.2", package.Version.ToString());
     }
 
     [Fact]
@@ -163,12 +174,169 @@ public class PackageFileReaderTests : IDisposable
         Assert.Empty(packages);
     }
 
+    // --- Wave 2: <PackageReference> + Central Package Management (.csproj / .props) ---
+
+    [Fact]
+    public void Read_parses_packagereference_version_attribute()
+    {
+        var path = WriteTemp(".csproj", """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="X" Version="1.2.3" />
+  </ItemGroup>
+</Project>
+""");
+
+        var package = Assert.Single(PackageFileReader.Read(path));
+        Assert.Equal("X", package.Id);
+        Assert.Equal("1.2.3", package.Version.ToString());
+    }
+
+    [Fact]
+    public void Read_parses_packagereference_version_child_element()
+    {
+        // The <Version> child-element form instead of the attribute.
+        var path = WriteTemp(".csproj", """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="X">
+      <Version>1.2.3</Version>
+    </PackageReference>
+  </ItemGroup>
+</Project>
+""");
+
+        var package = Assert.Single(PackageFileReader.Read(path));
+        Assert.Equal("X", package.Id);
+        Assert.Equal("1.2.3", package.Version.ToString());
+    }
+
+    [Fact]
+    public void Read_resolves_cpm_version_from_directory_packages_props()
+    {
+        // Central Package Management: csproj has a versionless <PackageReference>; the
+        // version comes from a Directory.Packages.props beside it (walked up the tree).
+        var dir = NewTempDir();
+        File.WriteAllText(Path.Combine(dir, "Directory.Packages.props"), """
+<Project>
+  <ItemGroup>
+    <PackageVersion Include="X" Version="1.2.3" />
+  </ItemGroup>
+</Project>
+""");
+        var csproj = Path.Combine(dir, "foo.csproj");
+        File.WriteAllText(csproj, """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="X" />
+  </ItemGroup>
+</Project>
+""");
+
+        var package = Assert.Single(PackageFileReader.Read(csproj));
+        Assert.Equal("X", package.Id);
+        Assert.Equal("1.2.3", package.Version.ToString());
+    }
+
+    [Fact]
+    public void Read_directory_packages_props_directly_returns_its_version_set()
+    {
+        var path = WriteTemp(".props", """
+<Project>
+  <ItemGroup>
+    <PackageVersion Include="X" Version="1.0.0" />
+    <PackageVersion Include="Y" Version="2.0.0" />
+  </ItemGroup>
+</Project>
+""");
+
+        var packages = PackageFileReader.Read(path);
+
+        Assert.Equal(2, packages.Count);
+        Assert.Contains(packages, p => p.Id == "X" && p.Version.ToString() == "1.0.0");
+        Assert.Contains(packages, p => p.Id == "Y" && p.Version.ToString() == "2.0.0");
+    }
+
+    [Fact]
+    public void Read_audits_version_range_at_lower_bound()
+    {
+        // A version range is audited at its declared LOWER BOUND (conservative).
+        var path = WriteTemp(".csproj", """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="X" Version="[1.0.0,2.0.0)" />
+  </ItemGroup>
+</Project>
+""");
+
+        var package = Assert.Single(PackageFileReader.Read(path));
+        Assert.Equal("X", package.Id);
+        Assert.Equal("1.0.0", package.Version.ToString());
+    }
+
+    [Fact]
+    public void Read_project_with_no_packagereferences_returns_empty_not_error()
+    {
+        // A clean <Project> with zero packages is an empty audit, NOT an error.
+        var path = WriteTemp(".csproj", """
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+</Project>
+""");
+
+        Assert.Empty(PackageFileReader.Read(path));
+    }
+
+    [Fact]
+    public void Read_skips_unresolvable_version_but_returns_siblings()
+    {
+        // A reference whose version cannot be determined is skipped; siblings remain.
+        var path = WriteTemp(".csproj", """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="Good" Version="1.2.3" />
+    <PackageReference Include="Unversioned" />
+  </ItemGroup>
+</Project>
+""");
+
+        var package = Assert.Single(PackageFileReader.Read(path));
+        Assert.Equal("Good", package.Id);
+        Assert.Equal("1.2.3", package.Version.ToString());
+    }
+
+    [Fact]
+    public void Read_uses_version_override_attribute()
+    {
+        var path = WriteTemp(".csproj", """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="X" VersionOverride="3.1.0" />
+  </ItemGroup>
+</Project>
+""");
+
+        var package = Assert.Single(PackageFileReader.Read(path));
+        Assert.Equal("X", package.Id);
+        Assert.Equal("3.1.0", package.Version.ToString());
+    }
+
     private string WriteTemp(string extension, string content)
     {
         var path = Path.Combine(Path.GetTempPath(), $"nugetcheck-{Guid.NewGuid():N}{extension}");
         File.WriteAllText(path, content);
         _tempFiles.Add(path);
         return path;
+    }
+
+    private string NewTempDir()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"nugetcheck-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        _tempDirs.Add(dir);
+        return dir;
     }
 
     public void Dispose()
@@ -179,6 +347,14 @@ public class PackageFileReaderTests : IDisposable
             if (File.Exists(file))
             {
                 File.Delete(file);
+            }
+        }
+
+        foreach (var dir in _tempDirs)
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
             }
         }
     }

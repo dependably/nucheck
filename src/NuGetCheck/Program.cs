@@ -124,7 +124,13 @@ Usage:
   nuget-check <path-to-packages-file> [options]
 
 Arguments:
-  <path-to-packages-file>    Path to packages.config or packages.lock.json
+  <path-to-packages-file>    Path to packages.config, packages.lock.json, or a
+                             .csproj / Directory.Packages.props
+                             (PackageReference / Central Package Management).
+                             Note: .csproj / .props are parsed statically (no MSBuild
+                             evaluation); version ranges & floating versions are audited
+                             at their declared LOWER BOUND, not the restored version. For
+                             exact resolved versions, point at a packages.lock.json.
 
 Options:
   --source <name>            Advisory source: github (default), osv
