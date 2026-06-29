@@ -227,8 +227,7 @@ sbom-publish:
       fi
       BASE="${dependencyTrack_url%/}"
       PROJECT="Dependably.NuGetCheck"
-      VERSION=$(sed -n 's/.*<Version>\([^<]*\)<\/Version>.*/\1/p' src/NuGetCheck/NuGetCheck.csproj | head -n1)
-      [ -n "$VERSION" ] || VERSION=latest
+      VERSION=latest
       echo "Publishing SBOM ($(wc -c < sbom.json) bytes) for $PROJECT@$VERSION to $BASE"
       status=$(curl -sS -o /tmp/bom.out -w '%{http_code}' \
         -X POST "$BASE/api/v1/bom" \
