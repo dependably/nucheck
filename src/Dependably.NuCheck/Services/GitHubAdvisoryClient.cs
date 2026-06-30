@@ -282,15 +282,10 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
             return null;
         }
 
-        foreach (var identifier in ids.EnumerateArray())
-        {
-            if (GetString(identifier, "type").Equals("CVE", StringComparison.OrdinalIgnoreCase))
-            {
-                return NullIfEmpty(GetString(identifier, "value"));
-            }
-        }
-
-        return null;
+        return ids.EnumerateArray()
+            .Where(identifier => GetString(identifier, "type").Equals("CVE", StringComparison.OrdinalIgnoreCase))
+            .Select(identifier => NullIfEmpty(GetString(identifier, "value")))
+            .FirstOrDefault();
     }
 
     private static string? NullIfEmpty(string value) => string.IsNullOrEmpty(value) ? null : value;

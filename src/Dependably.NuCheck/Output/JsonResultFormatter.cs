@@ -37,75 +37,9 @@ public sealed class JsonResultFormatter : IResultFormatter
     public string Format(AuditResult result)
     {
         var findings = new List<(string Severity, object Finding)>();
-
-        // Vulnerability findings — one per advisory, advisory data under `extra`.
-        foreach (var package in result.Vulnerabilities)
-        {
-            foreach (var advisory in package.Advisories)
-            {
-                var severity = Severity.Normalize(advisory.Severity);
-                findings.Add((severity, new
-                {
-                    severity,
-                    // ruleId = the advisory id (GHSA) when available, else the CVE, else a stable id.
-                    ruleId = advisory.AdvisoryId ?? advisory.Cve ?? "nuget-vulnerability",
-                    category = "vulnerability",
-                    message = advisory.Summary,           // the advisory title
-                    location = (object?)null,             // package vulns are not file-scoped
-                    remediation = string.IsNullOrEmpty(advisory.FixedVersion)
-                        ? null
-                        : $"upgrade to {advisory.FixedVersion}",
-                    extra = new
-                    {
-                        package = package.Id,
-                        installedVersion = package.Version,
-                        fixedVersion = advisory.FixedVersion,
-                        advisoryId = advisory.AdvisoryId,
-                        cve = advisory.Cve,
-                        vulnerableRange = advisory.VulnerableVersionRange,
-                        references = advisory.References,
-                    },
-                }));
-            }
-        }
-
-        // Source-trust POLICY findings (untrusted package source).
-        foreach (var finding in result.PolicyFindings)
-        {
-            var severity = Severity.Normalize(finding.Severity);
-            findings.Add((severity, new
-            {
-                severity,
-                ruleId = "untrusted-source",
-                category = "policy",
-                message = finding.Message,
-                location = (object?)null,
-                remediation = (string?)null,
-                extra = new
-                {
-                    host = finding.Host,
-                    source = finding.Source,
-                },
-            }));
-        }
-
-        // Unused-package findings (heuristic, advisory only — always `info`).
-        foreach (var unused in result.UnusedPackages)
-        {
-            findings.Add((Severity.Info, new
-            {
-                severity = Severity.Info,
-                ruleId = "unused-package",
-                category = "unused",
-                message = unused.Message,
-                location = (object?)null,
-                remediation = (string?)null,
-                extra = new
-                {
-                    package = unused.Id,
-                },
-            }));
-        }
+        findings.AddRange(VulnerabilityFindings(result));
+        findings.AddRange(PolicyFindings(result));
+        findings.AddRange(UnusedFindings(result));
 
         // The JSON is only emitted on the success path. Program passes the gate's real exit
         // code; when absent we fall back to the default rule (1 on any vuln or policy error).
@@ -135,5 +69,83 @@ public sealed class JsonResultFormatter : IResultFormatter
         };
 
         return JsonSerializer.Serialize(envelope, Options);
+    }
+
+    // Vulnerability findings — one per advisory, advisory data under `extra`.
+    private static IEnumerable<(string Severity, object Finding)> VulnerabilityFindings(AuditResult result)
+    {
+        foreach (var package in result.Vulnerabilities)
+        {
+            foreach (var advisory in package.Advisories)
+            {
+                var severity = Severity.Normalize(advisory.Severity);
+                yield return (severity, new
+                {
+                    severity,
+                    // ruleId = the advisory id (GHSA) when available, else the CVE, else a stable id.
+                    ruleId = advisory.AdvisoryId ?? advisory.Cve ?? "nuget-vulnerability",
+                    category = "vulnerability",
+                    message = advisory.Summary,           // the advisory title
+                    location = (object?)null,             // package vulns are not file-scoped
+                    remediation = string.IsNullOrEmpty(advisory.FixedVersion)
+                        ? null
+                        : $"upgrade to {advisory.FixedVersion}",
+                    extra = new
+                    {
+                        package = package.Id,
+                        installedVersion = package.Version,
+                        fixedVersion = advisory.FixedVersion,
+                        advisoryId = advisory.AdvisoryId,
+                        cve = advisory.Cve,
+                        vulnerableRange = advisory.VulnerableVersionRange,
+                        references = advisory.References,
+                    },
+                });
+            }
+        }
+    }
+
+    // Source-trust POLICY findings (untrusted package source).
+    private static IEnumerable<(string Severity, object Finding)> PolicyFindings(AuditResult result)
+    {
+        foreach (var finding in result.PolicyFindings)
+        {
+            var severity = Severity.Normalize(finding.Severity);
+            yield return (severity, new
+            {
+                severity,
+                ruleId = "untrusted-source",
+                category = "policy",
+                message = finding.Message,
+                location = (object?)null,
+                remediation = (string?)null,
+                extra = new
+                {
+                    host = finding.Host,
+                    source = finding.Source,
+                },
+            });
+        }
+    }
+
+    // Unused-package findings (heuristic, advisory only — always `info`).
+    private static IEnumerable<(string Severity, object Finding)> UnusedFindings(AuditResult result)
+    {
+        foreach (var unused in result.UnusedPackages)
+        {
+            yield return (Severity.Info, new
+            {
+                severity = Severity.Info,
+                ruleId = "unused-package",
+                category = "unused",
+                message = unused.Message,
+                location = (object?)null,
+                remediation = (string?)null,
+                extra = new
+                {
+                    package = unused.Id,
+                },
+            });
+        }
     }
 }

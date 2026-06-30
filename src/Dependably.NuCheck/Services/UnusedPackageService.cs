@@ -25,23 +25,33 @@ namespace Dependably.NuCheck.Services;
 /// Both are in addition to — not a replacement for — the user-supplied
 /// <c>ignoreUnusedPackages</c> suppression list.
 /// </remarks>
-public static class UnusedPackageService
+public static partial class UnusedPackageService
 {
+    /// <summary>
+    /// Caps regex matching time so a pathological input file can never hang the scan
+    /// (defends against ReDoS — the unused-package check must never disrupt the audit).
+    /// </summary>
+    private const int RegexTimeoutMs = 1000;
+
     /// <summary>
     /// Matches <c>using</c> (and <c>global using</c> / <c>using static</c>) directives.
     /// Capture group 1 is the namespace identifier.
     /// </summary>
-    private static readonly Regex UsingDirectivePattern = new(
+    [GeneratedRegex(
         @"^\s*(?:global\s+)?using\s+(?:static\s+)?([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*;",
-        RegexOptions.Multiline | RegexOptions.Compiled);
+        RegexOptions.Multiline,
+        RegexTimeoutMs)]
+    private static partial Regex UsingDirectivePattern();
 
     /// <summary>
     /// Matches multi-segment qualified identifiers (e.g. <c>Foo.Bar.Thing</c>) that may
     /// appear as qualified type references in code that does not use a <c>using</c> directive.
     /// </summary>
-    private static readonly Regex QualifiedNamePattern = new(
+    [GeneratedRegex(
         @"\b([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\b",
-        RegexOptions.Compiled);
+        RegexOptions.None,
+        RegexTimeoutMs)]
+    private static partial Regex QualifiedNamePattern();
 
     /// <summary>
     /// Disk-based entry point. Reads <c>*.csproj</c> and <c>Directory.Packages.props</c>
@@ -314,18 +324,10 @@ public static class UnusedPackageService
             return true;
         }
 
-        foreach (var suffix in KnownBuildOrAnalyzerSuffixes)
-        {
-            if (id.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return KnownBuildOrAnalyzerSuffixes.Any(suffix => id.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static IReadOnlySet<string> CollectNamespaceUsages(string scanDirectory)
+    private static HashSet<string> CollectNamespaceUsages(string scanDirectory)
     {
         var usages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -337,23 +339,7 @@ public static class UnusedPackageService
         {
             try
             {
-                var content = File.ReadAllText(file);
-
-                // Primary: explicit `using` directives are the most reliable indicator.
-                foreach (Match m in UsingDirectivePattern.Matches(content))
-                {
-                    var ns = m.Groups[1].Value;
-                    if (!string.IsNullOrWhiteSpace(ns))
-                    {
-                        usages.Add(ns);
-                    }
-                }
-
-                // Secondary: qualified type references for packages used without a `using`.
-                foreach (Match m in QualifiedNamePattern.Matches(content))
-                {
-                    usages.Add(m.Groups[1].Value);
-                }
+                AddUsagesFromContent(File.ReadAllText(file), usages);
             }
             catch
             {
@@ -362,6 +348,29 @@ public static class UnusedPackageService
         }
 
         return usages;
+    }
+
+    /// <summary>
+    /// Extracts namespace usages from one file's text into <paramref name="usages"/>:
+    /// explicit <c>using</c> directives (primary) plus qualified type references (secondary).
+    /// </summary>
+    private static void AddUsagesFromContent(string content, HashSet<string> usages)
+    {
+        // Primary: explicit `using` directives are the most reliable indicator.
+        foreach (Match m in UsingDirectivePattern().Matches(content))
+        {
+            var ns = m.Groups[1].Value;
+            if (!string.IsNullOrWhiteSpace(ns))
+            {
+                usages.Add(ns);
+            }
+        }
+
+        // Secondary: qualified type references for packages used without a `using`.
+        foreach (Match m in QualifiedNamePattern().Matches(content))
+        {
+            usages.Add(m.Groups[1].Value);
+        }
     }
 
     private static bool IsExcludedPath(string path)
