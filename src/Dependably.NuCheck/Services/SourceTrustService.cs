@@ -42,13 +42,9 @@ public static class SourceTrustService
         var packageSources = settings.GetSection("packageSources");
         if (packageSources is not null)
         {
-            foreach (var item in packageSources.Items.OfType<SourceItem>())
-            {
-                if (IsUnderRoot(item.ConfigPath, repoRoot))
-                {
-                    repoSourceNames.Add(item.Key);
-                }
-            }
+            repoSourceNames.UnionWith(packageSources.Items.OfType<SourceItem>()
+                .Where(item => IsUnderRoot(item.ConfigPath, repoRoot))
+                .Select(item => item.Key));
         }
 
         var sources = new PackageSourceProvider(settings)
@@ -56,48 +52,6 @@ public static class SourceTrustService
             .Where(source => repoSourceNames.Contains(source.Name));
 
         return Check(sources, allowedHosts);
-    }
-
-    /// <summary>
-    /// Resolves the repository boundary for <paramref name="startDirectory"/>: the nearest
-    /// ancestor (inclusive) containing a <c>.git</c> file or directory. When none is found,
-    /// the start directory itself is the boundary, so a non-repo path audits only its own
-    /// declared config.
-    /// </summary>
-    private static string FindRepoRoot(string startDirectory)
-    {
-        var directory = new DirectoryInfo(Path.GetFullPath(startDirectory));
-
-        while (directory is not null)
-        {
-            var gitPath = Path.Combine(directory.FullName, ".git");
-            if (Directory.Exists(gitPath) || File.Exists(gitPath))
-            {
-                return directory.FullName;
-            }
-
-            directory = directory.Parent;
-        }
-
-        return Path.GetFullPath(startDirectory);
-    }
-
-    /// <summary>
-    /// True when <paramref name="configPath"/> (a source's origin config file) is located
-    /// at or under <paramref name="root"/>. Null/empty origins (sources with no on-disk
-    /// declaration) are treated as outside the repo.
-    /// </summary>
-    private static bool IsUnderRoot(string? configPath, string root)
-    {
-        if (string.IsNullOrEmpty(configPath))
-        {
-            return false;
-        }
-
-        var relative = Path.GetRelativePath(Path.GetFullPath(root), Path.GetFullPath(configPath));
-        return relative != ".."
-            && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
-            && !Path.IsPathRooted(relative);
     }
 
     /// <summary>
@@ -150,5 +104,47 @@ public static class SourceTrustService
         }
 
         return findings;
+    }
+
+    /// <summary>
+    /// Resolves the repository boundary for <paramref name="startDirectory"/>: the nearest
+    /// ancestor (inclusive) containing a <c>.git</c> file or directory. When none is found,
+    /// the start directory itself is the boundary, so a non-repo path audits only its own
+    /// declared config.
+    /// </summary>
+    private static string FindRepoRoot(string startDirectory)
+    {
+        var directory = new DirectoryInfo(Path.GetFullPath(startDirectory));
+
+        while (directory is not null)
+        {
+            var gitPath = Path.Combine(directory.FullName, ".git");
+            if (Directory.Exists(gitPath) || File.Exists(gitPath))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        return Path.GetFullPath(startDirectory);
+    }
+
+    /// <summary>
+    /// True when <paramref name="configPath"/> (a source's origin config file) is located
+    /// at or under <paramref name="root"/>. Null/empty origins (sources with no on-disk
+    /// declaration) are treated as outside the repo.
+    /// </summary>
+    private static bool IsUnderRoot(string? configPath, string root)
+    {
+        if (string.IsNullOrEmpty(configPath))
+        {
+            return false;
+        }
+
+        var relative = Path.GetRelativePath(Path.GetFullPath(root), Path.GetFullPath(configPath));
+        return relative != ".."
+            && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            && !Path.IsPathRooted(relative);
     }
 }

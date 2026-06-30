@@ -18,33 +18,40 @@ public sealed class TableResultFormatter : IResultFormatter
         builder.AppendLine($"Possibly Unused:        {result.UnusedPackages.Count} (heuristic, advisory only)");
         builder.AppendLine("-------------------");
 
-        if (result.Vulnerabilities.Count == 0)
-        {
-            builder.AppendLine("✓ All packages are secure");
-        }
-        else
-        {
-            var index = 1;
-            foreach (var vulnerability in result.Vulnerabilities)
-            {
-                builder.AppendLine($"{index}. {vulnerability.Id} ({vulnerability.Version})");
-                foreach (var advisory in vulnerability.Advisories)
-                {
-                    builder.AppendLine($"   [{Severity.Normalize(advisory.Severity)}] {advisory.Summary}");
-                    var detail = AdvisoryDetail(advisory);
-                    if (detail.Length > 0)
-                    {
-                        builder.AppendLine($"      {detail}");
-                    }
-                }
-
-                index++;
-            }
-        }
-
+        AppendVulnerabilities(builder, result);
         AppendPolicyFindings(builder, result);
         AppendUnusedPackages(builder, result);
         return builder.ToString();
+    }
+
+    private static void AppendVulnerabilities(StringBuilder builder, AuditResult result)
+    {
+        if (result.Vulnerabilities.Count == 0)
+        {
+            builder.AppendLine("✓ All packages are secure");
+            return;
+        }
+
+        var index = 1;
+        foreach (var vulnerability in result.Vulnerabilities)
+        {
+            builder.AppendLine($"{index}. {vulnerability.Id} ({vulnerability.Version})");
+            AppendAdvisories(builder, vulnerability.Advisories);
+            index++;
+        }
+    }
+
+    private static void AppendAdvisories(StringBuilder builder, IEnumerable<Models.Advisory> advisories)
+    {
+        foreach (var advisory in advisories)
+        {
+            builder.AppendLine($"   [{Severity.Normalize(advisory.Severity)}] {advisory.Summary}");
+            var detail = AdvisoryDetail(advisory);
+            if (detail.Length > 0)
+            {
+                builder.AppendLine($"      {detail}");
+            }
+        }
     }
 
     /// <summary>

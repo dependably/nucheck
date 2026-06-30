@@ -31,19 +31,19 @@ public static class Severity
         _ => Info,            // "unknown", null, blank, or anything unrecognised
     };
 
+    /// <summary>The ladder from least to most severe; an item's 1-based position is its rank.</summary>
+    private static readonly string[] Ladder = [Info, Low, Moderate, High, Critical];
+
     /// <summary>
     /// Numeric rank for at-or-above comparisons (the CI gate). Higher = more severe:
     /// <c>critical</c>=5, <c>high</c>=4, <c>moderate</c>=3, <c>low</c>=2, <c>info</c>=1.
     /// Expects an already-normalised ladder word; anything else ranks as <c>info</c>.
     /// </summary>
-    public static int Rank(string normalized) => normalized switch
+    public static int Rank(string normalized)
     {
-        Critical => 5,
-        High => 4,
-        Moderate => 3,
-        Low => 2,
-        _ => 1,               // info
-    };
+        var index = Array.IndexOf(Ladder, normalized);
+        return index < 0 ? 1 : index + 1;   // unknown ranks as info (1)
+    }
 
     /// <summary>
     /// Parse a gate level for <c>--fail-on severity=&lt;level&gt;</c>. Accepts the five
