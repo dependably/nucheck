@@ -375,13 +375,17 @@ public class PackageFileReaderTests : IDisposable
         Assert.Contains(packages, p => p.Id == "Serilog" && p.Version.ToString() == "4.0.0");
     }
 
-    // ---- #49: duplicate-id resolution (exact version preferred over range lower bound) -----
+    // ---- #49 × #26: duplicate-id with a range + an exact version audits BOTH -----
+    // Pre-#26 these collapsed to the exact version (range's lower bound dropped). #26
+    // deliberately audits every DISTINCT resolved version so a vulnerable lower bound is
+    // never masked by an exact pin — the range "[1.0.0,)" and the exact "1.2.3" resolve to
+    // different versions (1.0.0 vs 1.2.3), so both are now audited. (An exact and a range
+    // that resolve to the SAME version still collapse — see
+    // Read_collapses_exact_and_range_that_resolve_to_the_same_version.)
 
     [Fact]
-    public void Read_prefers_exact_version_over_range_lower_bound_when_range_declared_first()
+    public void Read_audits_both_range_lower_bound_and_exact_when_range_declared_first()
     {
-        // Range "[1.0.0,)" comes first; exact "1.2.3" follows.
-        // BuildPackageRefs must keep 1.2.3 (exact wins regardless of order).
         var path = WriteTemp(".csproj", """
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
@@ -391,15 +395,16 @@ public class PackageFileReaderTests : IDisposable
 </Project>
 """);
 
-        var package = Assert.Single(PackageFileReader.Read(path));
-        Assert.Equal("1.2.3", package.Version.ToString());
+        var packages = PackageFileReader.Read(path);
+
+        Assert.Equal(2, packages.Count);
+        Assert.Contains(packages, p => p.Version.ToString() == "1.0.0");
+        Assert.Contains(packages, p => p.Version.ToString() == "1.2.3");
     }
 
     [Fact]
-    public void Read_prefers_exact_version_over_range_lower_bound_when_exact_declared_first()
+    public void Read_audits_both_range_lower_bound_and_exact_when_exact_declared_first()
     {
-        // Exact "1.2.3" comes first; range "[1.0.0,)" follows.
-        // BuildPackageRefs must still return 1.2.3 (exact wins regardless of order).
         var path = WriteTemp(".csproj", """
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
@@ -409,19 +414,24 @@ public class PackageFileReaderTests : IDisposable
 </Project>
 """);
 
-        var package = Assert.Single(PackageFileReader.Read(path));
-        Assert.Equal("1.2.3", package.Version.ToString());
+        var packages = PackageFileReader.Read(path);
+
+        Assert.Equal(2, packages.Count);
+        Assert.Contains(packages, p => p.Version.ToString() == "1.0.0");
+        Assert.Contains(packages, p => p.Version.ToString() == "1.2.3");
     }
 
-    // ---- #51: file-local <PackageVersion> overriding Directory.Packages.props -----
+    // ---- #51 × #26: file-local <PackageVersion> is UNIONED with Directory.Packages.props -----
 
     [Fact]
-    public void Read_file_local_package_version_wins_over_central_props()
+    public void Read_audits_both_file_local_and_central_package_version()
     {
-        // Directory.Packages.props declares X at 1.0.0.
-        // The csproj declares a local <PackageVersion Include="X" Version="2.0.0" />
-        // and a versionless <PackageReference Include="X" />.
-        // The local PackageVersion must win → resolved version is 2.0.0.
+        // Directory.Packages.props declares X at 1.0.0; the csproj declares a file-local
+        // <PackageVersion Include="X" Version="2.0.0" /> plus a versionless
+        // <PackageReference Include="X" />. Pre-#26 the file-local declaration OVERRODE the
+        // central one (single 2.0.0). #26 does not evaluate MSBuild override precedence, so
+        // it audits BOTH declared versions — a vulnerable central pin (1.0.0) must not be
+        // silently masked by a file-local override. Auditing the superset is fail-safe.
         var dir = NewTempDir();
         File.WriteAllText(Path.Combine(dir, "Directory.Packages.props"), """
 <Project>
@@ -440,9 +450,11 @@ public class PackageFileReaderTests : IDisposable
 </Project>
 """);
 
-        var package = Assert.Single(PackageFileReader.Read(csproj));
-        Assert.Equal("X", package.Id);
-        Assert.Equal("2.0.0", package.Version.ToString());
+        var packages = PackageFileReader.Read(csproj);
+
+        Assert.Equal(2, packages.Count);
+        Assert.Contains(packages, p => p.Id == "X" && p.Version.ToString() == "1.0.0");
+        Assert.Contains(packages, p => p.Id == "X" && p.Version.ToString() == "2.0.0");
     }
 
     [Fact]
@@ -471,6 +483,224 @@ public class PackageFileReaderTests : IDisposable
         var package = Assert.Single(PackageFileReader.Read(csproj));
         Assert.Equal("X", package.Id);
         Assert.Equal("3.0.0", package.Version.ToString());
+    }
+
+    [Fact]
+    public void Read_audits_every_distinct_version_of_a_duplicated_packagereference()
+    {
+        // The same package pinned to two different exact versions for two TargetFrameworks
+        // (Condition-gated, common multi-TFM pattern). Conditions are deliberately NOT
+        // evaluated, so BOTH declared versions must be audited — a vulnerable legacy pin
+        // must not be masked by a clean newer one.
+        var path = WriteTemp(".csproj", """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup Condition="'$(TargetFramework)'=='net48'">
+    <PackageReference Include="X" Version="1.0.0" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)'=='net8.0'">
+    <PackageReference Include="X" Version="2.0.0" />
+  </ItemGroup>
+</Project>
+""");
+
+        var packages = PackageFileReader.Read(path);
+
+        Assert.Equal(2, packages.Count);
+        Assert.Contains(packages, p => p.Id == "X" && p.Version.ToString() == "1.0.0");
+        Assert.Contains(packages, p => p.Id == "X" && p.Version.ToString() == "2.0.0");
+    }
+
+    [Fact]
+    public void Read_audits_every_distinct_version_of_a_duplicated_packageversion()
+    {
+        // Central Package Management with the same id declared at two versions (per-TFM
+        // Condition). Both distinct versions must survive — no last-wins collapse.
+        var path = WriteTemp(".props", """
+<Project>
+  <ItemGroup Condition="'$(TargetFramework)'=='net48'">
+    <PackageVersion Include="X" Version="1.0.0" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)'=='net8.0'">
+    <PackageVersion Include="X" Version="2.0.0" />
+  </ItemGroup>
+</Project>
+""");
+
+        var packages = PackageFileReader.Read(path);
+
+        Assert.Equal(2, packages.Count);
+        Assert.Contains(packages, p => p.Id == "X" && p.Version.ToString() == "1.0.0");
+        Assert.Contains(packages, p => p.Id == "X" && p.Version.ToString() == "2.0.0");
+    }
+
+    [Fact]
+    public void Read_collapses_exact_and_range_that_resolve_to_the_same_version()
+    {
+        // An exact "1.0.0" and a range "[1.0.0,2.0.0)" both resolve to 1.0.0 — the same
+        // audited version. They collapse to a single entry (exact preferred over range).
+        var path = WriteTemp(".csproj", """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="X" Version="[1.0.0,2.0.0)" />
+    <PackageReference Include="X" Version="1.0.0" />
+  </ItemGroup>
+</Project>
+""");
+
+        var package = Assert.Single(PackageFileReader.Read(path));
+        Assert.Equal("X", package.Id);
+        Assert.Equal("1.0.0", package.Version.ToString());
+    }
+
+    // --- Ticket #36: floating-version lower-bound behaviour (documented at PackageFileReader.cs:224-227) ---
+
+    [Fact]
+    public void Read_audits_floating_major_wildcard_at_lower_bound()
+    {
+        // "6.*" is a floating version. TryResolveVersion falls through to VersionRange and
+        // resolves to MinVersion. NuGet.Versioning places the wildcard at the minor position,
+        // so MinVersion = 6.0 (two-part; no patch component). The documented lower-bound
+        // contract must hold: the audit uses 6.0, not some higher resolved version.
+        var path = WriteTemp(".csproj", """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="X" Version="6.*" />
+  </ItemGroup>
+</Project>
+""");
+
+        var package = Assert.Single(PackageFileReader.Read(path));
+        Assert.Equal("X", package.Id);
+        Assert.Equal("6.0", package.Version.ToString());
+    }
+
+    [Fact]
+    public void Read_audits_floating_minor_wildcard_at_lower_bound()
+    {
+        // "1.2.*" is a floating version; MinVersion = 1.2.0.
+        var path = WriteTemp(".csproj", """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="X" Version="1.2.*" />
+  </ItemGroup>
+</Project>
+""");
+
+        var package = Assert.Single(PackageFileReader.Read(path));
+        Assert.Equal("X", package.Id);
+        Assert.Equal("1.2.0", package.Version.ToString());
+    }
+
+    [Fact]
+    public void Read_skips_range_with_no_lower_bound()
+    {
+        // "(,2.0]" has no lower bound (MinVersion is null). TryResolveVersion returns false
+        // and the package is skipped — it cannot be audited at a conservative version.
+        // Siblings with resolvable versions are still returned.
+        var path = WriteTemp(".csproj", """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="NoLower" Version="(,2.0]" />
+    <PackageReference Include="Good" Version="3.0.0" />
+  </ItemGroup>
+</Project>
+""");
+
+        var packages = PackageFileReader.Read(path);
+
+        var package = Assert.Single(packages);
+        Assert.Equal("Good", package.Id);
+        Assert.Equal("3.0.0", package.Version.ToString());
+    }
+
+    [Fact]
+    public void Read_resolves_versionless_reference_against_every_central_version_of_the_id()
+    {
+        // Central Package Management, cross-file: a version-LESS <PackageReference Include="X" />
+        // in the csproj, with an up-tree Directory.Packages.props declaring X TWICE at different
+        // versions (per-TargetFramework Condition). Conditions are not evaluated, so the reference
+        // can statically resolve to EITHER central version — both must be audited. A last-wins
+        // collapse here would silently mask the vulnerable legacy pin (1.0.0).
+        var dir = NewTempDir();
+        File.WriteAllText(Path.Combine(dir, "Directory.Packages.props"), """
+<Project>
+  <ItemGroup Condition="'$(TargetFramework)'=='net48'">
+    <PackageVersion Include="X" Version="1.0.0" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)'=='net8.0'">
+    <PackageVersion Include="X" Version="2.0.0" />
+  </ItemGroup>
+</Project>
+""");
+        var csproj = Path.Combine(dir, "foo.csproj");
+        File.WriteAllText(csproj, """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="X" />
+  </ItemGroup>
+</Project>
+""");
+
+        var packages = PackageFileReader.Read(csproj);
+
+        Assert.Equal(2, packages.Count);
+        Assert.Contains(packages, p => p.Id == "X" && p.Version.ToString() == "1.0.0");
+        Assert.Contains(packages, p => p.Id == "X" && p.Version.ToString() == "2.0.0");
+    }
+
+    // --- Ticket #3: malformed Directory.Packages.props must surface, not silently fall back ---
+
+    [Fact]
+    public void Read_throws_when_nearest_directory_packages_props_is_malformed_xml()
+    {
+        // MSBuild stops at the first Directory.Packages.props; if it is malformed, the
+        // build fails. nucheck must do the same — fail closed, not fall back silently.
+        var dir = NewTempDir();
+        File.WriteAllText(Path.Combine(dir, "Directory.Packages.props"), "<Project><unclosed>");
+        var csproj = Path.Combine(dir, "foo.csproj");
+        File.WriteAllText(csproj, """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="X" />
+  </ItemGroup>
+</Project>
+""");
+
+        var ex = Assert.Throws<InvalidDataException>(() => PackageFileReader.Read(csproj));
+        Assert.Contains("Directory.Packages.props", ex.Message);
+    }
+
+    [Fact]
+    public void Read_does_not_silently_fall_back_to_ancestor_props_when_nearest_is_malformed()
+    {
+        // Mixed partial-failure: a malformed nearest props sits between the csproj and a
+        // valid ancestor props. The tool must NOT skip the malformed file and use the
+        // ancestor — that would resolve wrong versions and produce a false-negative audit.
+        var ancestor = NewTempDir();
+        File.WriteAllText(Path.Combine(ancestor, "Directory.Packages.props"), """
+<Project>
+  <ItemGroup>
+    <PackageVersion Include="X" Version="99.0.0" />
+  </ItemGroup>
+</Project>
+""");
+
+        var subdir = Path.Combine(ancestor, $"sub-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(subdir);
+        _tempDirs.Add(subdir);
+        File.WriteAllText(Path.Combine(subdir, "Directory.Packages.props"), "<Project><broken>");
+
+        var csproj = Path.Combine(subdir, "foo.csproj");
+        File.WriteAllText(csproj, """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="X" />
+  </ItemGroup>
+</Project>
+""");
+
+        // Must throw — not silently return the ancestor's 99.0.0.
+        Assert.Throws<InvalidDataException>(() => PackageFileReader.Read(csproj));
     }
 
     private string WriteTemp(string extension, string content)

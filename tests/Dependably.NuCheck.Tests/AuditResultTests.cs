@@ -332,14 +332,15 @@ public class AuditResultTests
         Assert.Equal("Foo.Bar", filtered.UnusedPackages[0].Id);
     }
 
-    // ---- #21: count gate does not count policy findings -------------------------
+    // ---- #21 × #30: a count-only gate STILL gates policy (untrusted-source) errors -----
 
     [Fact]
-    public void GateTrips_count_does_not_trip_on_policy_finding_only_result()
+    public void GateTrips_count_only_still_trips_on_policy_finding_only_result()
     {
-        // A result with zero vulnerabilities but one policy finding:
-        // - the count gate (failOnCount=0) does NOT trip (VulnerabilityCount == 0)
-        // - the default gate (no rules) DOES trip (HasFailures is true via PolicyErrorCount)
+        // A result with zero vulnerabilities but one policy finding.
+        // #30 (deliberate CI-gate security-posture decision) keeps policy errors gating even
+        // when only a count rule is present — otherwise `--fail-on count=0` would silently exit
+        // 0 on an untrusted registry. So both the count-only gate AND the default gate trip.
         var result = new AuditResult
         {
             TotalPackages = 1,
@@ -347,8 +348,8 @@ public class AuditResultTests
             PolicyFindings = [new SourceFinding("evil.host", "private", "untrusted source")],
         };
 
-        // Count gate: 0 vulns > 0 is false → does not trip.
-        Assert.False(result.GateTrips(null, 0));
+        // Count-only gate: 0 vulns does not exceed the count, but the policy error still gates.
+        Assert.True(result.GateTrips(null, 0));
 
         // Default gate (no rules): HasFailures is true because PolicyErrorCount > 0 → trips.
         Assert.True(result.GateTrips(null, null));
