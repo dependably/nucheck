@@ -235,6 +235,86 @@ public class AuditResultTests
         Assert.True(result.GateTrips("high", 5));       // severity=high gates the policy error
     }
 
+    // ---- FilterBySeverity at-or-above semantics (#1) --------------------------------
+
+    [Fact]
+    public void FilterBySeverity_includes_higher_severity_findings()
+    {
+        // Bug: --severity high used exact string match, hiding critical findings while
+        // GateTrips still tripped → output said "all secure" but exit code was 1.
+        // Fix: at-or-above rank comparison so --severity high includes critical too.
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities =
+            [
+                new PackageVulnerability("Pkg", "1.0.0",
+                [
+                    new Advisory("Critical issue", "critical", ">= 1.0", []),
+                    new Advisory("High issue", "high", ">= 1.0", []),
+                    new Advisory("Moderate issue", "moderate", ">= 1.0", []),
+                ]),
+            ],
+        };
+
+        var filtered = result.FilterBySeverity("high");
+
+        var vulnerability = Assert.Single(filtered.Vulnerabilities);
+        Assert.Equal(2, vulnerability.Advisories.Count); // critical AND high
+        Assert.Contains(vulnerability.Advisories, a => a.Severity == "critical");
+        Assert.Contains(vulnerability.Advisories, a => a.Severity == "high");
+        Assert.DoesNotContain(vulnerability.Advisories, a => a.Severity == "moderate");
+    }
+
+    [Fact]
+    public void FilterBySeverity_moderate_excludes_low_includes_high_and_critical()
+    {
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities =
+            [
+                new PackageVulnerability("Pkg", "1.0.0",
+                [
+                    new Advisory("Critical issue", "critical", ">= 1.0", []),
+                    new Advisory("Moderate issue", "moderate", ">= 1.0", []),
+                    new Advisory("Low issue", "low", ">= 1.0", []),
+                ]),
+            ],
+        };
+
+        var filtered = result.FilterBySeverity("moderate");
+
+        var vulnerability = Assert.Single(filtered.Vulnerabilities);
+        Assert.Equal(2, vulnerability.Advisories.Count);
+        Assert.DoesNotContain(vulnerability.Advisories, a => a.Severity == "low");
+    }
+
+    [Fact]
+    public void FilterBySeverity_normalises_raw_advisory_word_before_rank_comparison()
+    {
+        // "medium" is a raw alias for "moderate" on the ladder; filtering by "moderate"
+        // must keep a "medium" advisory because Rank(Normalize("medium")) == Rank("moderate").
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities =
+            [
+                new PackageVulnerability("Pkg", "1.0.0",
+                [
+                    new Advisory("Medium issue", "medium", ">= 1.0", []),
+                    new Advisory("Low issue", "low", ">= 1.0", []),
+                ]),
+            ],
+        };
+
+        var filtered = result.FilterBySeverity("moderate");
+
+        var vulnerability = Assert.Single(filtered.Vulnerabilities);
+        Assert.Single(vulnerability.Advisories);
+        Assert.Equal("medium", vulnerability.Advisories[0].Severity); // raw word preserved
+    }
+
     [Fact]
     public void FilterBySeverity_preserves_unused_packages()
     {

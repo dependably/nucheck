@@ -140,8 +140,16 @@ public sealed class AuditResult
     }
 
     /// <summary>
-    /// Return a copy keeping only advisories of the given severity (case-insensitive).
+    /// Return a copy keeping only advisories at or above the given severity level on the
+    /// suite ladder (<c>critical &gt; high &gt; moderate &gt; low &gt; info</c>).
     /// A null/blank severity returns this result unchanged.
+    /// <para>
+    /// The comparison uses <see cref="Severity.Rank"/> after normalisation so that raw
+    /// advisory words like <c>medium</c> are treated as <c>moderate</c>, and
+    /// <c>--severity high</c> correctly includes <c>critical</c> findings as well as
+    /// <c>high</c> ones (rather than performing an exact-string match that would hide
+    /// higher-severity advisories).
+    /// </para>
     /// </summary>
     public AuditResult FilterBySeverity(string? severity)
     {
@@ -150,11 +158,12 @@ public sealed class AuditResult
             return this;
         }
 
+        var filterRank = Severity.Rank(Severity.Normalize(severity));
         var filtered = Vulnerabilities
             .Select(v => v with
             {
                 Advisories = v.Advisories
-                    .Where(a => a.Severity.Equals(severity, StringComparison.OrdinalIgnoreCase))
+                    .Where(a => Severity.Rank(Severity.Normalize(a.Severity)) >= filterRank)
                     .ToList(),
             })
             .Where(v => v.Advisories.Count > 0)

@@ -9,7 +9,7 @@ public sealed class CliOptions
     private static readonly Dictionary<string, Action<CliOptions, string>> ValueFlags = new(StringComparer.Ordinal)
     {
         ["--format"] = (o, v) => o.Format = v,
-        ["--severity"] = (o, v) => o.Severity = v,
+        ["--severity"] = (o, v) => o.ApplySeverity(v),
         ["--source"] = (o, v) => o.Source = v,
         ["--config"] = (o, v) => o.ConfigPath = v,
         ["--fail-on"] = (o, v) => o.ApplyFailOn(v),
@@ -158,5 +158,24 @@ public sealed class CliOptions
                 Error ??= $"unknown --fail-on key '{key}': use severity or count";
                 break;
         }
+    }
+
+    /// <summary>
+    /// Validate and store the <c>--severity</c> display-filter level. Accepts the same
+    /// five ladder words as <c>--fail-on severity=&lt;level&gt;</c> (plus the alias
+    /// <c>medium</c>→<c>moderate</c>). An unrecognised word is a usage error that routes
+    /// through the exit-2 path; unlike <see cref="Models.Severity.Normalize"/> this does
+    /// NOT swallow a typo into <c>info</c>.
+    /// </summary>
+    private void ApplySeverity(string raw)
+    {
+        var level = Models.Severity.ParseLevel(raw);
+        if (level is null)
+        {
+            Error ??= $"invalid --severity '{raw}': use critical, high, moderate, low, or info";
+            return;
+        }
+
+        Severity = level;
     }
 }

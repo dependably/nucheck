@@ -148,6 +148,39 @@ public class CliOptionsTests
         Assert.Contains("--first-bad", options.Error);
     }
 
+    [Theory]
+    [InlineData("critical", "critical")]
+    [InlineData("high", "high")]
+    [InlineData("moderate", "moderate")]
+    [InlineData("medium", "moderate")]  // alias normalised onto the ladder
+    [InlineData("low", "low")]
+    [InlineData("info", "info")]
+    [InlineData("HIGH", "high")]        // case-insensitive
+    public void Parse_severity_valid_ladder_word_is_accepted(string value, string expected)
+    {
+        var options = CliOptions.Parse(["./p.config", "--severity", value]);
+
+        Assert.Null(options.Error);
+        Assert.Equal(expected, options.Severity);
+    }
+
+    [Theory]
+    [InlineData("bogus")]   // not a ladder word
+    [InlineData("unknown")]
+    [InlineData("HIGHT")]   // typo
+    [InlineData("")]        // empty string reached via a different path; validate anyway
+    public void Parse_severity_invalid_value_is_usage_error(string value)
+    {
+        // Bug: --severity bogus was silently accepted, causing FilterBySeverity to match
+        // nothing and print "all secure" even when vulnerabilities were present. A bogus
+        // --severity must be a usage error (exit 2) like a bogus --fail-on severity value.
+        var options = CliOptions.Parse(["./p.config", "--severity", value]);
+
+        Assert.NotNull(options.Error);
+        Assert.Contains("--severity", options.Error);
+        Assert.Contains(value, options.Error);
+    }
+
     [Fact]
     public void Parse_fail_on_defaults_to_null()
     {
