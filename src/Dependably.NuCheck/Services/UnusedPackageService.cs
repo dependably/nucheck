@@ -504,10 +504,10 @@ public static partial class UnusedPackageService
             {
                 i = SkipBlockComment(content, i);
             }
-            else if (content[i] == '$' && next == '"' && i + 2 < content.Length && content[i + 2] == '"')
+            else if (content[i] == '$' && next == '"' && i + 2 < content.Length && content[i + 2] == '"' && i + 3 < content.Length && content[i + 3] == '"')
             {
-                // $"""...""" — interpolated raw string; skip whole literal conservatively.
-                i = SkipRawStringLiteral(content, i + 1);
+                // $"""...""" — interpolated raw string (≥ 3 quotes required); preserve hole code.
+                i = SkipInterpolatedRawString(content, i + 1, sb);
             }
             else if (content[i] == '$' && next == '@' && i + 2 < content.Length && content[i + 2] == '"')
             {
@@ -646,11 +646,24 @@ public static partial class UnusedPackageService
     }
 
     /// <summary>
-    /// Emits a character while inside an interpolation hole, or skips a nested string
-    /// literal to maintain correct brace-depth accounting.
+    /// Emits a character while inside an interpolation hole, or skips/recurses into a
+    /// nested string literal to maintain correct brace-depth accounting and preserve
+    /// code inside nested interpolated-string holes.
     /// </summary>
     private static int EmitInterpolatedHoleChar(string content, int i, char c, System.Text.StringBuilder sb)
     {
+        if (c == '$')
+        {
+            // $"...", $@"...", @$"...", or $"""...""" — recurse so nested hole code is preserved.
+            return EmitNestedInterpolatedString(content, i, sb);
+        }
+
+        if (c == '@' && i + 1 < content.Length && content[i + 1] == '$' && i + 2 < content.Length && content[i + 2] == '"')
+        {
+            // @$"..." — verbatim interpolated string; preserve nested hole code.
+            return SkipInterpolatedString(content, i + 3, sb, verbatim: true);
+        }
+
         if (c == '"')
         {
             // Nested regular string — skip so its content does not affect brace accounting.
@@ -665,6 +678,98 @@ public static partial class UnusedPackageService
 
         sb.Append(c);
         return i + 1;
+    }
+
+    /// <summary>
+    /// Handles a <c>$</c> encountered inside an interpolation hole, dispatching to the
+    /// appropriate nested interpolated-string handler so the nested hole's code is preserved.
+    /// If <c>$</c> does not introduce a nested interpolated string it is emitted as plain code.
+    /// </summary>
+    private static int EmitNestedInterpolatedString(string content, int i, System.Text.StringBuilder sb)
+    {
+        var next = i + 1 < content.Length ? content[i + 1] : '\0';
+        if (next == '@' && i + 2 < content.Length && content[i + 2] == '"')
+        {
+            // $@"..." — verbatim interpolated; preserve nested hole code.
+            return SkipInterpolatedString(content, i + 3, sb, verbatim: true);
+        }
+
+        if (next == '"' && i + 2 < content.Length && content[i + 2] == '"' && i + 3 < content.Length && content[i + 3] == '"')
+        {
+            // $"""...""" — interpolated raw string; preserve nested hole code.
+            return SkipInterpolatedRawString(content, i + 1, sb);
+        }
+
+        if (next == '"')
+        {
+            // $"..." — regular interpolated; preserve nested hole code.
+            return SkipInterpolatedString(content, i + 2, sb, verbatim: false);
+        }
+
+        // Bare $, not introducing a nested interpolated string.
+        sb.Append('$');
+        return i + 1;
+    }
+
+    /// <summary>
+    /// Skips an interpolated raw string literal (<c>$"""..."""</c> etc.), emitting the
+    /// content of each interpolation hole <c>{...}</c> into <paramref name="sb"/> so
+    /// qualified type references in holes remain visible to <see cref="QualifiedNamePattern"/>.
+    /// Called with <paramref name="start"/> pointing to the first <c>"</c> of the delimiter.
+    /// </summary>
+    private static int SkipInterpolatedRawString(
+        string content, int start, System.Text.StringBuilder sb)
+    {
+        var quoteCount = CountQuoteRun(content, start);
+        var i = start + quoteCount;
+        var holeDepth = 0;
+
+        while (i < content.Length)
+        {
+            var c = content[i];
+            if (c == '{')
+            {
+                i = AdvanceInterpolatedOpenBrace(content, i, ref holeDepth);
+            }
+            else if (c == '}')
+            {
+                i = AdvanceInterpolatedCloseBrace(content, i, ref holeDepth);
+            }
+            else if (holeDepth > 0)
+            {
+                i = EmitInterpolatedHoleChar(content, i, c, sb);
+            }
+            else if (c == '"')
+            {
+                // In literal portion — advance past the quote run; return if it closes the string.
+                var runLen = CountQuoteRun(content, i);
+                i += runLen;
+                if (runLen >= quoteCount)
+                {
+                    return i;
+                }
+            }
+            else
+            {
+                i++;
+            }
+        }
+
+        return i;
+    }
+
+    /// <summary>
+    /// Returns the number of consecutive <c>"</c> characters starting at <paramref name="start"/>.
+    /// </summary>
+    private static int CountQuoteRun(string content, int start)
+    {
+        var count = 0;
+        while (start + count < content.Length && content[start + count] == '"')
+        {
+            count++;
+        }
+
+        return count;
     }
 
     /// <summary>

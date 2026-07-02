@@ -932,4 +932,117 @@ public class UnusedPackageServiceTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    // --- Fix #46 follow-up: over-strip bugs in StripCommentsAndLiterals ----------------
+
+    // Finding 1: $"" (empty interpolated string) was misidentified as a raw interpolated
+    // string ($"""), causing SkipRawStringLiteral to eat all code that follows.
+
+    [Fact]
+    public void Disk_empty_interpolated_string_does_not_consume_trailing_code()
+    {
+        // Before the fix: $"" triggered the $"""...""" branch (only 2 quotes checked),
+        // and SkipRawStringLiteral swallowed everything after it until the next "" run,
+        // making Foo.Bar invisible and wrongly flagging it as unused.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.Bar" Version="1.0.0" />
+                    <PackageReference Include="Serilog" Version="3.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // $"" is an empty interpolated string; Foo.Bar is used in the code that follows.
+            // Serilog is genuinely unused — only it should be flagged.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                "public class C { void M() { var s = $\"\"; Foo.Bar.Helper.Run(); } }");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            // Foo.Bar IS used after $"" — must not be flagged; only Serilog is unused.
+            var finding = Assert.Single(findings);
+            Assert.Equal("Serilog", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // Finding 2: $"""…{hole}…""" — the hole code was discarded by the conservative skip,
+    // so a package used only in a hole of an interpolated raw string was wrongly flagged.
+
+    [Fact]
+    public void Disk_interpolated_raw_string_hole_usage_is_not_flagged()
+    {
+        // Before the fix: SkipRawStringLiteral consumed $"""...""" wholesale (no hole
+        // preservation), so a qualified name inside the hole was invisible to the scanner.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.Bar" Version="1.0.0" />
+                    <PackageReference Include="Serilog" Version="3.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // Foo.Bar used ONLY inside an interpolated raw string hole; Serilog not used.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                """"public class C { void M() { var s = $"""{Foo.Bar.Helper.Run()}"""; } }"""");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            // Foo.Bar IS used (inside the raw string hole) — only Serilog should be flagged.
+            var finding = Assert.Single(findings);
+            Assert.Equal("Serilog", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // Finding 3: $"{$"{Foo.Bar()}"}" — nested interpolation loses the inner hole.
+    // EmitInterpolatedHoleChar treated the inner $" as plain $ + regular string,
+    // so the inner {Foo.Bar()} was stripped by SkipRegularString.
+
+    [Fact]
+    public void Disk_nested_interpolated_string_hole_usage_is_not_flagged()
+    {
+        // Before the fix: inside an outer hole, $"..." was processed as bare $ (emitted)
+        // followed by SkipRegularString, discarding the inner hole's code entirely.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.Bar" Version="1.0.0" />
+                    <PackageReference Include="Serilog" Version="3.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // Foo.Bar used ONLY inside a nested interpolation hole; Serilog not used.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                """"public class C { void M() { var s = $"{$"{Foo.Bar.Run()}"}"; } }"""");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            // Foo.Bar IS used (inside the nested hole) — only Serilog should be flagged.
+            var finding = Assert.Single(findings);
+            Assert.Equal("Serilog", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }
