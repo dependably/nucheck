@@ -145,14 +145,27 @@ public class FormatterTests
 
     [Theory]
     [InlineData("json", typeof(JsonResultFormatter))]
-    [InlineData("JSON", typeof(JsonResultFormatter))]
+    [InlineData("JSON", typeof(JsonResultFormatter))]        // case-insensitive
+    [InlineData("Json ", typeof(JsonResultFormatter))]       // trailing space trimmed
+    [InlineData("  json  ", typeof(JsonResultFormatter))]    // surrounding whitespace trimmed
     [InlineData("table", typeof(TableResultFormatter))]
     [InlineData("human", typeof(SummaryResultFormatter))]
-    [InlineData("unknown", typeof(SummaryResultFormatter))]
-    [InlineData(null, typeof(SummaryResultFormatter))]
+    [InlineData(null, typeof(SummaryResultFormatter))]       // null defaults to human/summary
     public void Factory_selects_formatter(string? format, Type expected)
     {
         Assert.IsType(expected, FormatterFactory.Get(format, "9.9.9", "packages.config"));
+    }
+
+    [Theory]
+    [InlineData("unknown")]
+    [InlineData("jsonl")]
+    [InlineData("xml")]
+    public void Factory_throws_for_unrecognised_format(string format)
+    {
+        // An unrecognised token must never silently fall through to summary output;
+        // a CI pipeline expecting the JSON schema-v1 envelope would receive prose instead.
+        Assert.Throws<ArgumentException>(() =>
+            FormatterFactory.Get(format, "9.9.9", "packages.config"));
     }
 
     [Fact]

@@ -8,7 +8,7 @@ public sealed class CliOptions
 {
     private static readonly Dictionary<string, Action<CliOptions, string>> ValueFlags = new(StringComparer.Ordinal)
     {
-        ["--format"] = (o, v) => o.Format = v,
+        ["--format"] = (o, v) => o.ApplyFormat(v),
         ["--severity"] = (o, v) => o.ApplySeverity(v),
         ["--source"] = (o, v) => o.Source = v,
         ["--config"] = (o, v) => o.ConfigPath = v,
@@ -103,6 +103,25 @@ public sealed class CliOptions
         }
 
         return options;
+    }
+
+    /// <summary>
+    /// Validate and store the <c>--format</c> value. Accepts the three recognised
+    /// tokens (<c>human</c>, <c>table</c>, <c>json</c>) case-insensitively after
+    /// trimming; rejects anything else as a usage error so a typo like
+    /// <c>--format jsonl</c> does not silently produce human-readable prose and
+    /// break a downstream JSON parser that expected the schema-v1 envelope.
+    /// </summary>
+    private void ApplyFormat(string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant();
+        if (!Output.FormatterFactory.ValidFormats.Contains(normalized))
+        {
+            Error ??= $"invalid --format '{value}': use {string.Join(", ", Output.FormatterFactory.ValidFormats)}";
+            return;
+        }
+
+        Format = normalized;
     }
 
     /// <summary>

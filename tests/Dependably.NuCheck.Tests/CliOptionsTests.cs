@@ -114,6 +114,36 @@ public class CliOptionsTests
         Assert.Contains("--first-bad", options.Error);
     }
 
+    // ---- issue #44: --format validation and normalisation ---------------------------
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("JSON")]
+    [InlineData("table")]
+    [InlineData("human")]
+    public void Parse_format_accepts_valid_tokens(string value)
+    {
+        var options = CliOptions.Parse(["./p.config", "--format", value]);
+
+        Assert.Null(options.Error);
+        Assert.Equal(value.Trim().ToLowerInvariant(), options.Format);
+    }
+
+    [Theory]
+    [InlineData("jsonl")]
+    [InlineData("xml")]
+    [InlineData("unknown")]
+    public void Parse_format_rejects_invalid_value(string value)
+    {
+        // A typo like '--format jsonl' previously silently produced summary prose;
+        // it is now a usage error so a CI pipeline is not silently broken.
+        var options = CliOptions.Parse(["./p.config", "--format", value]);
+
+        Assert.NotNull(options.Error);
+        Assert.Contains("--format", options.Error);
+        Assert.Contains(value, options.Error);
+    }
+
     // ---- issue #8: --severity validation and normalisation --------------------------
 
     [Theory]
