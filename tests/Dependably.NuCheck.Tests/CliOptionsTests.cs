@@ -48,17 +48,51 @@ public class CliOptionsTests
     }
 
     [Fact]
-    public void Parse_ignores_value_flag_without_argument()
+    public void Parse_value_flag_at_end_of_list_is_usage_error()
     {
+        // A value flag at the end of the argument list has no following value: this is a
+        // usage error, not a silent no-op (the flag keeps its default, but Error is set).
         var options = CliOptions.Parse(["--format"]);
-        Assert.Equal("human", options.Format);
+
+        Assert.NotNull(options.Error);
+        Assert.Contains("--format", options.Error);
+        Assert.Equal("human", options.Format); // default unchanged
+    }
+
+    [Theory]
+    [InlineData("--severity")]
+    [InlineData("--source")]
+    [InlineData("--config")]
+    [InlineData("--fail-on")]
+    public void Parse_every_value_flag_at_end_of_list_is_usage_error(string flag)
+    {
+        var options = CliOptions.Parse([flag]);
+
+        Assert.NotNull(options.Error);
+        Assert.Contains(flag, options.Error);
     }
 
     [Fact]
-    public void Parse_keeps_only_first_positional_as_path()
+    public void Parse_extra_positional_argument_is_usage_error()
     {
+        // A second positional token (or any non-flag token after the path) is a usage
+        // error rather than being silently ignored.
         var options = CliOptions.Parse(["first.config", "second.config"]);
-        Assert.Equal("first.config", options.FilePath);
+
+        Assert.Equal("first.config", options.FilePath); // first positional is still captured
+        Assert.NotNull(options.Error);
+        Assert.Contains("second.config", options.Error);
+    }
+
+    [Fact]
+    public void Parse_extra_positional_argument_first_error_wins()
+    {
+        // When both a bad flag and an extra positional appear, the first error wins.
+        var options = CliOptions.Parse(["./p.config", "--bad-flag", "extra.config"]);
+
+        Assert.Equal("./p.config", options.FilePath);
+        Assert.NotNull(options.Error);
+        Assert.Contains("--bad-flag", options.Error); // first bad token, not the extra positional
     }
 
     [Fact]
@@ -166,10 +200,13 @@ public class CliOptionsTests
     [InlineData("foo")]
     [InlineData("bogus")]
     [InlineData("SEVERE")]
+    [InlineData("unknown")]
+    [InlineData("HIGHT")]   // typo
     public void Parse_severity_rejects_invalid_value(string value)
     {
-        // A typo like '--severity foo' previously suppressed all output silently; it is
-        // now a usage error so the caller learns the value was not understood.
+        // A bogus --severity was previously accepted silently, causing FilterBySeverity to
+        // match nothing and print "all secure" even when vulnerabilities were present. It
+        // must be a usage error (exit 2), like a bogus --fail-on severity value.
         var options = CliOptions.Parse(["./p.config", "--severity", value]);
 
         Assert.NotNull(options.Error);
@@ -241,5 +278,33 @@ public class CliOptionsTests
 
         Assert.NotNull(options.Error);
         Assert.Contains("--fail-on", options.Error);
+    }
+
+    // ---- #20: --source flag and Source default ----------------------------------
+
+    [Fact]
+    public void Parse_source_defaults_to_github()
+    {
+        var options = CliOptions.Parse(["./p.config"]);
+
+        Assert.Equal("github", options.Source);
+    }
+
+    [Fact]
+    public void Parse_reads_source_osv()
+    {
+        var options = CliOptions.Parse(["./p.config", "--source", "osv"]);
+
+        Assert.Equal("osv", options.Source);
+        Assert.Null(options.Error);
+    }
+
+    [Fact]
+    public void Parse_reads_source_github_explicit()
+    {
+        var options = CliOptions.Parse(["./p.config", "--source", "github"]);
+
+        Assert.Equal("github", options.Source);
+        Assert.Null(options.Error);
     }
 }

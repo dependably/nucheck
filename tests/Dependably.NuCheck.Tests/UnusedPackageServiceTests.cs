@@ -410,4 +410,162 @@ public class UnusedPackageServiceTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    // ---- #14: ExcludeAssets exclusion paths -------------------------------------
+
+    [Fact]
+    public void Disk_ExcludeAssets_runtime_reference_is_not_flagged()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.RuntimeExcluded" Version="1.0.0" ExcludeAssets="runtime" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            File.WriteAllText(Path.Combine(dir, "Class.cs"), "public class C { }");
+
+            var findings = UnusedPackageService.Check(dir, []);
+            Assert.Empty(findings);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_ExcludeAssets_compile_reference_is_not_flagged()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.CompileExcluded" Version="1.0.0" ExcludeAssets="compile" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            File.WriteAllText(Path.Combine(dir, "Class.cs"), "public class C { }");
+
+            var findings = UnusedPackageService.Check(dir, []);
+            Assert.Empty(findings);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_ExcludeAssets_all_reference_is_not_flagged()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.AllExcluded" Version="1.0.0" ExcludeAssets="all" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            File.WriteAllText(Path.Combine(dir, "Class.cs"), "public class C { }");
+
+            var findings = UnusedPackageService.Check(dir, []);
+            Assert.Empty(findings);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // ---- #19 / #52 (consolidated): global using, using static, qualified name --
+
+    [Fact]
+    public void Disk_global_using_directive_marks_package_as_used()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // 'global using' form (C# 10+) — the UsingDirectivePattern optional group.
+            File.WriteAllText(Path.Combine(dir, "GlobalUsings.cs"), "global using Newtonsoft.Json;");
+
+            var findings = UnusedPackageService.Check(dir, []);
+            Assert.Empty(findings);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_using_static_directive_marks_package_as_used()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // 'using static' form — the UsingDirectivePattern optional group.
+            File.WriteAllText(Path.Combine(dir, "Program.cs"), "using static Newtonsoft.Json.JsonConvert;");
+
+            var findings = UnusedPackageService.Check(dir, []);
+            Assert.Empty(findings);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_qualified_name_reference_marks_package_as_used()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // No 'using' directive — only a fully-qualified reference.
+            // QualifiedNamePattern must pick up "Newtonsoft.Json" from the dotted expression.
+            File.WriteAllText(Path.Combine(dir, "Program.cs"), "var s = Newtonsoft.Json.JsonConvert.SerializeObject(new { });");
+
+            var findings = UnusedPackageService.Check(dir, []);
+            Assert.Empty(findings);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }

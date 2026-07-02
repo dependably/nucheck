@@ -29,11 +29,13 @@ public sealed class TableResultFormatter : IResultFormatter
         builder.AppendLine($"Advisories Found:       {result.VulnerabilityCount}");
         builder.AppendLine($"Policy Findings:        {result.PolicyFindings.Count}");
         builder.AppendLine($"Possibly Unused:        {result.UnusedPackages.Count} (heuristic, advisory only)");
+        builder.AppendLine($"Unverifiable Ranges:    {result.UnverifiableAdvisories.Count} (range not parsed — investigate)");
         builder.AppendLine("-------------------");
 
         AppendVulnerabilities(builder, result);
         AppendPolicyFindings(builder, result);
         AppendUnusedPackages(builder, result);
+        AppendUnverifiableAdvisories(builder, result);
         return builder.ToString();
     }
 
@@ -62,12 +64,25 @@ public sealed class TableResultFormatter : IResultFormatter
     /// </summary>
     private void AppendNoVulnerabilities(StringBuilder builder, AuditResult result)
     {
+        // A --severity filter hid real advisories: report the exact hidden count so the
+        // output cannot read "all secure" beside a non-zero exit.
+        if (result.HiddenAdvisoryCount > 0)
+        {
+            builder.AppendLine(
+                $"0 advisories at or above {result.DisplaySeverityFilter} shown; " +
+                $"{result.HiddenAdvisoryCount} advisory(ies) hidden by --severity {result.DisplaySeverityFilter}.");
+            return;
+        }
+
+        // Filter active but nothing was hidden (no advisories at all): still qualify.
         if (_severityFilter is not null)
         {
             builder.AppendLine($"No advisories matching severity '{_severityFilter}' (others may exist — see exit code)");
             return;
         }
 
+        // No filter, but policy errors tripped the gate: suppress the checkmark — the
+        // POLICY FINDINGS block below already covers that failing state.
         if (result.PolicyErrorCount > 0)
         {
             return;
@@ -141,6 +156,23 @@ public sealed class TableResultFormatter : IResultFormatter
         foreach (var finding in result.UnusedPackages)
         {
             builder.AppendLine($"   {TextSanitizer.Sanitize(finding.Id)}: {TextSanitizer.Sanitize(finding.Message)}");
+        }
+    }
+
+    private static void AppendUnverifiableAdvisories(StringBuilder builder, AuditResult result)
+    {
+        if (result.UnverifiableAdvisories.Count == 0)
+        {
+            return;
+        }
+
+        builder.AppendLine("-------------------");
+        builder.AppendLine("UNVERIFIABLE ADVISORY RANGES (investigate manually — range could not be parsed)");
+        foreach (var finding in result.UnverifiableAdvisories)
+        {
+            var id = string.IsNullOrEmpty(finding.AdvisoryId) ? string.Empty : $" [{TextSanitizer.Sanitize(finding.AdvisoryId)}]";
+            var sev = string.IsNullOrEmpty(finding.AdvisorySeverity) ? string.Empty : $" [{Severity.Normalize(finding.AdvisorySeverity)}]";
+            builder.AppendLine($"   {TextSanitizer.Sanitize(finding.PackageId)}{id}{sev}: {TextSanitizer.Sanitize(finding.VulnerableVersionRange)}");
         }
     }
 }

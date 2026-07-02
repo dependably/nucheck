@@ -57,6 +57,7 @@ public sealed class SummaryResultFormatter : IResultFormatter
 
         AppendPolicyFindings(builder, result);
         AppendUnusedPackages(builder, result);
+        AppendUnverifiableAdvisories(builder, result);
         return builder.ToString();
     }
 
@@ -69,12 +70,25 @@ public sealed class SummaryResultFormatter : IResultFormatter
     /// </summary>
     private void AppendNoVulnerabilities(StringBuilder builder, AuditResult result)
     {
+        // A --severity filter hid real advisories: report the exact hidden count so the
+        // output cannot read "all secure" beside a non-zero exit.
+        if (result.HiddenAdvisoryCount > 0)
+        {
+            builder.AppendLine(
+                $"0 advisories at or above {result.DisplaySeverityFilter} shown; " +
+                $"{result.HiddenAdvisoryCount} advisory(ies) hidden by --severity {result.DisplaySeverityFilter}.");
+            return;
+        }
+
+        // Filter active but nothing was hidden (no advisories at all): still qualify.
         if (_severityFilter is not null)
         {
             builder.AppendLine($"No advisories matching severity '{_severityFilter}' (others may exist — see exit code)");
             return;
         }
 
+        // No filter, but policy errors tripped the gate: suppress the checkmark — the
+        // POLICY FINDINGS block below already covers that failing state.
         if (result.PolicyErrorCount > 0)
         {
             return;
@@ -110,6 +124,23 @@ public sealed class SummaryResultFormatter : IResultFormatter
         foreach (var finding in result.UnusedPackages)
         {
             builder.AppendLine($"  • {TextSanitizer.Sanitize(finding.Message)}");
+        }
+    }
+
+    private static void AppendUnverifiableAdvisories(StringBuilder builder, AuditResult result)
+    {
+        if (result.UnverifiableAdvisories.Count == 0)
+        {
+            return;
+        }
+
+        builder.AppendLine();
+        builder.AppendLine($"⚠ {result.UnverifiableAdvisories.Count} unverifiable advisory range(s) — range could not be parsed, investigate manually:");
+        foreach (var finding in result.UnverifiableAdvisories)
+        {
+            var id = string.IsNullOrEmpty(finding.AdvisoryId) ? string.Empty : $" [{TextSanitizer.Sanitize(finding.AdvisoryId)}]";
+            var sev = string.IsNullOrEmpty(finding.AdvisorySeverity) ? string.Empty : $" [{Severity.Normalize(finding.AdvisorySeverity)}]";
+            builder.AppendLine($"  • {TextSanitizer.Sanitize(finding.PackageId)}{id}{sev}: {TextSanitizer.Sanitize(finding.VulnerableVersionRange)}");
         }
     }
 }

@@ -98,7 +98,8 @@ public static class Program
                     $"Trusted registry hosts: {string.Join(", ", SourceTrustService.PublicHosts.Concat(config.AllowedRegistryHosts))}");
             }
 
-            var policyFindings = SourceTrustService.Check(checkDirectory, config.AllowedRegistryHosts);
+            var policyFindings = SourceTrustService.Check(
+                checkDirectory, config.AllowedRegistryHosts, config.AllowedLocalFeeds);
             var unusedPackages = UnusedPackageService.Check(checkDirectory, config.IgnoreUnusedPackages);
             var result = new AuditResult
             {
@@ -106,6 +107,7 @@ public static class Program
                 Vulnerabilities = audit.Vulnerabilities,
                 PolicyFindings = policyFindings,
                 UnusedPackages = unusedPackages,
+                UnverifiableAdvisories = audit.UnverifiableAdvisories,
             };
 
             // The CI gate (--fail-on, or the default any-vuln-or-policy rule) always
@@ -210,7 +212,7 @@ Options:
   --format <type>            Output format: human, table, json (default: human)
   --severity <level>         Filter by severity: critical, high, moderate, low, info
   --config <path>            Path to a .dependably-check config file. When omitted, the
-                             file is discovered by walking up from the current directory.
+                             file is discovered by walking up from the audited file's directory.
   --fail-on <key>=<value>    CI gate (repeatable). Without it, ANY vulnerability or policy
                              error fails the build (exit 1) — the default. Each rule below
                              REPLACES that default; the build fails if ANY rule trips:
@@ -219,7 +221,12 @@ Options:
                                      (relaxes/raises the gate, e.g. severity=high ignores
                                      moderate/low vulns for gating — they still print).
                                count=<N>
-                                     fail when the vulnerability count exceeds N.
+                                     fail when the vulnerability count exceeds N. This rule
+                                     governs vulnerabilities only; policy errors (see below)
+                                     still gate, so count=0 fails on any vulnerability OR any
+                                     untrusted source.
+                             Policy errors are only relaxed by an explicit severity rule
+                             (which governs policy findings too, e.g. severity=critical).
                              Distinct from --severity, which only filters what is printed.
   --rest                     Use the GitHub REST API instead of GraphQL (github source)
   --verbose, -v              Write progress to stderr
@@ -231,6 +238,19 @@ Policy checks:
   source whose host is not public (api.nuget.org / nuget.org) and not allowlisted
   in .dependably-check (common.allowedRegistryHosts ∪ nuget.allowedRegistryHosts).
   An untrusted source is an error and exits non-zero.
+
+  Local folder feeds (relative paths or file:// URIs) declared inside the repo
+  are also errors by default, because a committed feed can smuggle tampered
+  packages past a restore. Trust one explicitly via allowedLocalFeeds:
+
+    {
+      "common": { "allowedLocalFeeds": ["./local-packages"] },
+      "nuget":  { "allowedLocalFeeds": ["file:///opt/mirror"] }
+    }
+
+  When nucheck cannot find a repository boundary (.git), NuGet config in parent
+  directories is not audited; nucheck then emits an info finding naming the
+  excluded config so the fail-open is visible.
 
 Unused-package check (advisory only, never exits non-zero):
   nucheck heuristically detects packages declared as direct <PackageReference>

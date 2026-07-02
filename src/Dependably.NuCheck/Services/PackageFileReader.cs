@@ -249,34 +249,35 @@ public static class PackageFileReader
             .ToList();
 
         // A Directory.Packages.props' whole purpose is to declare PackageVersions; with
-        // no PackageReferences, audit those centrally-managed entries directly.
+        // no PackageReferences, audit those centrally-managed entries directly. Every
+        // DISTINCT declared version is audited — duplicate (e.g. per-TFM) ids are not
+        // collapsed to one version.
         if (localVersions.Count > 0 && packageReferences.Count == 0)
         {
-            return BuildPackageRefs(localVersions.Select(kv => (kv.Key, kv.Value)));
+            return BuildPackageRefs(localVersions);
         }
 
         // Otherwise resolve each PackageReference. Under Central Package Management the
-        // version lives in a Directory.Packages.props up the tree; merge those, then let
-        // any file-local <PackageVersion> win.
-        var versionMap = FindCentralPackageVersions(path);
-        foreach (var kv in localVersions)
-        {
-            versionMap[kv.Key] = kv.Value;
-        }
+        // version(s) live in a Directory.Packages.props up the tree, plus any file-local
+        // <PackageVersion>. MSBuild Conditions are NOT evaluated here, so an id may carry
+        // several DISTINCT central versions (e.g. one per TargetFramework); a version-less
+        // reference must resolve to ALL of them so a vulnerable conditional pin is never
+        // masked by a clean sibling.
+        var centralVersions = ToVersionLookup(FindCentralPackageVersions(path).Concat(localVersions));
 
         var resolved = new List<(string Id, string Version)>();
         foreach (var element in packageReferences)
         {
             var id = GetIncludeId(element)!;
             var version = GetReferenceVersion(element);
-            if (string.IsNullOrWhiteSpace(version) && versionMap.TryGetValue(id, out var central))
-            {
-                version = central; // Central Package Management.
-            }
-
             if (!string.IsNullOrWhiteSpace(version))
             {
-                resolved.Add((id, version));
+                resolved.Add((id, version)); // Reference carries its own version.
+            }
+            else if (centralVersions.TryGetValue(id, out var centrals))
+            {
+                // Central Package Management: audit every distinct declared central version.
+                resolved.AddRange(centrals.Select(central => (id, central)));
             }
         }
 
@@ -312,11 +313,13 @@ public static class PackageFileReader
 
     /// <summary>
     /// Collects every <c>&lt;PackageVersion Include="X" Version="Y" /&gt;</c> (the
-    /// Central Package Management definitions) into an id -> version map.
+    /// Central Package Management definitions) as (id, version) pairs. Duplicate ids —
+    /// e.g. a version declared per <c>TargetFramework</c> via <c>Condition</c>s — are
+    /// each preserved so no conditionally-declared version is silently dropped.
     /// </summary>
-    private static Dictionary<string, string> GatherPackageVersions(XDocument doc)
+    private static List<(string Id, string Version)> GatherPackageVersions(XDocument doc)
     {
-        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var versions = new List<(string Id, string Version)>();
         foreach (var element in doc.Descendants()
             .Where(e => e.Name.LocalName.Equals("PackageVersion", StringComparison.OrdinalIgnoreCase)))
         {
@@ -327,20 +330,51 @@ public static class PackageFileReader
                     ?.Value;
             if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(version))
             {
-                map[id] = version;
+                versions.Add((id, version));
             }
         }
 
-        return map;
+        return versions;
+    }
+
+    /// <summary>
+    /// Groups (id, version) pairs into an id -> DISTINCT versions lookup for resolving a
+    /// <c>&lt;PackageReference&gt;</c> that omits its own version (Central Package
+    /// Management). Because MSBuild <c>Condition</c>s are not evaluated, one id may be
+    /// declared at several central versions (e.g. per <c>TargetFramework</c>); every
+    /// distinct version is kept — matching <see cref="GatherPackageVersions"/> — so a
+    /// version-less reference is audited against all of them and no conditional pin is
+    /// dropped last-wins.
+    /// </summary>
+    private static Dictionary<string, List<string>> ToVersionLookup(IEnumerable<(string Id, string Version)> versions)
+    {
+        var lookup = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (id, version) in versions)
+        {
+            if (!lookup.TryGetValue(id, out var declared))
+            {
+                declared = [];
+                lookup[id] = declared;
+            }
+
+            if (!declared.Contains(version, StringComparer.OrdinalIgnoreCase))
+            {
+                declared.Add(version);
+            }
+        }
+
+        return lookup;
     }
 
     /// <summary>
     /// Walks UP the directory tree from <paramref name="projectFilePath"/> for the
-    /// nearest <c>Directory.Packages.props</c>, returning its
-    /// <c>&lt;PackageVersion&gt;</c> map (empty when none is found). MSBuild imports
-    /// only the nearest by default, so the search stops at the first match.
+    /// nearest <c>Directory.Packages.props</c>, returning ALL of its
+    /// <c>&lt;PackageVersion&gt;</c> (id, version) pairs (empty when none is found).
+    /// Duplicate ids are preserved — see <see cref="GatherPackageVersions"/> — so a
+    /// version-less reference can be audited against every declared central version.
+    /// MSBuild imports only the nearest by default, so the search stops at the first match.
     /// </summary>
-    private static Dictionary<string, string> FindCentralPackageVersions(string projectFilePath)
+    private static List<(string Id, string Version)> FindCentralPackageVersions(string projectFilePath)
     {
         var fullProjectPath = Path.GetFullPath(projectFilePath);
         var dir = Path.GetDirectoryName(fullProjectPath);
@@ -354,9 +388,14 @@ public static class PackageFileReader
                 {
                     return GatherPackageVersions(XDocument.Load(candidate));
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // A malformed props file up the tree is ignored; keep walking.
+                    // MSBuild stops at the first Directory.Packages.props it finds; if that
+                    // file is malformed, the build fails. Match that fail-closed behaviour:
+                    // surface the error rather than silently falling back to a higher-level
+                    // file whose versions would be wrong.
+                    throw new InvalidDataException(
+                        $"Failed to parse '{candidate}': {ex.Message}", ex);
                 }
             }
 
@@ -369,17 +408,20 @@ public static class PackageFileReader
             dir = parent;
         }
 
-        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        return [];
     }
 
     /// <summary>
     /// Converts resolved (id, version-string) pairs to <see cref="PackageRef"/>,
-    /// skipping any whose version cannot be determined, and de-duplicating
-    /// case-insensitively by id (preferring an exact version over a range lower bound).
+    /// skipping any whose version cannot be determined. De-duplication is keyed on
+    /// (id, resolved version) — like the lock-file path — so every DISTINCT declared
+    /// version of a package is audited (e.g. conditionally-declared per-TargetFramework
+    /// versions of the same id). Entries that resolve to the SAME version are collapsed,
+    /// preferring an exact version over a range whose lower bound matches it.
     /// </summary>
     private static List<PackageRef> BuildPackageRefs(IEnumerable<(string Id, string Version)> entries)
     {
-        var byId = new Dictionary<string, (PackageRef Ref, bool Exact)>(StringComparer.OrdinalIgnoreCase);
+        var byIdVersion = new Dictionary<string, (PackageRef Ref, bool Exact)>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var (id, versionString) in entries)
         {
@@ -388,13 +430,14 @@ public static class PackageFileReader
                 continue; // No usable version — cannot audit, skip.
             }
 
-            if (!byId.TryGetValue(id, out var existing) || (exact && !existing.Exact))
+            var key = $"{id}@{version.ToNormalizedString()}";
+            if (!byIdVersion.TryGetValue(key, out var existing) || (exact && !existing.Exact))
             {
-                byId[id] = (new PackageRef(id, version), exact);
+                byIdVersion[key] = (new PackageRef(id, version), exact);
             }
         }
 
-        return byId.Values.Select(v => v.Ref).ToList();
+        return byIdVersion.Values.Select(v => v.Ref).ToList();
     }
 
     /// <summary>

@@ -302,9 +302,10 @@ public class FormatterTests
 
         var output = new TableResultFormatter("critical").Format(filtered);
 
+        // The merged formatter reports the exact hidden count (richer than a bare
+        // "no advisories matching" note) — never "all secure" beside a non-zero exit.
         Assert.DoesNotContain("All packages are secure", output, StringComparison.Ordinal);
-        Assert.Contains("No advisories matching severity 'critical'", output, StringComparison.Ordinal);
-        Assert.Contains("see exit code", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("hidden by --severity critical", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -314,7 +315,7 @@ public class FormatterTests
         var output = new SummaryResultFormatter("critical").Format(filtered);
 
         Assert.DoesNotContain("All packages are secure", output, StringComparison.Ordinal);
-        Assert.Contains("No advisories matching severity 'critical'", output, StringComparison.Ordinal);
+        Assert.Contains("hidden by --severity critical", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -454,5 +455,122 @@ public class FormatterTests
         var output = new TableResultFormatter().Format(CleanResult());
         Assert.Contains("Possibly Unused:", output);
         Assert.Contains("0", output);
+    }
+
+    private static AuditResult UnverifiableResult() => new()
+    {
+        TotalPackages = 1,
+        Vulnerabilities = [],
+        UnverifiableAdvisories =
+        [
+            new UnverifiableAdvisoryFinding("Some.Pkg", "~> 1.0.0", "GHSA-xxxx-yyyy-zzzz"),
+        ],
+    };
+
+    [Fact]
+    public void Summary_formatter_renders_unverifiable_advisory_warning()
+    {
+        var output = new SummaryResultFormatter().Format(UnverifiableResult());
+
+        Assert.Contains("unverifiable", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Some.Pkg", output);
+        Assert.Contains("~> 1.0.0", output);
+        Assert.Contains("GHSA-xxxx-yyyy-zzzz", output);
+    }
+
+    [Fact]
+    public void Table_formatter_renders_unverifiable_advisory_section()
+    {
+        var output = new TableResultFormatter().Format(UnverifiableResult());
+
+        Assert.Contains("UNVERIFIABLE", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Some.Pkg", output);
+        Assert.Contains("~> 1.0.0", output);
+        Assert.Contains("GHSA-xxxx-yyyy-zzzz", output);
+    }
+
+    [Fact]
+    public void Table_formatter_shows_unverifiable_count_even_when_none()
+    {
+        var output = new TableResultFormatter().Format(CleanResult());
+        Assert.Contains("Unverifiable Ranges:", output);
+        Assert.Contains("0", output);
+    }
+
+    [Fact]
+    public void Summary_formatter_does_not_render_unverifiable_section_when_none()
+    {
+        var output = new SummaryResultFormatter().Format(CleanResult());
+        Assert.DoesNotContain("unverifiable", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Json_renders_unverifiable_range_as_info_finding()
+    {
+        using var document = JsonDocument.Parse(Json().Format(UnverifiableResult()));
+        var root = document.RootElement;
+
+        // Unverifiable ranges are advisory only — they never fail the audit.
+        Assert.Equal(0, root.GetProperty("summary").GetProperty("exitCode").GetInt32());
+        var finding = root.GetProperty("findings")[0];
+        Assert.Equal("unverifiable-range", finding.GetProperty("category").GetString());
+        Assert.Equal("info", finding.GetProperty("severity").GetString());
+        Assert.Equal("unverifiable-range", finding.GetProperty("ruleId").GetString());
+        var extra = finding.GetProperty("extra");
+        Assert.Equal("Some.Pkg", extra.GetProperty("package").GetString());
+        Assert.Equal("~> 1.0.0", extra.GetProperty("vulnerableRange").GetString());
+        Assert.Equal("GHSA-xxxx-yyyy-zzzz", extra.GetProperty("advisoryId").GetString());
+    }
+
+    [Fact]
+    public void Json_unverifiable_range_finding_carries_advisory_severity_in_extra()
+    {
+        // Regression for #27: the advisory's own severity (may be critical/high) must be
+        // preserved in extra.advisorySeverity so operators can distinguish severity levels
+        // even when the range could not be parsed. The finding's own severity stays "info".
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities = [],
+            UnverifiableAdvisories =
+            [
+                new UnverifiableAdvisoryFinding("Some.Pkg", "~> 1.0.0", "GHSA-xxxx-yyyy-zzzz", "critical"),
+            ],
+        };
+
+        using var document = JsonDocument.Parse(Json().Format(result));
+        var finding = document.RootElement.GetProperty("findings")[0];
+        Assert.Equal("info", finding.GetProperty("severity").GetString());       // gate posture unchanged
+        Assert.Equal("critical", finding.GetProperty("extra").GetProperty("advisorySeverity").GetString());
+    }
+
+    // ---- #10: TableResultFormatter.AppendPolicyFindings coverage ----------------
+
+    [Fact]
+    public void Table_formatter_renders_policy_findings()
+    {
+        var output = new TableResultFormatter().Format(PolicyResult());
+
+        Assert.Contains("POLICY FINDINGS", output);
+        Assert.Contains("nuget.evil.example", output);
+        Assert.Contains("private", output);
+        // SourceFinding.Severity = "error" maps to "high" on the ladder.
+        Assert.Contains("[high]", output);
+    }
+
+    // ---- #22: JsonResultFormatter explicit exitCode override --------------------
+
+    [Fact]
+    public void Json_explicit_exit_code_overrides_has_failures()
+    {
+        // VulnerableResult() HasFailures == true, but exitCode: 0 is passed explicitly
+        // (simulating a relaxed --fail-on gate that did not trip).
+        var formatter = new JsonResultFormatter("9.9.9", "packages.config", exitCode: 0);
+        using var document = JsonDocument.Parse(formatter.Format(VulnerableResult()));
+
+        // The explicit code wins — JSON reports 0 even though HasFailures is true.
+        Assert.Equal(0, document.RootElement.GetProperty("summary").GetProperty("exitCode").GetInt32());
+        // Findings are still present in the output.
+        Assert.Equal(1, document.RootElement.GetProperty("findings").GetArrayLength());
     }
 }

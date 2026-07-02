@@ -35,6 +35,15 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
     // Default number of retry attempts for transient failures.
     private const int DefaultMaxRetries = 3;
 
+    // Safety cap on GraphQL cursor pagination so a buggy or hostile API that never
+    // clears hasNextPage (or never advances the cursor) can't loop the CLI forever.
+    private const int MaxGraphQlPages = 1000;
+
+    // Safety cap on REST Link-header pagination so a buggy or hostile API that always
+    // returns a Link: rel="next" header (self-referencing or otherwise) can't loop
+    // the CLI forever.
+    private const int MaxRestPages = 1000;
+
     private readonly HttpClient _http;
     private readonly string _token;
     private readonly bool _useRest;
@@ -58,15 +67,38 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
     public Task<IReadOnlyList<Advisory>> GetAdvisoriesAsync(string packageId, CancellationToken cancellationToken = default)
         => _useRest ? QueryRestAsync(packageId, cancellationToken) : QueryGraphQlAsync(packageId, cancellationToken);
 
+    /// <summary>
+    /// Follow GraphQL cursor pagination for <c>securityVulnerabilities</c>. The API returns
+    /// at most 100 nodes per page, so a package with more advisories than that would otherwise
+    /// be silently truncated. Loop while <c>pageInfo.hasNextPage</c> is set, passing the
+    /// <c>endCursor</c> as the <c>after:</c> argument, and accumulate results across pages.
+    /// </summary>
     private async Task<IReadOnlyList<Advisory>> QueryGraphQlAsync(string packageId, CancellationToken cancellationToken)
     {
         var escaped = packageId.Replace("\\", "\\\\").Replace("\"", "\\\"");
-        var query =
-            "{ securityVulnerabilities(first: 100, ecosystem: NUGET, package: \"" + escaped + "\") " +
-            "{ nodes { advisory { ghsaId summary severity identifiers { type value } references { url } } " +
-            "firstPatchedVersion { identifier } vulnerableVersionRange } } }";
+        var advisories = new List<Advisory>();
+        string? cursor = null;
 
-        var body = await SendWithRetryAsync(() =>
+        for (var page = 0; page < MaxGraphQlPages; page++)
+        {
+            var query = BuildGraphQlQuery(escaped, cursor);
+            var body = await SendGraphQlAsync(query, cancellationToken).ConfigureAwait(false);
+            var (pageAdvisories, hasNextPage, endCursor) = ParseGraphQlPage(body);
+
+            advisories.AddRange(pageAdvisories);
+            if (!hasNextPage || string.IsNullOrEmpty(endCursor))
+            {
+                break;
+            }
+
+            cursor = endCursor;
+        }
+
+        return advisories;
+    }
+
+    private Task<string> SendGraphQlAsync(string query, CancellationToken cancellationToken)
+        => SendWithRetryAsync(() =>
         {
             var request = new HttpRequestMessage(HttpMethod.Post, GraphQlUrl)
             {
@@ -74,23 +106,82 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
             };
             AddHeaders(request);
             return request;
-        }, cancellationToken).ConfigureAwait(false);
+        }, cancellationToken);
 
-        return ParseGraphQl(body);
+    /// <summary>Build the securityVulnerabilities query, adding an <c>after:</c> cursor for pages after the first.</summary>
+    private static string BuildGraphQlQuery(string escapedPackage, string? afterCursor)
+    {
+        var escapedCursor = afterCursor?.Replace("\\", "\\\\").Replace("\"", "\\\"");
+        var after = string.IsNullOrEmpty(escapedCursor) ? string.Empty : $", after: \"{escapedCursor}\"";
+        return
+            "{ securityVulnerabilities(first: 100" + after + ", ecosystem: NUGET, package: \"" + escapedPackage + "\") " +
+            "{ nodes { advisory { ghsaId summary severity identifiers { type value } references { url } } " +
+            "firstPatchedVersion { identifier } vulnerableVersionRange } pageInfo { hasNextPage endCursor } } }";
     }
 
+    /// <summary>
+    /// Follow Link-header pagination for the REST advisories API. GitHub returns at most
+    /// <c>per_page</c> items per response (default 30, max 100). When more pages exist the
+    /// response carries a <c>Link: &lt;url&gt;; rel="next"</c> header. Loop until no next
+    /// URL is present, accumulating advisories from all pages.
+    /// </summary>
     private async Task<IReadOnlyList<Advisory>> QueryRestAsync(string packageId, CancellationToken cancellationToken)
     {
-        var url = $"{RestUrl}?ecosystem=nuget&affects={Uri.EscapeDataString(packageId)}";
+        string? url = $"{RestUrl}?ecosystem=nuget&affects={Uri.EscapeDataString(packageId)}&per_page=100";
+        var advisories = new List<Advisory>();
 
-        var body = await SendWithRetryAsync(() =>
+        for (var page = 0; page < MaxRestPages && url is not null; page++)
         {
-            var request = new HttpRequestMessage(HttpMethod.Get, url);
-            AddHeaders(request);
-            return request;
-        }, cancellationToken).ConfigureAwait(false);
+            string? nextUrl = null;
+            var pageUrl = url;
+            var body = await SendWithRetryAsync(
+                () =>
+                {
+                    var request = new HttpRequestMessage(HttpMethod.Get, pageUrl);
+                    AddHeaders(request);
+                    return request;
+                },
+                cancellationToken,
+                onSuccess: response => nextUrl = ExtractLinkNext(response)).ConfigureAwait(false);
 
-        return ParseRest(body, packageId);
+            advisories.AddRange(ParseRest(body, packageId));
+            url = nextUrl;
+        }
+
+        return advisories;
+    }
+
+    /// <summary>
+    /// Extract the URL for <c>rel="next"</c> from the <c>Link</c> response header, or null
+    /// when absent. GitHub paginates REST advisory results with this header.
+    /// </summary>
+    private static string? ExtractLinkNext(HttpResponseMessage response)
+    {
+        if (!response.Headers.TryGetValues("Link", out var values))
+        {
+            return null;
+        }
+
+        foreach (var header in values)
+        {
+            foreach (var part in header.Split(','))
+            {
+                var trimmed = part.Trim();
+                if (!trimmed.EndsWith("; rel=\"next\"", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var semicolon = trimmed.LastIndexOf(';');
+                var urlPart = trimmed[..semicolon].Trim();
+                if (urlPart.StartsWith('<') && urlPart.EndsWith('>'))
+                {
+                    return urlPart[1..^1];
+                }
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -99,23 +190,40 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
     /// rebuilt per attempt (an <see cref="HttpRequestMessage"/> can only be sent once).
     /// On the final attempt the response is validated by <see cref="EnsureSuccess"/>,
     /// so a persistent failure surfaces loudly rather than as an empty advisory list.
+    /// <paramref name="onSuccess"/> is invoked with the live response before it is disposed,
+    /// allowing callers to capture response headers (e.g. the <c>Link</c> pagination header).
     /// </summary>
-    private async Task<string> SendWithRetryAsync(Func<HttpRequestMessage> createRequest, CancellationToken cancellationToken)
+    private async Task<string> SendWithRetryAsync(
+        Func<HttpRequestMessage> createRequest,
+        CancellationToken cancellationToken,
+        Action<HttpResponseMessage>? onSuccess = null)
     {
         for (var attempt = 0; ; attempt++)
         {
             using var request = createRequest();
-            using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
-            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-
-            if (attempt < _maxRetries && IsTransient(response))
+            try
             {
-                await _delay(RetryDelay(response, attempt), cancellationToken).ConfigureAwait(false);
-                continue;
-            }
+                using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+                var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
-            EnsureSuccess(response.StatusCode, body);
-            return body;
+                if (attempt < _maxRetries && IsTransient(response))
+                {
+                    await _delay(RetryDelay(response, attempt), cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                EnsureSuccess(response.StatusCode, body);
+                onSuccess?.Invoke(response);
+                return body;
+            }
+            catch (HttpRequestException) when (attempt < _maxRetries)
+            {
+                // Network-level failure (DNS, TCP reset, TLS handshake, timeout) — treat
+                // as transient and retry with exponential backoff. CancellationToken
+                // cancellations are not HttpRequestException so they propagate normally.
+                var networkBackoff = TimeSpan.FromSeconds(Math.Pow(2, attempt));
+                await _delay(networkBackoff < MaxBackoff ? networkBackoff : MaxBackoff, cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
@@ -144,9 +252,21 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
     private static TimeSpan RetryDelay(HttpResponseMessage response, int attempt)
     {
         var retryAfter = response.Headers.RetryAfter;
+
+        // delta-seconds form: Retry-After: 30
         if (retryAfter?.Delta is { } delta && delta > TimeSpan.Zero)
         {
             return delta < MaxBackoff ? delta : MaxBackoff;
+        }
+
+        // HTTP-date form: Retry-After: Wed, 01 Jul 2026 12:00:00 GMT
+        if (retryAfter?.Date is { } date)
+        {
+            var wait = date - DateTimeOffset.UtcNow;
+            if (wait > TimeSpan.Zero)
+            {
+                return wait < MaxBackoff ? wait : MaxBackoff;
+            }
         }
 
         var backoff = TimeSpan.FromSeconds(Math.Pow(2, attempt));
@@ -160,23 +280,72 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
     /// that as a hard failure rather than "no vulnerabilities" — otherwise a failed query
     /// is indistinguishable from a clean result and the audit silently passes.
     /// </remarks>
-    public static IReadOnlyList<Advisory> ParseGraphQl(string body)
+    public static IReadOnlyList<Advisory> ParseGraphQl(string body) => ParseGraphQlPage(body).Advisories;
+
+    /// <summary>Parse a single GraphQL page into its advisories plus the pageInfo cursor state.</summary>
+    private static GraphQlPage ParseGraphQlPage(string body)
     {
-        using var document = JsonDocument.Parse(body);
-        if (document.RootElement.TryGetProperty("errors", out var errors)
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(body);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException("GitHub GraphQL API returned an unparseable response.", ex);
+        }
+
+        using (document)
+        {
+            return ParseGraphQlDocument(document);
+        }
+    }
+
+    private static GraphQlPage ParseGraphQlDocument(JsonDocument document)
+    {
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException(
+                $"GitHub GraphQL API returned an unexpected response (root is {document.RootElement.ValueKind}).");
+        }
+
+        ThrowOnGraphQlErrors(document.RootElement);
+
+        if (!TryGetSecurityVulnerabilities(document.RootElement, out var sv)
+            || !sv.TryGetProperty("nodes", out var nodes) || nodes.ValueKind != JsonValueKind.Array)
+        {
+            return new GraphQlPage([], false, null);
+        }
+
+        var (hasNextPage, endCursor) = ParsePageInfo(sv);
+        return new GraphQlPage(ParseAdvisoryNodes(nodes), hasNextPage, endCursor);
+    }
+
+    private static void ThrowOnGraphQlErrors(JsonElement root)
+    {
+        if (root.TryGetProperty("errors", out var errors)
             && errors.ValueKind == JsonValueKind.Array && errors.GetArrayLength() > 0)
         {
             var messages = string.Join("; ", errors.EnumerateArray().Select(e => GetString(e, "message")));
             throw new InvalidOperationException($"GitHub GraphQL API returned errors: {messages}");
         }
+    }
 
-        if (!document.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object
-            || !data.TryGetProperty("securityVulnerabilities", out var sv)
-            || !sv.TryGetProperty("nodes", out var nodes) || nodes.ValueKind != JsonValueKind.Array)
+    private static bool TryGetSecurityVulnerabilities(JsonElement root, out JsonElement securityVulnerabilities)
+    {
+        securityVulnerabilities = default;
+        if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object
+            || !data.TryGetProperty("securityVulnerabilities", out var sv) || sv.ValueKind != JsonValueKind.Object)
         {
-            return [];
+            return false;
         }
 
+        securityVulnerabilities = sv;
+        return true;
+    }
+
+    private static List<Advisory> ParseAdvisoryNodes(JsonElement nodes)
+    {
         var advisories = new List<Advisory>();
         foreach (var node in nodes.EnumerateArray())
         {
@@ -198,7 +367,29 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
         return advisories;
     }
 
-    /// <summary>Parse a REST advisories response body, keeping only the matching package's range.</summary>
+    /// <summary>Read <c>pageInfo { hasNextPage endCursor }</c>, defaulting to no further pages when absent.</summary>
+    private static (bool HasNextPage, string? EndCursor) ParsePageInfo(JsonElement securityVulnerabilities)
+    {
+        if (!securityVulnerabilities.TryGetProperty("pageInfo", out var pageInfo) || pageInfo.ValueKind != JsonValueKind.Object)
+        {
+            return (false, null);
+        }
+
+        var hasNextPage = pageInfo.TryGetProperty("hasNextPage", out var next) && next.ValueKind == JsonValueKind.True;
+        return (hasNextPage, NullIfEmpty(GetString(pageInfo, "endCursor")));
+    }
+
+    /// <summary>A parsed GraphQL page: its advisories plus the cursor state for fetching the next one.</summary>
+    private readonly record struct GraphQlPage(IReadOnlyList<Advisory> Advisories, bool HasNextPage, string? EndCursor);
+
+    /// <summary>
+    /// Parse a REST advisories response body into advisories, emitting one <see cref="Advisory"/>
+    /// per matching <c>vulnerabilities[]</c> entry. A single GitHub advisory routinely carries
+    /// multiple entries for the same package — one per affected release branch — each with its
+    /// own <c>vulnerable_version_range</c> and <c>first_patched_version</c>. Emitting one Advisory
+    /// per entry matches the GraphQL path's per-node behaviour and avoids false-clean results for
+    /// version ranges beyond the first.
+    /// </summary>
     public static IReadOnlyList<Advisory> ParseRest(string body, string packageId)
     {
         using var document = JsonDocument.Parse(body);
@@ -210,31 +401,28 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
         var advisories = new List<Advisory>();
         foreach (var item in document.RootElement.EnumerateArray())
         {
-            var vuln = FindVulnForPackage(item, packageId);
-            if (vuln is null)
+            foreach (var vuln in FindVulnsForPackage(item, packageId))
             {
-                continue;
+                advisories.Add(new Advisory(
+                    GetString(item, "summary"),
+                    NormalizeSeverity(GetString(item, "severity")),
+                    GetString(vuln, "vulnerable_version_range"),
+                    [GetString(item, "html_url")],
+                    NullIfEmpty(GetString(item, "ghsa_id")),
+                    NullIfEmpty(GetString(item, "cve_id")),
+                    ExtractRestFirstPatched(vuln)));
             }
-
-            advisories.Add(new Advisory(
-                GetString(item, "summary"),
-                NormalizeSeverity(GetString(item, "severity")),
-                GetString(vuln.Value, "vulnerable_version_range"),
-                [GetString(item, "html_url")],
-                NullIfEmpty(GetString(item, "ghsa_id")),
-                NullIfEmpty(GetString(item, "cve_id")),
-                ExtractRestFirstPatched(vuln.Value)));
         }
 
         return advisories;
     }
 
-    /// <summary>The matching package's <c>vulnerabilities[]</c> entry, or null when absent.</summary>
-    private static JsonElement? FindVulnForPackage(JsonElement advisory, string packageId)
+    /// <summary>All <c>vulnerabilities[]</c> entries whose <c>package.name</c> matches.</summary>
+    private static IEnumerable<JsonElement> FindVulnsForPackage(JsonElement advisory, string packageId)
     {
         if (!advisory.TryGetProperty("vulnerabilities", out var vulns) || vulns.ValueKind != JsonValueKind.Array)
         {
-            return null;
+            yield break;
         }
 
         foreach (var vuln in vulns.EnumerateArray())
@@ -242,11 +430,9 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
             if (vuln.TryGetProperty("package", out var pkg)
                 && GetString(pkg, "name").Equals(packageId, StringComparison.OrdinalIgnoreCase))
             {
-                return vuln;
+                yield return vuln;
             }
         }
-
-        return null;
     }
 
     /// <summary>The GraphQL node's <c>firstPatchedVersion.identifier</c>, or null.</summary>

@@ -36,7 +36,7 @@ public sealed class CliOptions
 
     /// <summary>
     /// Explicit path to a <c>.dependably-check</c> config file. When null, the file is
-    /// discovered by walking up from the current directory.
+    /// discovered by walking up from the audited file's directory.
     /// </summary>
     public string? ConfigPath { get; private set; }
 
@@ -66,7 +66,7 @@ public sealed class CliOptions
     /// <summary>
     /// A usage error produced while parsing (e.g. an unknown option), or null when the
     /// arguments parsed cleanly. The first error wins. <see cref="Program"/> routes a
-    /// non-null value through the usage-error path (message to stderr, help, exit 1).
+    /// non-null value through the usage-error path (message to stderr, help, exit 2).
     /// </summary>
     public string? Error { get; private set; }
 
@@ -85,6 +85,10 @@ public sealed class CliOptions
                 {
                     setValue(options, queue.Dequeue());
                 }
+                else
+                {
+                    options.Error ??= $"option '{arg}' requires a value";
+                }
             }
             else if (BoolFlags.TryGetValue(arg, out var setBool))
             {
@@ -99,6 +103,10 @@ public sealed class CliOptions
             else if (options.FilePath is null)
             {
                 options.FilePath = arg;
+            }
+            else
+            {
+                options.Error ??= $"unexpected argument: '{arg}'";
             }
         }
 
