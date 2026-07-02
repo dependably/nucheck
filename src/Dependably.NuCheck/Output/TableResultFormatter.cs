@@ -30,7 +30,16 @@ public sealed class TableResultFormatter : IResultFormatter
     {
         if (result.Vulnerabilities.Count == 0)
         {
-            builder.AppendLine("✓ All packages are secure");
+            if (result.HiddenAdvisoryCount > 0)
+            {
+                builder.AppendLine(
+                    $"0 advisories at or above {result.DisplaySeverityFilter} shown; " +
+                    $"{result.HiddenAdvisoryCount} advisory(ies) hidden by --severity {result.DisplaySeverityFilter}.");
+            }
+            else
+            {
+                builder.AppendLine("✓ All packages are secure");
+            }
             return;
         }
 

@@ -365,4 +365,34 @@ public class FormatterTests
         Assert.Equal("info", finding.GetProperty("severity").GetString());       // gate posture unchanged
         Assert.Equal("critical", finding.GetProperty("extra").GetProperty("advisorySeverity").GetString());
     }
+
+    // ---- #10: TableResultFormatter.AppendPolicyFindings coverage ----------------
+
+    [Fact]
+    public void Table_formatter_renders_policy_findings()
+    {
+        var output = new TableResultFormatter().Format(PolicyResult());
+
+        Assert.Contains("POLICY FINDINGS", output);
+        Assert.Contains("nuget.evil.example", output);
+        Assert.Contains("private", output);
+        // SourceFinding.Severity = "error" maps to "high" on the ladder.
+        Assert.Contains("[high]", output);
+    }
+
+    // ---- #22: JsonResultFormatter explicit exitCode override --------------------
+
+    [Fact]
+    public void Json_explicit_exit_code_overrides_has_failures()
+    {
+        // VulnerableResult() HasFailures == true, but exitCode: 0 is passed explicitly
+        // (simulating a relaxed --fail-on gate that did not trip).
+        var formatter = new JsonResultFormatter("9.9.9", "packages.config", exitCode: 0);
+        using var document = JsonDocument.Parse(formatter.Format(VulnerableResult()));
+
+        // The explicit code wins — JSON reports 0 even though HasFailures is true.
+        Assert.Equal(0, document.RootElement.GetProperty("summary").GetProperty("exitCode").GetInt32());
+        // Findings are still present in the output.
+        Assert.Equal(1, document.RootElement.GetProperty("findings").GetArrayLength());
+    }
 }

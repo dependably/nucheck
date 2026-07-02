@@ -6,6 +6,30 @@ All notable changes to `nucheck` are documented here. The format is based on
 
 ## [Unreleased]
 
+### Security
+
+- **Repo-declared local folder feeds are now fail-closed (BREAKING default-gate change).**
+  The source-trust check previously ignored local folder feeds; it now reports every enabled
+  repo-declared local feed — a relative path, an absolute path, or a `file://` URI — as a
+  policy **error** unless its path is listed in the new `allowedLocalFeeds` allowlist
+  (`common` ∪ `nuget` sections of `.dependably-check`). A committed folder feed can serve
+  tampered `.nupkg` files that a restore honours without touching any registry, so trusting
+  it must be an explicit, reviewed decision. Repos that declare a local feed will now fail CI
+  until the feed is allowlisted.
+- **Hardened `allowedLocalFeeds` against two allowlist bypasses.** (1) Entries prefixed with
+  `./` (or `../`) are anchored to the repo root and matched by canonical absolute path, so
+  `./local-packages` grants only `<repo>/local-packages` and never a same-named feed elsewhere
+  in the tree (bare-name entries keep the looser trailing-segment match). (2) A remote-host
+  `file://server/share/...` URI or a UNC path (`\\server\share\...`) is a network share, not a
+  local folder, and can no longer be satisfied by a plain local-path entry: such a feed is
+  flagged unless an allowlist entry names its **exact** full path. This closes a path where a
+  malicious `nuget.config` edit could redirect an "allowlisted local feed" to an
+  attacker-controlled remote share.
+- **Non-git checkouts surface unaudited parent `nuget.config` (#47).** When no repository
+  boundary (`.git`) can be located, package sources declared in parent directories are out of
+  audit scope even though a restore would still honour them; `nucheck` now emits a visible
+  `info` finding naming those excluded config files instead of silently failing open.
+
 ### Changed
 
 - **Renamed to `Dependably.NuCheck` (command `nucheck`).** The NuGet package id changes

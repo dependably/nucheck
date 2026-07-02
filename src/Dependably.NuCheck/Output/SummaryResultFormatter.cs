@@ -13,7 +13,16 @@ public sealed class SummaryResultFormatter : IResultFormatter
 
         if (result.VulnerabilityCount == 0)
         {
-            builder.AppendLine("✓ All packages are secure - no known vulnerabilities found.");
+            if (result.HiddenAdvisoryCount > 0)
+            {
+                builder.AppendLine(
+                    $"0 advisories at or above {result.DisplaySeverityFilter} shown; " +
+                    $"{result.HiddenAdvisoryCount} advisory(ies) hidden by --severity {result.DisplaySeverityFilter}.");
+            }
+            else
+            {
+                builder.AppendLine("✓ All packages are secure - no known vulnerabilities found.");
+            }
         }
         else
         {
