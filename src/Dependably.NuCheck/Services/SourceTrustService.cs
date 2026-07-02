@@ -64,7 +64,8 @@ public static class SourceTrustService
             .LoadPackageSources()
             .Where(source => repoSourceNames.Contains(source.Name));
 
-        var findings = new List<SourceFinding>(Check(sources, allowedHosts, allowedLocalFeeds ?? []));
+        var findings = new List<SourceFinding>(
+            CheckCore(sources, allowedHosts, allowedLocalFeeds ?? [], repoRoot));
 
         if (!boundaryFound && packageSources is not null)
         {
@@ -94,7 +95,20 @@ public static class SourceTrustService
     public static IReadOnlyList<SourceFinding> Check(
         IEnumerable<PackageSource> sources,
         IReadOnlyList<string> allowedHosts,
-        IReadOnlyList<string> allowedLocalFeeds)
+        IReadOnlyList<string> allowedLocalFeeds) =>
+        CheckCore(sources, allowedHosts, allowedLocalFeeds, repoRoot: null);
+
+    /// <summary>
+    /// Core loop shared by the disk and in-memory overloads. <paramref name="repoRoot"/> is
+    /// the resolved repository boundary (or null when unknown, e.g. the in-memory overloads
+    /// used by tests); it anchors <c>./</c>-prefixed allowlist entries to a single approved
+    /// location instead of a loose trailing-segment match.
+    /// </summary>
+    private static IReadOnlyList<SourceFinding> CheckCore(
+        IEnumerable<PackageSource> sources,
+        IReadOnlyList<string> allowedHosts,
+        IReadOnlyList<string> allowedLocalFeeds,
+        string? repoRoot)
     {
         var trustedHosts = BuildTrustedSet(PublicHosts, allowedHosts);
         var findings = new List<SourceFinding>();
@@ -106,7 +120,7 @@ public static class SourceTrustService
                 continue;
             }
 
-            var finding = Evaluate(source, trustedHosts, allowedLocalFeeds);
+            var finding = Evaluate(source, trustedHosts, allowedLocalFeeds, repoRoot);
             if (finding is not null)
             {
                 findings.Add(finding);
@@ -117,21 +131,31 @@ public static class SourceTrustService
     }
 
     /// <summary>
-    /// Evaluate a single enabled source: http(s) sources are checked against the trusted
-    /// host set; everything else is a local folder feed checked against the allowlist.
-    /// Returns null when the source is trusted.
+    /// Evaluate a single enabled source. http(s) sources are checked against the trusted host
+    /// set. A <c>file://</c> URI with a remote host, or a UNC path (<c>\\server\share</c>), is
+    /// a network share masquerading as a local feed: a plain local-path allowlist entry must
+    /// never satisfy it, so it is trusted only by an exact allowlist match. Everything else is
+    /// a genuine local folder feed checked against the allowlist. Returns null when trusted.
     /// </summary>
     private static SourceFinding? Evaluate(
         PackageSource source,
         HashSet<string> trustedHosts,
-        IReadOnlyList<string> allowedLocalFeeds)
+        IReadOnlyList<string> allowedLocalFeeds,
+        string? repoRoot)
     {
         if (IsRemoteHttpSource(source.Source, out var host))
         {
             return trustedHosts.Contains(host) ? null : UntrustedHostFinding(source, host);
         }
 
-        return IsAllowedLocalFeed(source.Source, allowedLocalFeeds) ? null : LocalFeedFinding(source);
+        if (IsRemoteHostFileSource(source.Source, out var fileHost))
+        {
+            return IsExactlyAllowlisted(source.Source, allowedLocalFeeds)
+                ? null
+                : RemoteFileFeedFinding(source, fileHost);
+        }
+
+        return IsAllowedLocalFeed(source.Source, allowedLocalFeeds, repoRoot) ? null : LocalFeedFinding(source);
     }
 
     private static SourceFinding UntrustedHostFinding(PackageSource source, string host) =>
@@ -146,6 +170,13 @@ public static class SourceTrustService
             $"NuGet source '{source.Name}' ({source.Source}) is a repo-declared local folder feed. "
                 + "A committed local feed can smuggle tampered packages past a restore; add its path "
                 + "to allowedLocalFeeds in .dependably-check to permit it.");
+
+    private static SourceFinding RemoteFileFeedFinding(PackageSource source, string host) =>
+        new(host,
+            source.Name,
+            $"NuGet source '{source.Name}' ({source.Source}) is a remote network feed on host "
+                + $"'{host}' declared as a file/UNC path, not a local folder. A local-path entry in "
+                + "allowedLocalFeeds cannot trust it; list its exact path only if you fully trust that share.");
 
     private static bool IsRemoteHttpSource(string value, out string host)
     {
@@ -164,6 +195,28 @@ public static class SourceTrustService
         return true;
     }
 
+    /// <summary>
+    /// True when <paramref name="value"/> is a file feed pointing at a REMOTE machine: a
+    /// <c>file://server/share/...</c> URI or a UNC path (<c>\\server\share\...</c> or
+    /// <c>//server/share/...</c>). Such sources parse as a <c>file</c> URI with a non-empty,
+    /// non-loopback host. Purely local feeds (<c>file:///opt/x</c>, <c>/opt/x</c>,
+    /// <c>C:\x</c>) have an empty/loopback host and return false.
+    /// </summary>
+    private static bool IsRemoteHostFileSource(string value, out string host)
+    {
+        host = string.Empty;
+        if (Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            && uri.IsFile
+            && !uri.IsLoopback
+            && !string.IsNullOrEmpty(uri.Host))
+        {
+            host = uri.Host;
+            return true;
+        }
+
+        return false;
+    }
+
     private static HashSet<string> BuildTrustedSet(IEnumerable<string> baseline, IEnumerable<string> extra)
     {
         var trusted = new HashSet<string>(baseline, StringComparer.OrdinalIgnoreCase);
@@ -178,17 +231,96 @@ public static class SourceTrustService
         return trusted;
     }
 
-    private static bool IsAllowedLocalFeed(string sourcePath, IReadOnlyList<string> allowedFeeds)
+    private static bool IsAllowedLocalFeed(string sourcePath, IReadOnlyList<string> allowedFeeds, string? repoRoot)
     {
         foreach (var entry in allowedFeeds)
         {
-            if (!string.IsNullOrWhiteSpace(entry) && LocalFeedPathMatches(sourcePath, entry))
+            if (string.IsNullOrWhiteSpace(entry))
+            {
+                continue;
+            }
+
+            var matched = IsRepoAnchoredEntry(entry)
+                ? repoRoot is not null && RepoAnchoredMatches(sourcePath, entry, repoRoot)
+                : LocalFeedPathMatches(sourcePath, entry);
+
+            if (matched)
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// True when <paramref name="sourcePath"/> equals an allowlist entry exactly, comparing
+    /// case-insensitively after normalising separator style and a trailing separator. Used for
+    /// remote-host file/UNC sources, which a loose trailing-segment match must never trust.
+    /// </summary>
+    private static bool IsExactlyAllowlisted(string sourcePath, IReadOnlyList<string> allowedFeeds)
+    {
+        var normalizedSource = NormalizeForExactMatch(sourcePath);
+        foreach (var entry in allowedFeeds)
+        {
+            if (!string.IsNullOrWhiteSpace(entry)
+                && string.Equals(NormalizeForExactMatch(entry), normalizedSource, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string NormalizeForExactMatch(string value) =>
+        value.Replace('\\', '/').TrimEnd('/');
+
+    /// <summary>
+    /// True when the allowlist entry is explicitly anchored to the repository root — it begins
+    /// with a current/parent-directory segment (<c>./</c>, <c>.\</c>, <c>../</c>, <c>..\</c>).
+    /// Anchored entries are resolved against the repo root and matched by canonical absolute
+    /// path, so they grant only the maintainer-approved location and never a same-named folder
+    /// elsewhere on disk. Bare-name entries keep the documented trailing-segment behaviour.
+    /// </summary>
+    private static bool IsRepoAnchoredEntry(string entry) =>
+        entry.StartsWith("./", StringComparison.Ordinal)
+            || entry.StartsWith(".\\", StringComparison.Ordinal)
+            || entry.StartsWith("../", StringComparison.Ordinal)
+            || entry.StartsWith("..\\", StringComparison.Ordinal);
+
+    /// <summary>
+    /// True when <paramref name="sourcePath"/> resolves to the exact directory named by a
+    /// repo-anchored <paramref name="entry"/> (resolved against <paramref name="repoRoot"/>),
+    /// comparing canonical absolute paths.
+    /// </summary>
+    private static bool RepoAnchoredMatches(string sourcePath, string entry, string repoRoot)
+    {
+        var resolvedSource = CanonicalLocalPath(sourcePath);
+        if (resolvedSource is null)
+        {
+            return false;
+        }
+
+        var resolvedEntry = Path.GetFullPath(Path.Combine(repoRoot, entry));
+        return string.Equals(
+            resolvedSource.TrimEnd('/', '\\'),
+            resolvedEntry.TrimEnd('/', '\\'),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Canonical absolute filesystem path for a local source, or null when the source is not a
+    /// local path. Remote-host file/UNC sources are filtered out before this is reached.
+    /// </summary>
+    private static string? CanonicalLocalPath(string source)
+    {
+        if (Uri.TryCreate(source, UriKind.Absolute, out var uri))
+        {
+            return uri.IsFile ? Path.GetFullPath(uri.LocalPath) : null;
+        }
+
+        return Path.GetFullPath(source);
     }
 
     /// <summary>

@@ -316,6 +316,93 @@ public class SourceTrustServiceTests : IDisposable
         Assert.Empty(SourceTrustService.Check(sources, [], ["local-feed"]));
     }
 
+    [Fact]
+    public void Allowlist_local_path_entry_does_not_match_remote_host_file_uri()
+    {
+        // Regression for the #33 allowlist bypass: a file:// URI whose HOST names a remote
+        // machine is a network share, not a local folder. A plain local-path allowlist entry
+        // ("feeds") must NOT trust it, even though the trailing path segment happens to match.
+        var sources = new[]
+        {
+            new PackageSource("file://server/share/feeds", "evil"),
+        };
+
+        var finding = Assert.Single(SourceTrustService.Check(sources, [], ["feeds"]));
+        Assert.Equal("evil", finding.Source);
+        Assert.Equal("server", finding.Host);
+        Assert.Equal("error", finding.Severity);
+    }
+
+    [Fact]
+    public void Allowlist_local_path_entry_does_not_match_unc_path()
+    {
+        // Regression for the #33 allowlist bypass: a UNC path (\\server\share\feeds) points at
+        // a remote share. A bare local-path allowlist entry ("feeds") must NOT trust it.
+        var sources = new[]
+        {
+            new PackageSource(@"\\server\share\feeds", "evil"),
+        };
+
+        var finding = Assert.Single(SourceTrustService.Check(sources, [], ["feeds"]));
+        Assert.Equal("evil", finding.Source);
+        Assert.Equal("server", finding.Host);
+        Assert.Equal("error", finding.Severity);
+    }
+
+    [Fact]
+    public void Exact_allowlist_entry_permits_remote_host_file_uri()
+    {
+        // The escape hatch: a remote-host file feed is trusted only by an EXACT allowlist
+        // match (separator/trailing-slash normalised), never by a trailing-segment match.
+        var sources = new[]
+        {
+            new PackageSource("file://server/share/feeds", "mirror"),
+        };
+
+        Assert.Empty(SourceTrustService.Check(sources, [], ["file://server/share/feeds"]));
+    }
+
+    [Fact]
+    public void Anchored_relative_allowlist_entry_does_not_match_same_named_feed_elsewhere()
+    {
+        // Regression for the #33 unanchored-entry bypass: "./local-packages" must resolve
+        // against the repo root and grant ONLY <repo>/local-packages, not a same-named feed
+        // sitting elsewhere in the tree (here <repo>/evil/local-packages).
+        var dir = NewRepo("""
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources>
+            <clear />
+            <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+            <add key="localfeed" value="./evil/local-packages" />
+          </packageSources>
+        </configuration>
+        """);
+
+        var finding = Assert.Single(SourceTrustService.Check(dir, [], ["./local-packages"]));
+        Assert.Equal("localfeed", finding.Source);
+        Assert.Equal("error", finding.Severity);
+    }
+
+    [Fact]
+    public void Anchored_relative_allowlist_entry_matches_approved_location()
+    {
+        // The approved location DOES pass: "./local-packages" resolved against the repo root
+        // equals the feed's resolved absolute path.
+        var dir = NewRepo("""
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources>
+            <clear />
+            <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+            <add key="localfeed" value="./local-packages" />
+          </packageSources>
+        </configuration>
+        """);
+
+        Assert.Empty(SourceTrustService.Check(dir, [], ["./local-packages"]));
+    }
+
     public void Dispose()
     {
         GC.SuppressFinalize(this);
