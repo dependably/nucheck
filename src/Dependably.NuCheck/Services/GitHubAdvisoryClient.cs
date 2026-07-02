@@ -318,7 +318,14 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
     /// <summary>A parsed GraphQL page: its advisories plus the cursor state for fetching the next one.</summary>
     private readonly record struct GraphQlPage(IReadOnlyList<Advisory> Advisories, bool HasNextPage, string? EndCursor);
 
-    /// <summary>Parse a REST advisories response body, keeping only the matching package's range.</summary>
+    /// <summary>
+    /// Parse a REST advisories response body into advisories, emitting one <see cref="Advisory"/>
+    /// per matching <c>vulnerabilities[]</c> entry. A single GitHub advisory routinely carries
+    /// multiple entries for the same package — one per affected release branch — each with its
+    /// own <c>vulnerable_version_range</c> and <c>first_patched_version</c>. Emitting one Advisory
+    /// per entry matches the GraphQL path's per-node behaviour and avoids false-clean results for
+    /// version ranges beyond the first.
+    /// </summary>
     public static IReadOnlyList<Advisory> ParseRest(string body, string packageId)
     {
         using var document = JsonDocument.Parse(body);
@@ -330,31 +337,28 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
         var advisories = new List<Advisory>();
         foreach (var item in document.RootElement.EnumerateArray())
         {
-            var vuln = FindVulnForPackage(item, packageId);
-            if (vuln is null)
+            foreach (var vuln in FindVulnsForPackage(item, packageId))
             {
-                continue;
+                advisories.Add(new Advisory(
+                    GetString(item, "summary"),
+                    NormalizeSeverity(GetString(item, "severity")),
+                    GetString(vuln, "vulnerable_version_range"),
+                    [GetString(item, "html_url")],
+                    NullIfEmpty(GetString(item, "ghsa_id")),
+                    NullIfEmpty(GetString(item, "cve_id")),
+                    ExtractRestFirstPatched(vuln)));
             }
-
-            advisories.Add(new Advisory(
-                GetString(item, "summary"),
-                NormalizeSeverity(GetString(item, "severity")),
-                GetString(vuln.Value, "vulnerable_version_range"),
-                [GetString(item, "html_url")],
-                NullIfEmpty(GetString(item, "ghsa_id")),
-                NullIfEmpty(GetString(item, "cve_id")),
-                ExtractRestFirstPatched(vuln.Value)));
         }
 
         return advisories;
     }
 
-    /// <summary>The matching package's <c>vulnerabilities[]</c> entry, or null when absent.</summary>
-    private static JsonElement? FindVulnForPackage(JsonElement advisory, string packageId)
+    /// <summary>All <c>vulnerabilities[]</c> entries whose <c>package.name</c> matches.</summary>
+    private static IEnumerable<JsonElement> FindVulnsForPackage(JsonElement advisory, string packageId)
     {
         if (!advisory.TryGetProperty("vulnerabilities", out var vulns) || vulns.ValueKind != JsonValueKind.Array)
         {
-            return null;
+            yield break;
         }
 
         foreach (var vuln in vulns.EnumerateArray())
@@ -362,11 +366,9 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
             if (vuln.TryGetProperty("package", out var pkg)
                 && GetString(pkg, "name").Equals(packageId, StringComparison.OrdinalIgnoreCase))
             {
-                return vuln;
+                yield return vuln;
             }
         }
-
-        return null;
     }
 
     /// <summary>The GraphQL node's <c>firstPatchedVersion.identifier</c>, or null.</summary>

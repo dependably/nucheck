@@ -423,6 +423,38 @@ public class GitHubAdvisoryClientTests
         Assert.Empty(GitHubAdvisoryClient.ParseRest(body, "Newtonsoft.Json"));
     }
 
+    // #28 — REST parser emits one Advisory per vulnerabilities[] entry
+
+    [Fact]
+    public void ParseRest_emits_one_advisory_per_matching_vulnerabilities_entry()
+    {
+        // Old code called FindVulnForPackage which returned on the FIRST matching entry,
+        // dropping additional ranges for the same package within the same advisory.
+        const string body = """
+[{"summary":"Multi-range","severity":"high","html_url":"https://example/ghsa","ghsa_id":"GHSA-multi","cve_id":null,
+  "vulnerabilities":[
+    {"package":{"ecosystem":"nuget","name":"Pkg"},"vulnerable_version_range":">= 2.0, < 2.5","first_patched_version":"2.5.0"},
+    {"package":{"ecosystem":"nuget","name":"Pkg"},"vulnerable_version_range":">= 3.0, < 3.2","first_patched_version":"3.2.0"},
+    {"package":{"ecosystem":"nuget","name":"Other"},"vulnerable_version_range":">= 1.0, < 1.1","first_patched_version":"1.1.0"}
+  ]}]
+""";
+        var advisories = GitHubAdvisoryClient.ParseRest(body, "Pkg");
+
+        // Both ranges for "Pkg" must appear; the "Other" entry must be excluded.
+        Assert.Equal(2, advisories.Count);
+        Assert.Contains(advisories, a => a.VulnerableVersionRange == ">= 2.0, < 2.5" && a.FixedVersion == "2.5.0");
+        Assert.Contains(advisories, a => a.VulnerableVersionRange == ">= 3.0, < 3.2" && a.FixedVersion == "3.2.0");
+        Assert.All(advisories, a => Assert.Equal("GHSA-multi", a.AdvisoryId));
+    }
+
+    [Fact]
+    public void ParseRest_single_matching_entry_still_produces_one_advisory()
+    {
+        // Regression guard: the refactor must not break the existing one-range path.
+        var advisories = GitHubAdvisoryClient.ParseRest(RestBody, "Newtonsoft.Json");
+        Assert.Single(advisories);
+    }
+
     // #38 — ParseGraphQl safe on non-object 2xx body
 
     [Fact]
