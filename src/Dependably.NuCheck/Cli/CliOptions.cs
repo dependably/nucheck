@@ -9,7 +9,7 @@ public sealed class CliOptions
     private static readonly Dictionary<string, Action<CliOptions, string>> ValueFlags = new(StringComparer.Ordinal)
     {
         ["--format"] = (o, v) => o.Format = v,
-        ["--severity"] = (o, v) => o.Severity = v,
+        ["--severity"] = (o, v) => o.ApplySeverity(v),
         ["--source"] = (o, v) => o.Source = v,
         ["--config"] = (o, v) => o.ConfigPath = v,
         ["--fail-on"] = (o, v) => o.ApplyFailOn(v),
@@ -36,7 +36,7 @@ public sealed class CliOptions
 
     /// <summary>
     /// Explicit path to a <c>.dependably-check</c> config file. When null, the file is
-    /// discovered by walking up from the current directory.
+    /// discovered by walking up from the audited file's directory.
     /// </summary>
     public string? ConfigPath { get; private set; }
 
@@ -66,7 +66,7 @@ public sealed class CliOptions
     /// <summary>
     /// A usage error produced while parsing (e.g. an unknown option), or null when the
     /// arguments parsed cleanly. The first error wins. <see cref="Program"/> routes a
-    /// non-null value through the usage-error path (message to stderr, help, exit 1).
+    /// non-null value through the usage-error path (message to stderr, help, exit 2).
     /// </summary>
     public string? Error { get; private set; }
 
@@ -85,6 +85,10 @@ public sealed class CliOptions
                 {
                     setValue(options, queue.Dequeue());
                 }
+                else
+                {
+                    options.Error ??= $"option '{arg}' requires a value";
+                }
             }
             else if (BoolFlags.TryGetValue(arg, out var setBool))
             {
@@ -99,6 +103,10 @@ public sealed class CliOptions
             else if (options.FilePath is null)
             {
                 options.FilePath = arg;
+            }
+            else
+            {
+                options.Error ??= $"unexpected argument: '{arg}'";
             }
         }
 
@@ -150,5 +158,24 @@ public sealed class CliOptions
                 Error ??= $"unknown --fail-on key '{key}': use severity or count";
                 break;
         }
+    }
+
+    /// <summary>
+    /// Validate and store the <c>--severity</c> display-filter level. Accepts the same
+    /// five ladder words as <c>--fail-on severity=&lt;level&gt;</c> (plus the alias
+    /// <c>medium</c>→<c>moderate</c>). An unrecognised word is a usage error that routes
+    /// through the exit-2 path; unlike <see cref="Models.Severity.Normalize"/> this does
+    /// NOT swallow a typo into <c>info</c>.
+    /// </summary>
+    private void ApplySeverity(string raw)
+    {
+        var level = Models.Severity.ParseLevel(raw);
+        if (level is null)
+        {
+            Error ??= $"invalid --severity '{raw}': use critical, high, moderate, low, or info";
+            return;
+        }
+
+        Severity = level;
     }
 }

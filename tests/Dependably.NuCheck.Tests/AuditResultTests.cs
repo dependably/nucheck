@@ -173,6 +173,149 @@ public class AuditResultTests
     }
 
     [Fact]
+    public void GateTrips_count_only_still_gates_a_policy_error()
+    {
+        // Regression: a count-only gate (no severity rule) must NOT silently drop the
+        // untrusted-source policy check. count=0 with zero vulnerabilities but a policy
+        // error must still trip (exit 1) — the supply-chain gate stays live.
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities = [],
+            PolicyFindings = [new SourceFinding("evil.example", "s", "untrusted")],
+        };
+
+        Assert.Equal(0, result.VulnerabilityCount);
+        Assert.Equal(1, result.PolicyErrorCount);
+        Assert.True(result.GateTrips(null, 0));
+        // A higher count threshold does not rescue a policy error either.
+        Assert.True(result.GateTrips(null, 99));
+    }
+
+    [Fact]
+    public void GateTrips_count_only_mixed_partial_failure_gates_on_policy_even_when_vuln_count_passes()
+    {
+        // Mixed batch: the vulnerability half PASSES the count threshold (2 advisories, count=5),
+        // but a policy error is present. With count-only gating the policy half must still trip,
+        // so the overall gate fails rather than exiting 0 on the untrusted source.
+        var result = new AuditResult
+        {
+            TotalPackages = 2,
+            Vulnerabilities = Build().Vulnerabilities, // 2 advisories
+            PolicyFindings = [new SourceFinding("evil.example", "s", "untrusted")],
+        };
+
+        Assert.Equal(2, result.VulnerabilityCount);
+        Assert.False(result.VulnerabilityCount > 5); // vuln half alone would not trip
+        Assert.True(result.GateTrips(null, 5));       // ... but the policy error does
+    }
+
+    [Fact]
+    public void GateTrips_count_only_clean_result_does_not_trip()
+    {
+        // No vulnerabilities under the threshold AND no policy errors: still exit 0.
+        var clean = new AuditResult { TotalPackages = 1, Vulnerabilities = [], PolicyFindings = [] };
+        Assert.False(clean.GateTrips(null, 0));
+    }
+
+    [Fact]
+    public void GateTrips_severity_rule_still_governs_policy_errors_symmetrically()
+    {
+        // An explicit severity rule remains the ONLY way to relax a policy error: a policy
+        // error maps to high, so severity=critical deliberately does not trip, but a
+        // co-present count rule does not resurrect it via the always-on path either.
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities = [],
+            PolicyFindings = [new SourceFinding("h", "s", "m")],
+        };
+
+        Assert.False(result.GateTrips("critical", 5)); // count passes, severity relaxes policy
+        Assert.True(result.GateTrips("high", 5));       // severity=high gates the policy error
+    }
+
+    // ---- FilterBySeverity at-or-above semantics (#1) --------------------------------
+
+    [Fact]
+    public void FilterBySeverity_includes_higher_severity_findings()
+    {
+        // Bug: --severity high used exact string match, hiding critical findings while
+        // GateTrips still tripped → output said "all secure" but exit code was 1.
+        // Fix: at-or-above rank comparison so --severity high includes critical too.
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities =
+            [
+                new PackageVulnerability("Pkg", "1.0.0",
+                [
+                    new Advisory("Critical issue", "critical", ">= 1.0", []),
+                    new Advisory("High issue", "high", ">= 1.0", []),
+                    new Advisory("Moderate issue", "moderate", ">= 1.0", []),
+                ]),
+            ],
+        };
+
+        var filtered = result.FilterBySeverity("high");
+
+        var vulnerability = Assert.Single(filtered.Vulnerabilities);
+        Assert.Equal(2, vulnerability.Advisories.Count); // critical AND high
+        Assert.Contains(vulnerability.Advisories, a => a.Severity == "critical");
+        Assert.Contains(vulnerability.Advisories, a => a.Severity == "high");
+        Assert.DoesNotContain(vulnerability.Advisories, a => a.Severity == "moderate");
+    }
+
+    [Fact]
+    public void FilterBySeverity_moderate_excludes_low_includes_high_and_critical()
+    {
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities =
+            [
+                new PackageVulnerability("Pkg", "1.0.0",
+                [
+                    new Advisory("Critical issue", "critical", ">= 1.0", []),
+                    new Advisory("Moderate issue", "moderate", ">= 1.0", []),
+                    new Advisory("Low issue", "low", ">= 1.0", []),
+                ]),
+            ],
+        };
+
+        var filtered = result.FilterBySeverity("moderate");
+
+        var vulnerability = Assert.Single(filtered.Vulnerabilities);
+        Assert.Equal(2, vulnerability.Advisories.Count);
+        Assert.DoesNotContain(vulnerability.Advisories, a => a.Severity == "low");
+    }
+
+    [Fact]
+    public void FilterBySeverity_normalises_raw_advisory_word_before_rank_comparison()
+    {
+        // "medium" is a raw alias for "moderate" on the ladder; filtering by "moderate"
+        // must keep a "medium" advisory because Rank(Normalize("medium")) == Rank("moderate").
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities =
+            [
+                new PackageVulnerability("Pkg", "1.0.0",
+                [
+                    new Advisory("Medium issue", "medium", ">= 1.0", []),
+                    new Advisory("Low issue", "low", ">= 1.0", []),
+                ]),
+            ],
+        };
+
+        var filtered = result.FilterBySeverity("moderate");
+
+        var vulnerability = Assert.Single(filtered.Vulnerabilities);
+        Assert.Single(vulnerability.Advisories);
+        Assert.Equal("medium", vulnerability.Advisories[0].Severity); // raw word preserved
+    }
+
+    [Fact]
     public void FilterBySeverity_preserves_unused_packages()
     {
         var result = new AuditResult

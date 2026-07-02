@@ -208,9 +208,9 @@ Arguments:
 Options:
   --source <name>            Advisory source: github (default), osv
   --format <type>            Output format: human, table, json (default: human)
-  --severity <level>         Filter by severity: critical, high, moderate, low
+  --severity <level>         Filter by severity: critical, high, moderate, low, info
   --config <path>            Path to a .dependably-check config file. When omitted, the
-                             file is discovered by walking up from the current directory.
+                             file is discovered by walking up from the audited file's directory.
   --fail-on <key>=<value>    CI gate (repeatable). Without it, ANY vulnerability or policy
                              error fails the build (exit 1) — the default. Each rule below
                              REPLACES that default; the build fails if ANY rule trips:
@@ -219,7 +219,12 @@ Options:
                                      (relaxes/raises the gate, e.g. severity=high ignores
                                      moderate/low vulns for gating — they still print).
                                count=<N>
-                                     fail when the vulnerability count exceeds N.
+                                     fail when the vulnerability count exceeds N. This rule
+                                     governs vulnerabilities only; policy errors (see below)
+                                     still gate, so count=0 fails on any vulnerability OR any
+                                     untrusted source.
+                             Policy errors are only relaxed by an explicit severity rule
+                             (which governs policy findings too, e.g. severity=critical).
                              Distinct from --severity, which only filters what is printed.
   --rest                     Use the GitHub REST API instead of GraphQL (github source)
   --verbose, -v              Write progress to stderr
