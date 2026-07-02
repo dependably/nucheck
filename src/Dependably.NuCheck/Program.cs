@@ -107,6 +107,7 @@ public static class Program
                 Vulnerabilities = audit.Vulnerabilities,
                 PolicyFindings = policyFindings,
                 UnusedPackages = unusedPackages,
+                UnverifiableAdvisories = audit.UnverifiableAdvisories,
             };
 
             // The CI gate (--fail-on, or the default any-vuln-or-policy rule) always

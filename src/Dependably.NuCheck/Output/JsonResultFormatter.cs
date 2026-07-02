@@ -40,6 +40,7 @@ public sealed class JsonResultFormatter : IResultFormatter
         findings.AddRange(VulnerabilityFindings(result));
         findings.AddRange(PolicyFindings(result));
         findings.AddRange(UnusedFindings(result));
+        findings.AddRange(UnverifiableRangeFindings(result));
 
         // The JSON is only emitted on the success path. Program passes the gate's real exit
         // code; when absent we fall back to the default rule (1 on any vuln or policy error).
@@ -144,6 +145,30 @@ public sealed class JsonResultFormatter : IResultFormatter
                 extra = new
                 {
                     package = unused.Id,
+                },
+            });
+        }
+    }
+
+    // Unverifiable-range findings (advisory only — range could not be parsed, always `info`).
+    private static IEnumerable<(string Severity, object Finding)> UnverifiableRangeFindings(AuditResult result)
+    {
+        foreach (var finding in result.UnverifiableAdvisories)
+        {
+            yield return (Severity.Info, new
+            {
+                severity = Severity.Info,
+                ruleId = "unverifiable-range",
+                category = "unverifiable-range",
+                message = $"Advisory range '{finding.VulnerableVersionRange}' for '{finding.PackageId}' could not be parsed — investigate manually.",
+                location = (object?)null,
+                remediation = (string?)null,
+                extra = new
+                {
+                    package = finding.PackageId,
+                    vulnerableRange = finding.VulnerableVersionRange,
+                    advisoryId = finding.AdvisoryId,
+                    advisorySeverity = finding.AdvisorySeverity,
                 },
             });
         }

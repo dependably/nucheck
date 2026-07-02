@@ -302,6 +302,40 @@ public class ProgramTests : IDisposable
     }
 
     [Fact]
+    public void Unparseable_advisory_range_surfaces_unverifiable_warning_in_cli_output()
+    {
+        // Regression for #27 (composition): AuditService collects UnverifiableAdvisories,
+        // but Program must wire them into the composed AuditResult.  Without that copy the
+        // formatter receives an empty list and the warning is silently invisible end-to-end.
+        var path = WritePackagesConfig("Boom.Pkg", "1.5.0");
+        // "~> 1.0.0" is a Bundler-style tilde range the parser does not understand.
+        var source = Source(("Boom.Pkg", new Advisory("Bad range advisory", "high", "~> 1.0.0", ["u"])));
+
+        var (exit, output, _) = Run([path, "--format", "json"], _ => source);
+
+        // Unverifiable ranges are advisory only — they never fail the build.
+        Assert.Equal(0, exit);
+        // The finding must be visible in the output (the whole point of #27).
+        Assert.Contains("unverifiable-range", output);
+        Assert.Contains("Boom.Pkg", output);
+    }
+
+    [Fact]
+    public void Severity_filter_does_not_suppress_unverifiable_advisory_warnings()
+    {
+        // Regression for #27 (FilterBySeverity): --severity is a display filter that narrows
+        // vulnerability findings, but must NOT drop UnverifiableAdvisories from the result
+        // passed to the formatter.
+        var path = WritePackagesConfig("Boom.Pkg", "1.5.0");
+        var source = Source(("Boom.Pkg", new Advisory("Bad range advisory", "high", "~> 1.0.0", ["u"])));
+
+        var (exit, output, _) = Run([path, "--format", "json", "--severity", "high"], _ => source);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("unverifiable-range", output);
+    }
+
+    [Fact]
     public void File_error_is_operational_error_exits_two()
     {
         // A missing/unreadable manifest is an operational error -> exit 2 (was 1).

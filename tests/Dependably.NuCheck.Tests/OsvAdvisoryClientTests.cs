@@ -113,7 +113,30 @@ public class OsvAdvisoryClientTests
         var advisories = OsvAdvisoryClient.ParseOsv(body, "P");
         Assert.Equal("moderate", advisories[0].Severity);
         Assert.Equal("unknown", advisories[1].Severity);
-        Assert.Equal(">= 0.0.0", advisories[0].VulnerableVersionRange); // open range matches everything
+        // ">= 0.0.0-0" uses the minimum NuGet prerelease label (numeric 0 sorts below all
+        // alphanumeric labels) so it covers every publishable version, unlike ">= 0.0.0"
+        // which excludes 0.0.0-prerelease packages.
+        Assert.Equal(">= 0.0.0-0", advisories[0].VulnerableVersionRange);
+    }
+
+    [Fact]
+    public void ParseOsv_all_versions_sentinel_uses_unbounded_interval_not_0_0_0_floor()
+    {
+        // Regression for #37: an OSV interval with introduced:"0" and no fixed event used to
+        // emit ">= 0.0.0" which excludes 0.0.0-prerelease packages (they sort below 0.0.0 in
+        // NuGet SemVer). The sentinel now emits ">= 0.0.0-0" — the minimum NuGet prerelease
+        // label (numeric 0 sorts below all alphanumeric labels) — so any installed version,
+        // including 0.0.0-alpha, is matched.
+        const string body = """
+{"vulns":[{"id":"X","affected":[{"package":{"ecosystem":"NuGet","name":"P"},
+  "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"0"}]}]}]}]}
+""";
+        var advisory = Assert.Single(OsvAdvisoryClient.ParseOsv(body, "P"));
+
+        Assert.Equal(">= 0.0.0-0", advisory.VulnerableVersionRange);
+        // Confirm the range actually matches a 0.0.0 prerelease via VulnerabilityMatcher.
+        Assert.True(VulnerabilityMatcher.IsVulnerable(NuGetVersion.Parse("0.0.0-alpha"), advisory.VulnerableVersionRange));
+        Assert.True(VulnerabilityMatcher.IsVulnerable(NuGetVersion.Parse("9.9.9"), advisory.VulnerableVersionRange));
     }
 
     [Fact]
@@ -372,13 +395,15 @@ public class OsvAdvisoryClientTests
         // nothing, the range produces no intervals, the vuln is silently dropped — a false
         // negative, the worst possible outcome for a vulnerability scanner.
         // Fixed code: non-empty events array + zero successfully-parsed events → emit the
-        // conservative ">= 0.0.0" sentinel so the package is flagged rather than cleared.
+        // conservative all-versions sentinel so the package is flagged rather than cleared.
+        // #37 lowered that sentinel to ">= 0.0.0-0" (the lowest SemVer2 version) so it also
+        // matches prereleases of 0.0.0.
         const string body = """
 {"vulns":[{"id":"GHSA-aaaa-bbbb-0000","affected":[{"package":{"ecosystem":"NuGet","name":"P"},
   "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":42}]}]}]}]}
 """;
         var advisory = Assert.Single(OsvAdvisoryClient.ParseOsv(body, "P"));
-        Assert.Equal(">= 0.0.0", advisory.VulnerableVersionRange);
+        Assert.Equal(">= 0.0.0-0", advisory.VulnerableVersionRange);
     }
 
     // --- Ticket 23: exponential backoff + Retry-After support ----------------------------

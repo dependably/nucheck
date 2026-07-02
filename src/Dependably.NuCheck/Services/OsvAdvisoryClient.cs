@@ -371,8 +371,14 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
             parts.Add($"{(upperInclusive ? "<=" : "<")} {upper}");
         }
 
-        // No bounds at all means every version is affected.
-        return parts.Count == 0 ? ">= 0.0.0" : string.Join(", ", parts);
+        // No bounds at all means every version is affected. Use ">= 0.0.0-0" rather than
+        // ">= 0.0.0": in NuGet SemVer 2.0, prerelease identifiers sort below their release
+        // (0.0.0-alpha < 0.0.0), so a min-inclusive floor at 0.0.0 misses 0.0.0-prerelease
+        // packages.  "0.0.0-0" carries the minimum numeric prerelease label (numeric 0 sorts
+        // below all alphanumeric labels), making it the lowest valid NuGet version; "alpha" and
+        // any other alphanumeric label sort above it, so ">= 0.0.0-0" genuinely covers every
+        // publishable version.
+        return parts.Count == 0 ? ">= 0.0.0-0" : string.Join(", ", parts);
     }
 
     private static string BuildSummary(string id, JsonElement vuln)
