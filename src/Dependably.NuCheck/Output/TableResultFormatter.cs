@@ -16,11 +16,13 @@ public sealed class TableResultFormatter : IResultFormatter
         builder.AppendLine($"Advisories Found:       {result.VulnerabilityCount}");
         builder.AppendLine($"Policy Findings:        {result.PolicyFindings.Count}");
         builder.AppendLine($"Possibly Unused:        {result.UnusedPackages.Count} (heuristic, advisory only)");
+        builder.AppendLine($"Unverifiable Ranges:    {result.UnverifiableAdvisories.Count} (range not parsed — investigate)");
         builder.AppendLine("-------------------");
 
         AppendVulnerabilities(builder, result);
         AppendPolicyFindings(builder, result);
         AppendUnusedPackages(builder, result);
+        AppendUnverifiableAdvisories(builder, result);
         return builder.ToString();
     }
 
@@ -106,6 +108,22 @@ public sealed class TableResultFormatter : IResultFormatter
         foreach (var finding in result.UnusedPackages)
         {
             builder.AppendLine($"   {finding.Id}: {finding.Message}");
+        }
+    }
+
+    private static void AppendUnverifiableAdvisories(StringBuilder builder, AuditResult result)
+    {
+        if (result.UnverifiableAdvisories.Count == 0)
+        {
+            return;
+        }
+
+        builder.AppendLine("-------------------");
+        builder.AppendLine("UNVERIFIABLE ADVISORY RANGES (investigate manually — range could not be parsed)");
+        foreach (var finding in result.UnverifiableAdvisories)
+        {
+            var id = string.IsNullOrEmpty(finding.AdvisoryId) ? string.Empty : $" [{finding.AdvisoryId}]";
+            builder.AppendLine($"   {finding.PackageId}{id}: {finding.VulnerableVersionRange}");
         }
     }
 }

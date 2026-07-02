@@ -25,6 +25,18 @@ public sealed record SourceFinding(
 /// </summary>
 public sealed record UnusedPackageFinding(string Id, string Message);
 
+/// <summary>
+/// A warning raised when an advisory's <c>VulnerableVersionRange</c> cannot be parsed by
+/// <see cref="Dependably.NuCheck.Services.VulnerabilityMatcher"/>. The tool cannot confirm
+/// or deny whether the installed version is affected; the advisory is surfaced here rather
+/// than silently dropped. Never causes the process to exit non-zero, but should be
+/// investigated manually.
+/// </summary>
+public sealed record UnverifiableAdvisoryFinding(
+    string PackageId,
+    string VulnerableVersionRange,
+    string? AdvisoryId = null);
+
 /// <summary>The outcome of auditing a packages file.</summary>
 public sealed class AuditResult
 {
@@ -40,6 +52,14 @@ public sealed class AuditResult
     /// These never cause the process to exit non-zero. Empty by default.
     /// </summary>
     public IReadOnlyList<UnusedPackageFinding> UnusedPackages { get; init; } = [];
+
+    /// <summary>
+    /// Advisories whose version range could not be parsed by
+    /// <see cref="Dependably.NuCheck.Services.VulnerabilityMatcher"/>.
+    /// These may represent vulnerabilities that could not be confirmed or denied; they
+    /// should be investigated manually. Never cause the process to exit non-zero. Empty by default.
+    /// </summary>
+    public IReadOnlyList<UnverifiableAdvisoryFinding> UnverifiableAdvisories { get; init; } = [];
 
     /// <summary>Total number of advisories across all vulnerable packages.</summary>
     public int VulnerabilityCount => Vulnerabilities.Sum(v => v.Advisories.Count);
