@@ -146,8 +146,10 @@ public class SourceTrustServiceTests : IDisposable
     }
 
     [Fact]
-    public void Local_folder_source_is_ignored()
+    public void Local_folder_source_not_allowlisted_produces_one_finding()
     {
+        // Regression for #33: a repo-declared local folder feed is a supply-chain smuggling
+        // vector, so it must be flagged (fail-closed), not silently skipped.
         var localPath = Path.Combine(Path.GetTempPath(), "local-feed");
         var sources = new[]
         {
@@ -155,7 +157,112 @@ public class SourceTrustServiceTests : IDisposable
             new PackageSource("https://api.nuget.org/v3/index.json", "nuget.org"),
         };
 
-        Assert.Empty(SourceTrustService.Check(sources, []));
+        var finding = Assert.Single(SourceTrustService.Check(sources, []));
+        Assert.Equal("local", finding.Source);
+        Assert.Equal("error", finding.Severity);
+        Assert.Contains("local folder feed", finding.Message);
+    }
+
+    [Fact]
+    public void File_uri_source_not_allowlisted_produces_one_finding()
+    {
+        // Regression for #33: file:// feeds are local feeds too and must be flagged.
+        var sources = new[]
+        {
+            new PackageSource("file:///opt/evil-feed", "evil"),
+            new PackageSource("https://api.nuget.org/v3/index.json", "nuget.org"),
+        };
+
+        var finding = Assert.Single(SourceTrustService.Check(sources, []));
+        Assert.Equal("evil", finding.Source);
+        Assert.Equal("error", finding.Severity);
+    }
+
+    [Fact]
+    public void Allowlisted_local_folder_source_is_ignored()
+    {
+        // #33: an explicitly trusted local feed (matched by trailing path segment) passes.
+        var localPath = Path.Combine(Path.GetTempPath(), "local-feed");
+        var sources = new[]
+        {
+            new PackageSource(localPath, "local"),
+        };
+
+        Assert.Empty(SourceTrustService.Check(sources, [], ["local-feed"]));
+    }
+
+    [Fact]
+    public void Allowlisted_file_uri_source_is_ignored()
+    {
+        var sources = new[]
+        {
+            new PackageSource("file:///opt/mirror", "mirror"),
+        };
+
+        Assert.Empty(SourceTrustService.Check(sources, [], ["file:///opt/mirror"]));
+    }
+
+    [Fact]
+    public void Allowlist_does_not_match_a_different_similarly_named_feed()
+    {
+        // Guard against over-matching: "feed" must not allow "/tmp/myfeed".
+        var sources = new[]
+        {
+            new PackageSource("/tmp/myfeed", "local"),
+        };
+
+        Assert.Single(SourceTrustService.Check(sources, [], ["feed"]));
+    }
+
+    [Fact]
+    public void Repo_nuget_config_declaring_relative_local_feed_produces_one_finding()
+    {
+        // End-to-end for #33: a committed nuget.config pointing at a relative local folder.
+        var dir = NewRepo("""
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources>
+            <clear />
+            <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+            <add key="localfeed" value="./feeds" />
+          </packageSources>
+        </configuration>
+        """);
+
+        var finding = Assert.Single(SourceTrustService.Check(dir, []));
+        Assert.Equal("localfeed", finding.Source);
+        Assert.Equal("error", finding.Severity);
+    }
+
+    [Fact]
+    public void Repo_nuget_config_declaring_allowlisted_relative_local_feed_produces_no_findings()
+    {
+        var dir = NewRepo("""
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources>
+            <clear />
+            <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+            <add key="localfeed" value="./feeds" />
+          </packageSources>
+        </configuration>
+        """);
+
+        Assert.Empty(SourceTrustService.Check(dir, [], ["feeds"]));
+    }
+
+    [Fact]
+    public void Local_folder_source_is_ignored()
+    {
+        // Backward-compat: with the feed allowlisted, the historical "ignored" behavior holds.
+        var localPath = Path.Combine(Path.GetTempPath(), "local-feed");
+        var sources = new[]
+        {
+            new PackageSource(localPath, "local"),
+            new PackageSource("https://api.nuget.org/v3/index.json", "nuget.org"),
+        };
+
+        Assert.Empty(SourceTrustService.Check(sources, [], ["local-feed"]));
     }
 
     public void Dispose()

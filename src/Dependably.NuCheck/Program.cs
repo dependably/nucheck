@@ -98,7 +98,8 @@ public static class Program
                     $"Trusted registry hosts: {string.Join(", ", SourceTrustService.PublicHosts.Concat(config.AllowedRegistryHosts))}");
             }
 
-            var policyFindings = SourceTrustService.Check(checkDirectory, config.AllowedRegistryHosts);
+            var policyFindings = SourceTrustService.Check(
+                checkDirectory, config.AllowedRegistryHosts, config.AllowedLocalFeeds);
             var unusedPackages = UnusedPackageService.Check(checkDirectory, config.IgnoreUnusedPackages);
             var result = new AuditResult
             {
@@ -231,6 +232,19 @@ Policy checks:
   source whose host is not public (api.nuget.org / nuget.org) and not allowlisted
   in .dependably-check (common.allowedRegistryHosts ∪ nuget.allowedRegistryHosts).
   An untrusted source is an error and exits non-zero.
+
+  Local folder feeds (relative paths or file:// URIs) declared inside the repo
+  are also errors by default, because a committed feed can smuggle tampered
+  packages past a restore. Trust one explicitly via allowedLocalFeeds:
+
+    {
+      "common": { "allowedLocalFeeds": ["./local-packages"] },
+      "nuget":  { "allowedLocalFeeds": ["file:///opt/mirror"] }
+    }
+
+  When nucheck cannot find a repository boundary (.git), NuGet config in parent
+  directories is not audited; nucheck then emits an info finding naming the
+  excluded config so the fail-open is visible.
 
 Unused-package check (advisory only, never exits non-zero):
   nucheck heuristically detects packages declared as direct <PackageReference>
