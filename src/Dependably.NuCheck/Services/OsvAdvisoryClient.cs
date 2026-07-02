@@ -64,7 +64,7 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
 
             if (attempt < _maxRetries && IsTransient(response.StatusCode))
             {
-                await _delay(RetryDelay(attempt), cancellationToken).ConfigureAwait(false);
+                await _delay(BackoffDelay(attempt, response), cancellationToken).ConfigureAwait(false);
                 continue;
             }
 
@@ -553,9 +553,46 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
     private static bool IsTransient(HttpStatusCode status)
         => status == HttpStatusCode.TooManyRequests || (int)status >= (int)HttpStatusCode.InternalServerError;
 
+    /// <summary>
+    /// For 429 responses, honor the server's <c>Retry-After</c> header (delta or date form)
+    /// capped at <see cref="MaxBackoff"/>; otherwise fall back to exponential backoff.
+    /// </summary>
+    private static TimeSpan BackoffDelay(int attempt, HttpResponseMessage response)
+    {
+        if (response.StatusCode == HttpStatusCode.TooManyRequests)
+        {
+            var headerWait = ReadRetryAfterDelay(response);
+            if (headerWait > TimeSpan.Zero)
+            {
+                return headerWait < MaxBackoff ? headerWait : MaxBackoff;
+            }
+        }
+
+        return RetryDelay(attempt);
+    }
+
+    private static TimeSpan ReadRetryAfterDelay(HttpResponseMessage response)
+    {
+        var retryAfter = response.Headers.RetryAfter;
+        if (retryAfter?.Delta is { } delta)
+        {
+            return delta;
+        }
+
+        if (retryAfter?.Date is { } date)
+        {
+            var wait = date - DateTimeOffset.UtcNow;
+            return wait > TimeSpan.Zero ? wait : TimeSpan.Zero;
+        }
+
+        return TimeSpan.Zero;
+    }
+
+    // Exponential backoff starting at 4 s (2^(attempt+2)): 4 s / 8 s / 16 s = 28 s total
+    // across the default 3 retries, well inside the typical OSV 429 rate-limit window.
     private static TimeSpan RetryDelay(int attempt)
     {
-        var backoff = TimeSpan.FromSeconds(Math.Pow(2, attempt));
+        var backoff = TimeSpan.FromSeconds(Math.Pow(2, attempt + 2));
         return backoff < MaxBackoff ? backoff : MaxBackoff;
     }
 

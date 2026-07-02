@@ -287,6 +287,60 @@ public class OsvAdvisoryClientTests
         Assert.Equal(">= 2.0.0, < 2.5.0", advisories[1].VulnerableVersionRange);
     }
 
+    // --- Ticket 23: exponential backoff + Retry-After support ----------------------------
+
+    [Fact]
+    public async Task GetAdvisoriesAsync_honors_retry_after_delta_on_429()
+    {
+        // Old code ignores Retry-After and fires all retries within 7s — under the 10-60s
+        // OSV rate-limit window.  New code uses the header value as the delay.
+        var delays = new List<TimeSpan>();
+        var calls = 0;
+        var handler = new FakeHttpMessageHandler(req =>
+        {
+            calls++;
+            if (calls == 1)
+            {
+                var r = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+                r.Headers.TryAddWithoutValidation("Retry-After", "30");
+                return r;
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(OneVulnBody, System.Text.Encoding.UTF8, "application/json"),
+            };
+        });
+        var client = new OsvAdvisoryClient(new HttpClient(handler),
+            delay: (ts, _) => { delays.Add(ts); return Task.CompletedTask; });
+
+        Assert.Single(await client.GetAdvisoriesAsync("Test.Pkg"));
+        Assert.Equal(TimeSpan.FromSeconds(30), Assert.Single(delays));
+    }
+
+    [Fact]
+    public async Task GetAdvisoriesAsync_backoff_starts_at_four_seconds_for_transient_errors()
+    {
+        // Old code: attempt 0 → 1s, attempt 1 → 2s (total 3s after two failures).
+        // New code: attempt 0 → 4s, attempt 1 → 8s, ensuring retries survive the OSV window.
+        var delays = new List<TimeSpan>();
+        var calls = 0;
+        var handler = new FakeHttpMessageHandler(_ =>
+        {
+            calls++;
+            return calls < 3
+                ? (HttpStatusCode.ServiceUnavailable, "down")
+                : (HttpStatusCode.OK, OneVulnBody);
+        });
+        var client = new OsvAdvisoryClient(new HttpClient(handler),
+            delay: (ts, _) => { delays.Add(ts); return Task.CompletedTask; });
+
+        Assert.Single(await client.GetAdvisoriesAsync("Test.Pkg"));
+        Assert.Equal(2, delays.Count);
+        Assert.Equal(TimeSpan.FromSeconds(4), delays[0]);   // was 1s on old code
+        Assert.Equal(TimeSpan.FromSeconds(8), delays[1]);   // was 2s on old code
+    }
+
     // --- Ticket 6: guard ParseOsv against malformed JSON bodies --------------------------
 
     [Fact]
