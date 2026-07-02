@@ -383,6 +383,76 @@ public class UnusedPackageServiceTests
         }
     }
 
+    // --- Ticket #9: ExcludeAssets="runtime" must not suppress compile-available packages ---
+
+    [Fact]
+    public void Disk_ExcludeAssets_runtime_only_package_is_still_scanned_and_flagged()
+    {
+        // ExcludeAssets="runtime" keeps the compile-time reference assembly: the package's
+        // types are fully available via `using` directives. If no usage exists it IS unused.
+        // Before the fix, this package was silently dropped from the scan (false negative).
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.Abstractions" Version="2.0.0"
+                      ExcludeAssets="runtime" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            File.WriteAllText(Path.Combine(dir, "Class.cs"), "public class C { }");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            var finding = Assert.Single(findings);
+            Assert.Equal("Foo.Abstractions", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_ExcludeAssets_runtime_mixed_packages_partial_failure()
+    {
+        // Mixed batch: runtime-excluded unused, compile-excluded (suppressed), and normal used.
+        // Only the runtime-excluded package with no usage should be flagged.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.Abstractions" Version="2.0.0"
+                      ExcludeAssets="runtime" />
+                    <PackageReference Include="Bar.BuildOnly" Version="1.0.0"
+                      ExcludeAssets="compile" />
+                    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // Only Newtonsoft.Json is actually used in source.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"), "using Newtonsoft.Json;");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            // Foo.Abstractions: runtime-excluded, but compile is available and not used → flagged.
+            // Bar.BuildOnly: compile-excluded, no namespace flows in → suppressed.
+            // Newtonsoft.Json: used via `using` → not flagged.
+            var finding = Assert.Single(findings);
+            Assert.Equal("Foo.Abstractions", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Fact]
     public void Disk_reads_Directory_Packages_props()
     {

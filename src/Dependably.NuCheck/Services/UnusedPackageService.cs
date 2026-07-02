@@ -225,10 +225,13 @@ public static partial class UnusedPackageService
             return true;
         }
 
-        // ExcludeAssets that drops runtime/compile means no namespace flows in.
+        // ExcludeAssets="compile" (or "all") removes the compile-time reference assembly,
+        // which is the only thing that makes a package's namespaces available to source.
+        // Excluding only "runtime" still leaves compile-time types fully accessible —
+        // the package can still be referenced with `using` directives and must remain in
+        // scope for the unused-package scan.
         var excludeAssets = ReadAssetMetadata(element, "ExcludeAssets");
         if (excludeAssets.Contains("all")
-            || excludeAssets.Contains("runtime")
             || excludeAssets.Contains("compile"))
         {
             return true;
