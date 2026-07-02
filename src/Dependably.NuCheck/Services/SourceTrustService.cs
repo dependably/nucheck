@@ -4,19 +4,34 @@ using Dependably.NuCheck.Models;
 namespace Dependably.NuCheck.Services;
 
 /// <summary>
-/// Audits the NuGet package sources <b>declared within the repository</b> (the
-/// <c>nuget.config</c> files from the audited path up to and including the repo root)
-/// and flags any enabled source that a restore would honour but the policy does not trust:
-/// an http(s) source whose host is neither a built-in public host nor explicitly
-/// allowlisted, and any local folder feed (relative path or <c>file://</c> URI) that is
-/// not listed in <c>allowedLocalFeeds</c>. Local feeds are fail-closed on purpose: a
-/// repo-committed folder feed can smuggle tampered <c>.nupkg</c> files past a restore.
-/// Disabled sources are ignored.
+/// Audits the NuGet package sources <b>declared within the repository</b> — the
+/// <c>nuget.config</c> files walked up from the audited path to the repo root <b>and</b> any
+/// config declared in a subdirectory of the scan root — and flags any enabled source that a
+/// restore would honour but the policy does not trust:
+/// <list type="bullet">
+///   <item>an http(s) source whose host is neither a built-in public host nor explicitly
+///   allowlisted (a plain-http source on an otherwise trusted host is downgraded to a
+///   <c>warning</c> rather than passing silently, because http is still MITM-able);</item>
+///   <item>a local folder feed (relative path or <c>file://</c> URI) not listed in
+///   <c>allowedLocalFeeds</c> — fail-closed, because a repo-committed folder feed can smuggle
+///   tampered <c>.nupkg</c> files past a restore;</item>
+///   <item>a remote-host <c>file://</c>/UNC network share, which is trusted only by an
+///   allowlisted host or an EXACT <c>allowedLocalFeeds</c> entry — never by a bare local-path
+///   entry.</item>
+/// </list>
+/// Disabled sources are ignored (only a repo-declared disable counts, so an auditor's
+/// machine-local <c>disabledPackageSources</c> cannot suppress a finding).
 /// <para>
 /// The host machine's user/global NuGet configuration is intentionally OUT OF SCOPE:
 /// the verdict must depend only on what the repo declares, so it is reproducible and
 /// machine-independent (the same repo passes or fails identically on any machine and in
 /// CI, and auditing a stranger's repo never flags the auditor's personal feeds).
+/// </para>
+/// <para>
+/// When no repository boundary (<c>.git</c>) can be located, the manifest directory is
+/// treated as the boundary and configs in parent directories are excluded; an <c>info</c>
+/// finding is emitted in that case if any such parent config exists, because a restore
+/// from a non-git checkout would still honour those unaudited sources.
 /// </para>
 /// </summary>
 public static class SourceTrustService
@@ -26,17 +41,16 @@ public static class SourceTrustService
 
     /// <summary>
     /// Returns one <see cref="SourceFinding"/> per enabled package source <b>declared inside
-    /// the repository tree</b> (config from <paramref name="directory"/> up to and including
-    /// the repo root) that the policy does not trust: an http(s) source whose host is not in
-    /// the trusted set (public hosts ∪ <paramref name="allowedHosts"/>), or a local folder
-    /// feed whose path is not in <paramref name="allowedLocalFeeds"/>. Sources contributed
-    /// solely by the host machine's user/global NuGet config are not audited, so a repo that
-    /// declares no <c>nuget.config</c> produces no findings (its implicit default is nuget.org).
+    /// the repository tree</b> (config from <paramref name="directory"/> up to the repo root,
+    /// plus any subdirectory config) that the policy does not trust: an http(s) source whose
+    /// host is not in the trusted set (public hosts ∪ <paramref name="allowedHosts"/>), a
+    /// plain-http source on a trusted host (as a warning), or a local/remote folder feed not
+    /// permitted by <paramref name="allowedLocalFeeds"/>. Sources contributed solely by the
+    /// host machine's user/global NuGet config are not audited, so a repo that declares no
+    /// <c>nuget.config</c> produces no findings (its implicit default is nuget.org).
     /// <para>
-    /// When no repository boundary (<c>.git</c>) can be located, the manifest directory is
-    /// treated as the boundary and configs in parent directories are excluded; an <c>info</c>
-    /// finding is emitted in that case if any such parent config exists, because a restore
-    /// from a non-git checkout would still honour those unaudited sources.
+    /// When no repository boundary (<c>.git</c>) can be located, an <c>info</c> finding is
+    /// emitted naming any parent-directory config a restore would honour but the audit excluded.
     /// </para>
     /// </summary>
     public static IReadOnlyList<SourceFinding> Check(
@@ -44,32 +58,17 @@ public static class SourceTrustService
         IReadOnlyList<string> allowedHosts,
         IReadOnlyList<string>? allowedLocalFeeds = null)
     {
-        var settings = Settings.LoadDefaultSettings(directory);
         var boundaryFound = TryFindRepoRoot(directory, out var repoRoot);
 
-        // Origin config paths of the package sources actually declared inside the repo
-        // tree. LoadDefaultSettings honours NuGet's <clear/> / enabled / disabled merge
-        // semantics; we then keep only the items whose declaring file lives under the
-        // repo root, discarding anything inherited from the user/global machine config.
-        var packageSources = settings.GetSection("packageSources");
-        var repoSourceNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (packageSources is not null)
-        {
-            repoSourceNames.UnionWith(packageSources.Items.OfType<SourceItem>()
-                .Where(item => IsUnderRoot(item.ConfigPath, repoRoot))
-                .Select(item => item.Key));
-        }
-
-        var sources = new PackageSourceProvider(settings)
-            .LoadPackageSources()
-            .Where(source => repoSourceNames.Contains(source.Name));
+        var sources = CollectRepoDeclaredSources(directory, repoRoot);
 
         var findings = new List<SourceFinding>(
             CheckCore(sources, allowedHosts, allowedLocalFeeds ?? [], repoRoot));
 
-        if (!boundaryFound && packageSources is not null)
+        if (!boundaryFound)
         {
-            var notice = ParentConfigNotice(directory, packageSources);
+            var packageSources = Settings.LoadDefaultSettings(directory).GetSection("packageSources");
+            var notice = packageSources is null ? null : ParentConfigNotice(directory, packageSources);
             if (notice is not null)
             {
                 findings.Add(notice);
@@ -78,6 +77,157 @@ public static class SourceTrustService
 
         return findings;
     }
+
+    // -- Discovery: which repo-declared sources a restore would honour (ticket 32/45) --------
+
+    /// <summary>
+    /// Gathers every package source declared by a <c>nuget.config</c> that lives inside the
+    /// repo tree — the config walked up from <paramref name="scanDirectory"/> <b>and</b> any
+    /// config found in a subdirectory of the scan root (e.g. <c>src/nuget.config</c> or a
+    /// config beside a nested <c>.sln</c>), which govern real restores in their subtree yet
+    /// are never seen by an upward-only walk. Each subtree is loaded via
+    /// <see cref="Settings.LoadDefaultSettings(string)"/> so NuGet's <c>&lt;clear/&gt;</c> /
+    /// enabled / disabled merge semantics are preserved per subtree; results are
+    /// de-duplicated by (name, source url).
+    /// </summary>
+    private static IReadOnlyList<PackageSource> CollectRepoDeclaredSources(string scanDirectory, string repoRoot)
+    {
+        var byIdentity = new Dictionary<(string Name, string Source), PackageSource>();
+
+        foreach (var settingsDirectory in SettingsDirectories(scanDirectory))
+        {
+            AddUnderRootSources(Settings.LoadDefaultSettings(settingsDirectory), repoRoot, byIdentity);
+        }
+
+        return byIdentity.Values.ToList();
+    }
+
+    /// <summary>
+    /// The directories whose <c>nuget.config</c> hierarchies must be audited: the scan
+    /// directory itself (upward walk) plus every subdirectory under it that declares its own
+    /// <c>nuget.config</c>, skipping <c>bin</c>/<c>obj</c>/<c>.git</c> build and VCS folders.
+    /// </summary>
+    private static IEnumerable<string> SettingsDirectories(string scanDirectory)
+    {
+        var root = Path.GetFullPath(scanDirectory);
+        yield return root;
+
+        foreach (var configDirectory in FindSubtreeConfigDirectories(root))
+        {
+            yield return configDirectory;
+        }
+    }
+
+    private static IEnumerable<string> FindSubtreeConfigDirectories(string root)
+    {
+        if (!Directory.Exists(root))
+        {
+            yield break;
+        }
+
+        var options = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            MatchCasing = MatchCasing.CaseInsensitive,
+            IgnoreInaccessible = true,
+            // Do NOT skip Hidden/System entries: on Unix/macOS a dot-directory (e.g.
+            // .build/tools or .config) reports as Hidden, and repos legitimately keep a
+            // nuget.config there. The explicit bin/obj/.git segment filter below is the only
+            // intended exclusion; the default (Hidden | System) would silently miss the rest.
+            AttributesToSkip = FileAttributes.None,
+        };
+
+        foreach (var configFile in Directory.EnumerateFiles(root, "nuget.config", options))
+        {
+            var configDirectory = Path.GetDirectoryName(configFile);
+            if (configDirectory is not null
+                && !PathEquals(configDirectory, root)
+                && !IsExcludedPath(root, configDirectory))
+            {
+                yield return configDirectory;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Adds to <paramref name="acc"/> the package sources from <paramref name="settings"/>
+    /// whose declaring config lives under <paramref name="repoRoot"/>, with their enabled
+    /// state resolved solely from repo-declared <c>&lt;disabledPackageSources&gt;</c> — the
+    /// merged <see cref="PackageSource.IsEnabled"/> flag is deliberately ignored so an
+    /// auditor's machine-local <c>disabledPackageSources</c> cannot suppress a finding.
+    /// <para>
+    /// Merge is ENABLED-WINS across audited configs/subtrees: a source enabled by ANY
+    /// repo-scoped config must be evaluated, so a disable in one subtree cannot mask the same
+    /// source being enabled (and used for real restores) in another. This makes the verdict
+    /// independent of the order in which the root and subtree passes are visited.
+    /// </para>
+    /// </summary>
+    private static void AddUnderRootSources(
+        ISettings settings,
+        string repoRoot,
+        Dictionary<(string Name, string Source), PackageSource> acc)
+    {
+        var repoSourceNames = UnderRootKeys(settings, "packageSources", repoRoot);
+        if (repoSourceNames.Count == 0)
+        {
+            return;
+        }
+
+        var repoDisabledNames = UnderRootKeys(settings, "disabledPackageSources", repoRoot);
+
+        foreach (var source in new PackageSourceProvider(settings).LoadPackageSources())
+        {
+            if (!repoSourceNames.Contains(source.Name))
+            {
+                continue;
+            }
+
+            source.IsEnabled = !repoDisabledNames.Contains(source.Name);
+            var key = (source.Name, source.Source);
+
+            // Enabled-wins: only overwrite when this pass enables the source, or when it is
+            // not yet known. A disabled entry never clobbers an already-enabled one.
+            if (source.IsEnabled || !acc.ContainsKey(key))
+            {
+                acc[key] = source;
+            }
+        }
+    }
+
+    private static bool IsExcludedPath(string root, string candidate)
+    {
+        var relative = Path.GetRelativePath(root, candidate);
+        return relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .Any(segment => segment is "bin" or "obj" or ".git");
+    }
+
+    private static bool PathEquals(string a, string b) =>
+        string.Equals(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(a)),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(b)),
+            StringComparison.Ordinal);
+
+    /// <summary>
+    /// Keys of the items in section <paramref name="sectionName"/> whose declaring config
+    /// file lives at or under <paramref name="repoRoot"/>, discarding anything inherited from
+    /// the user/global machine config. <see cref="SourceItem"/> (packageSources) and plain
+    /// <see cref="AddItem"/> (disabledPackageSources) entries are both matched.
+    /// </summary>
+    private static HashSet<string> UnderRootKeys(ISettings settings, string sectionName, string repoRoot)
+    {
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var section = settings.GetSection(sectionName);
+        if (section is not null)
+        {
+            keys.UnionWith(section.Items.OfType<AddItem>()
+                .Where(item => IsUnderRoot(item.ConfigPath, repoRoot))
+                .Select(item => item.Key));
+        }
+
+        return keys;
+    }
+
+    // -- Evaluation: per-source trust verdict (tickets 25/31/33/35) --------------------------
 
     /// <summary>
     /// Core logic over an already-loaded source list, testable without touching disk.
@@ -131,11 +281,13 @@ public static class SourceTrustService
     }
 
     /// <summary>
-    /// Evaluate a single enabled source. http(s) sources are checked against the trusted host
-    /// set. A <c>file://</c> URI with a remote host, or a UNC path (<c>\\server\share</c>), is
-    /// a network share masquerading as a local feed: a plain local-path allowlist entry must
-    /// never satisfy it, so it is trusted only by an exact allowlist match. Everything else is
-    /// a genuine local folder feed checked against the allowlist. Returns null when trusted.
+    /// Evaluate a single enabled source. An http(s) source is checked against the trusted host
+    /// set; a trusted host reached over plain http still yields a <c>warning</c> (MITM-able,
+    /// cf. NuGet NU1803). A <c>file://</c> URI with a remote host, or a UNC path
+    /// (<c>\\server\share</c>), is a network share masquerading as a local feed: it is trusted
+    /// only when its host is allowlisted OR it matches an EXACT <c>allowedLocalFeeds</c> entry —
+    /// a bare local-path entry must never satisfy it. Everything else is a genuine local folder
+    /// feed checked against the allowlist. Returns null when trusted.
     /// </summary>
     private static SourceFinding? Evaluate(
         PackageSource source,
@@ -145,14 +297,24 @@ public static class SourceTrustService
     {
         if (IsRemoteHttpSource(source.Source, out var host))
         {
-            return trustedHosts.Contains(host) ? null : UntrustedHostFinding(source, host);
+            if (!trustedHosts.Contains(host))
+            {
+                return UntrustedHostFinding(source, host);
+            }
+
+            // Trusted host, but plain http is still MITM-able: nudge to https rather than
+            // passing silently. An untrusted host above already took precedence (error wins).
+            return IsPlainHttp(source.Source) ? PlainHttpWarning(source, host) : null;
         }
 
         if (IsRemoteHostFileSource(source.Source, out var fileHost))
         {
-            return IsExactlyAllowlisted(source.Source, allowedLocalFeeds)
-                ? null
-                : RemoteFileFeedFinding(source, fileHost);
+            // A remote network share is trusted only by an explicitly allowlisted host or an
+            // EXACT allowlist entry. A bare local-path entry must never satisfy it (closes the
+            // #33 escalation bypass); an allowlisted host is the #35 opt-in for a trusted share.
+            var trusted = trustedHosts.Contains(fileHost)
+                || IsExactlyAllowlisted(source.Source, allowedLocalFeeds);
+            return trusted ? null : RemoteFileFeedFinding(source, fileHost);
         }
 
         return IsAllowedLocalFeed(source.Source, allowedLocalFeeds, repoRoot) ? null : LocalFeedFinding(source);
@@ -163,6 +325,13 @@ public static class SourceTrustService
             source.Name,
             $"NuGet source '{source.Name}' ({source.Source}) uses untrusted host '{host}'. "
                 + "Add it to allowedRegistryHosts in .dependably-check to permit it.");
+
+    private static SourceFinding PlainHttpWarning(PackageSource source, string host) =>
+        new(host,
+            source.Name,
+            $"NuGet source '{source.Name}' ({source.Source}) uses plain http on trusted host '{host}'. "
+                + "Switch to https to prevent on-path injection of package content.",
+            "warning");
 
     private static SourceFinding LocalFeedFinding(PackageSource source) =>
         new(source.Source,
@@ -195,6 +364,9 @@ public static class SourceTrustService
         return true;
     }
 
+    private static bool IsPlainHttp(string value) =>
+        Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttp;
+
     /// <summary>
     /// True when <paramref name="value"/> is a file feed pointing at a REMOTE machine: a
     /// <c>file://server/share/...</c> URI or a UNC path (<c>\\server\share\...</c> or
@@ -222,9 +394,12 @@ public static class SourceTrustService
         var trusted = new HashSet<string>(baseline, StringComparer.OrdinalIgnoreCase);
         foreach (var value in extra)
         {
-            if (!string.IsNullOrWhiteSpace(value))
+            // Trim before insertion (ticket 25): a config value padded with whitespace (e.g.
+            // from a YAML parser) must still match uri.Host, which is never padded.
+            var trimmed = value.Trim();
+            if (!string.IsNullOrEmpty(trimmed))
             {
-                trusted.Add(value);
+                trusted.Add(trimmed);
             }
         }
 
@@ -355,6 +530,8 @@ public static class SourceTrustService
             .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(segment => segment != ".")
             .ToArray();
+
+    // -- Repository boundary & the non-git fail-open notice (ticket 47) ----------------------
 
     /// <summary>
     /// Resolves the repository boundary for <paramref name="startDirectory"/>: the nearest
