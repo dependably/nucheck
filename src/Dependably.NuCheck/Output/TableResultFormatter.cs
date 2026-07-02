@@ -45,7 +45,7 @@ public sealed class TableResultFormatter : IResultFormatter
     {
         foreach (var advisory in advisories)
         {
-            builder.AppendLine($"   [{Severity.Normalize(advisory.Severity)}] {advisory.Summary}");
+            builder.AppendLine($"   [{Severity.Normalize(advisory.Severity)}] {TextSanitizer.Sanitize(advisory.Summary)}");
             var detail = AdvisoryDetail(advisory);
             if (detail.Length > 0)
             {
@@ -63,17 +63,17 @@ public sealed class TableResultFormatter : IResultFormatter
         var parts = new List<string>(3);
         if (!string.IsNullOrEmpty(advisory.AdvisoryId))
         {
-            parts.Add(advisory.AdvisoryId);
+            parts.Add(TextSanitizer.Sanitize(advisory.AdvisoryId));
         }
 
         if (!string.IsNullOrEmpty(advisory.Cve))
         {
-            parts.Add(advisory.Cve);
+            parts.Add(TextSanitizer.Sanitize(advisory.Cve));
         }
 
         if (!string.IsNullOrEmpty(advisory.FixedVersion))
         {
-            parts.Add($"fixed in {advisory.FixedVersion}");
+            parts.Add($"fixed in {TextSanitizer.Sanitize(advisory.FixedVersion)}");
         }
 
         return string.Join(" | ", parts);
@@ -90,7 +90,7 @@ public sealed class TableResultFormatter : IResultFormatter
         builder.AppendLine("POLICY FINDINGS");
         foreach (var finding in result.PolicyFindings)
         {
-            builder.AppendLine($"   [{Severity.Normalize(finding.Severity)}] {finding.Source} -> {finding.Host}: {finding.Message}");
+            builder.AppendLine($"   [{Severity.Normalize(finding.Severity)}] {TextSanitizer.Sanitize(finding.Source)} -> {TextSanitizer.Sanitize(finding.Host)}: {TextSanitizer.Sanitize(finding.Message)}");
         }
     }
 
@@ -105,7 +105,7 @@ public sealed class TableResultFormatter : IResultFormatter
         builder.AppendLine("POSSIBLY UNUSED PACKAGES (HEURISTIC — ADVISORY ONLY)");
         foreach (var finding in result.UnusedPackages)
         {
-            builder.AppendLine($"   {finding.Id}: {finding.Message}");
+            builder.AppendLine($"   {TextSanitizer.Sanitize(finding.Id)}: {TextSanitizer.Sanitize(finding.Message)}");
         }
     }
 }

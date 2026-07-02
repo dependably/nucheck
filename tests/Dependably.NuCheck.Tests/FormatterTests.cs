@@ -264,6 +264,76 @@ public class FormatterTests
         Assert.Contains("heuristic", finding.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
     }
 
+    // ---- issue #34: control-character / ANSI injection sanitization -----------------
+
+    private static AuditResult InjectionResult() => new()
+    {
+        TotalPackages = 1,
+        Vulnerabilities =
+        [
+            new PackageVulnerability("Pkg", "1.0.0",
+            [
+                new Advisory(
+                    "Fake OK\x1B[0m\r\n✓ All packages are secure",
+                    "high",
+                    ">= 1.0",
+                    [],
+                    AdvisoryId: "GHSA-\x0Ainjected",
+                    Cve: "CVE-fake\x1B[2J",
+                    FixedVersion: "2.0.0\x0D\x0A"),
+            ]),
+        ],
+        PolicyFindings =
+        [
+            new SourceFinding(
+                "nuget.evil.example\x1B[1A",
+                "private\x0Asrc",
+                "untrusted\x1B[2Khost"),
+        ],
+        UnusedPackages =
+        [
+            new UnusedPackageFinding("Pkg", "msg with\x0Dnewline"),
+        ],
+    };
+
+    [Fact]
+    public void Table_formatter_strips_control_characters_from_advisory_fields()
+    {
+        var output = new TableResultFormatter().Format(InjectionResult());
+
+        // Use Ordinal comparison: CurrentCulture treats C0 control chars as ignorable
+        // (zero-weight), making DoesNotContain(ESC) pass vacuously even when ESC is present.
+        // ESC and newlines must not appear in the output so a forged extra row cannot
+        // be injected into the table; they are replaced with spaces.
+        Assert.DoesNotContain("", output, StringComparison.Ordinal);  // ESC stripped
+        Assert.False(output.Contains('\r'), "CR must not appear in output");
+        // The sanitized payload must still appear (content kept, control chars replaced).
+        Assert.Contains("Fake OK", output, StringComparison.Ordinal);
+        Assert.Contains("GHSA-", output, StringComparison.Ordinal);
+        Assert.Contains("CVE-fake", output, StringComparison.Ordinal);
+        Assert.Contains("fixed in 2.0.0", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Table_formatter_strips_control_characters_from_policy_and_unused_fields()
+    {
+        var output = new TableResultFormatter().Format(InjectionResult());
+
+        Assert.DoesNotContain("", output, StringComparison.Ordinal);
+        Assert.Contains("nuget.evil.example", output, StringComparison.Ordinal);
+        Assert.Contains("untrusted", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Summary_formatter_strips_control_characters_from_policy_and_unused_fields()
+    {
+        var output = new SummaryResultFormatter().Format(InjectionResult());
+
+        Assert.DoesNotContain("", output, StringComparison.Ordinal);
+        Assert.False(output.Contains('\r'), "CR must not appear in output");
+        Assert.Contains("untrusted", output, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Summary_formatter_does_not_render_unused_section_when_none()
     {

@@ -37,7 +37,7 @@ public sealed class SummaryResultFormatter : IResultFormatter
                     .ToList();
                 if (fixes.Count > 0)
                 {
-                    builder.AppendLine($"    Fixed in: {string.Join(", ", fixes)}");
+                    builder.AppendLine($"    Fixed in: {string.Join(", ", fixes.Select(TextSanitizer.Sanitize))}");
                 }
             }
         }
@@ -58,7 +58,7 @@ public sealed class SummaryResultFormatter : IResultFormatter
         builder.AppendLine($"⚠ Found {result.PolicyFindings.Count} policy finding(s):");
         foreach (var finding in result.PolicyFindings)
         {
-            builder.AppendLine($"  • [{Severity.Normalize(finding.Severity)}] {finding.Message}");
+            builder.AppendLine($"  • [{Severity.Normalize(finding.Severity)}] {TextSanitizer.Sanitize(finding.Message)}");
         }
     }
 
@@ -73,7 +73,7 @@ public sealed class SummaryResultFormatter : IResultFormatter
         builder.AppendLine($"ℹ Possibly unused packages (heuristic) — {result.UnusedPackages.Count} finding(s):");
         foreach (var finding in result.UnusedPackages)
         {
-            builder.AppendLine($"  • {finding.Message}");
+            builder.AppendLine($"  • {TextSanitizer.Sanitize(finding.Message)}");
         }
     }
 }
