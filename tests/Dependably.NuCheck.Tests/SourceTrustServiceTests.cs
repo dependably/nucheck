@@ -126,12 +126,12 @@ public class SourceTrustServiceTests : IDisposable
         <configuration>
           <packageSources>
             <clear />
-            <add key="private" value="https://dependably.northwardlabs.ca/nuget/v3/index.json" />
+            <add key="private" value="https://nuget.corp.example.com/nuget/v3/index.json" />
           </packageSources>
         </configuration>
         """);
 
-        Assert.Empty(SourceTrustService.Check(dir, ["dependably.northwardlabs.ca"]));
+        Assert.Empty(SourceTrustService.Check(dir, ["nuget.corp.example.com"]));
     }
 
     [Fact]

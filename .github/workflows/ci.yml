@@ -121,6 +121,20 @@ jobs:
         with:
           dotnet-version: "10.0.x"
       - run: dotnet restore Dependably.NuCheck.slnx --locked-mode
+      # Guard: the release tag MUST equal the csproj <Version>, or we would publish a
+      # package stamped with a different (usually stale) version than the tag names —
+      # and --skip-duplicate would then silently swallow the mismatch. Fail loudly here
+      # so a forgotten version bump can never ship under the wrong tag.
+      - name: Verify tag matches package version
+        run: |
+          set -eu
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION="$(dotnet msbuild src/Dependably.NuCheck/Dependably.NuCheck.csproj -getProperty:Version | tr -d '[:space:]')"
+          echo "Release tag: v$TAG   csproj <Version>: $VERSION"
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "::error::Tag v$TAG does not match csproj <Version> $VERSION. Bump <Version> to $TAG (or fix the tag) so the published package version matches the release tag."
+            exit 1
+          fi
       # Pack ONCE into artifacts/. Every later step (attest, push, release upload)
       # consumes these exact bytes — nothing is rebuilt, so the provenance covers
       # precisely what ships.

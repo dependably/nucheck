@@ -62,7 +62,8 @@ correctly handles NuGet's 4-part versions (e.g. `1.8.3.1`) and interval ranges
 
 ## Requirements
 
-- .NET SDK 10.0+ (the tool targets `net10.0`).
+- .NET SDK 8.0 or later to install and run the tool (it is packaged for both `net8.0`
+  and `net10.0`, and `dotnet tool install` picks the runtime you have).
 - An advisory source:
   - **`--source github`** (default): a GitHub personal access token in the `GITHUB_TOKEN`
     environment variable (the GitHub Advisory API requires authentication). Create one at
@@ -128,7 +129,7 @@ Arguments:
 Options:
   --source <name>            Advisory source: github (default), osv
   --format <type>            Output format: human, table, json (default: human)
-  --severity <level>         Filter by severity: critical, high, moderate, low
+  --severity <level>         Filter by severity: critical, high, moderate, low, info
   --config <path>            Path to a .dependably-check config file (otherwise discovered)
   --fail-on <key>=<value>    CI gate (repeatable): severity=<level> or count=<N>
   --rest                     Use the GitHub REST API instead of GraphQL (github source)
@@ -168,7 +169,7 @@ hostnames) and `allowedLocalFeeds` (feed paths):
 ```json
 {
   "common": {
-    "allowedRegistryHosts": ["dependably.northwardlabs.ca"],
+    "allowedRegistryHosts": ["nuget.internal.example.com"],
     "allowedLocalFeeds": ["./local-packages"]
   },
   "nuget": {
@@ -253,7 +254,7 @@ the same way. The six core keys — `tool`, `toolVersion`, `schemaVersion`, `tar
 ```json
 {
   "tool": "nucheck",
-  "toolVersion": "1.1.1",
+  "toolVersion": "2.0.0",
   "schemaVersion": "1.0",
   "target": "packages.config",
   "summary": {
@@ -292,10 +293,13 @@ Notes:
 - `severity` is always one of the suite ladder strings `critical | high | moderate | low | info`.
   nuget mapping: `critical/high/moderate/low` kept, `medium`→`moderate`, `unknown`→`info`.
   These same words are used in the `human` and `table` outputs.
-- Finding `category` is `vulnerability` (an advisory), `policy` (an untrusted package source —
-  `extra` carries `host`/`source`), or `unused` (a heuristic unused-package finding, always
-  `info`). For a vulnerability, `ruleId` is the GHSA id when available (else the CVE);
-  `location` is `null` because package findings are not file-scoped.
+- Finding `category` is one of: `vulnerability` (an advisory), `policy` (an untrusted package
+  source — `extra` carries `host`/`source`), `unused` (a heuristic unused-package finding,
+  always `info`), or `unverifiable-range` (an advisory whose vulnerable-version range could
+  not be parsed and so could not be evaluated — always `info`, advisory only; `extra` carries
+  `package`, `vulnerableRange`, `advisoryId`, `advisorySeverity`). For a vulnerability,
+  `ruleId` is the GHSA id when available (else the CVE); `location` is `null` because package
+  findings are not file-scoped.
 
 ### CI gate (`--fail-on`)
 

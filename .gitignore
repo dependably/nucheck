@@ -29,6 +29,9 @@ sbom-prod.json
 .scannerwork/
 .sonar/
 
+# Local agent tooling state (Claude Code worktrees, settings, locks)
+.claude/
+
 # Misc
 *.log
 .env
