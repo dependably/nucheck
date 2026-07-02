@@ -23,14 +23,14 @@ public class DependablyCheckConfigTests : IDisposable
         var dir = NewTempDir();
         Write(dir, """
         {
-          "common": { "allowedRegistryHosts": ["dependably.northwardlabs.ca"] },
+          "common": { "allowedRegistryHosts": ["nuget.corp.example.com"] },
           "nuget":  { "allowedRegistryHosts": ["nuget.internal.example"] }
         }
         """);
 
         var config = DependablyCheckConfig.Load(null, dir);
 
-        Assert.Contains("dependably.northwardlabs.ca", config.AllowedRegistryHosts);
+        Assert.Contains("nuget.corp.example.com", config.AllowedRegistryHosts);
         Assert.Contains("nuget.internal.example", config.AllowedRegistryHosts);
         Assert.Equal(2, config.AllowedRegistryHosts.Count);
     }

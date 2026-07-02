@@ -6,37 +6,40 @@ All notable changes to `nucheck` are documented here. The format is based on
 
 ## [Unreleased]
 
-### Fixed
+## [2.0.0] - 2026-07-02
 
-- **The "✓ All packages are secure" line can no longer print beside a non-zero exit.** The
-  `human` and `table` formatters now decide the all-clear checkmark from the real process
-  exit code (and the presence of any policy finding), not just from the error-severity policy
-  count. Previously an `info`-severity policy finding gated by `--fail-on severity=info` (such
-  as the non-git parent-config notice) exited 1 while the output still claimed success.
+### Added
 
-### Security
+- **Unified `--fail-on <key>=<value>` CI gate (repeatable).** The single suite-wide gate
+  mechanism. `severity=<critical|high|moderate|low|info>` fails the build only on findings
+  at-or-above the level (relax or raise the gate — relaxed-out vulnerabilities still print);
+  `count=<N>` fails when the vulnerability count exceeds `N`. Multiple rules are OR-ed. With
+  no `--fail-on`, the default is unchanged — any vulnerability or policy error fails (exit
+  `1`). A bad key/value is a usage error (exit `2`). `--severity` remains a **display
+  filter** only and no longer influences the exit code; the gate always evaluates the full,
+  unfiltered result, and the JSON `summary.exitCode` mirrors the real process exit code.
 
-- **Repo-declared local folder feeds are now fail-closed (BREAKING default-gate change).**
-  The source-trust check previously ignored local folder feeds; it now reports every enabled
-  repo-declared local feed — a relative path, an absolute path, or a `file://` URI — as a
-  policy **error** unless its path is listed in the new `allowedLocalFeeds` allowlist
-  (`common` ∪ `nuget` sections of `.dependably-check`). A committed folder feed can serve
-  tampered `.nupkg` files that a restore honours without touching any registry, so trusting
-  it must be an explicit, reviewed decision. Repos that declare a local feed will now fail CI
-  until the feed is allowlisted.
-- **Hardened `allowedLocalFeeds` against two allowlist bypasses.** (1) Entries prefixed with
-  `./` (or `../`) are anchored to the repo root and matched by canonical absolute path, so
-  `./local-packages` grants only `<repo>/local-packages` and never a same-named feed elsewhere
-  in the tree (bare-name entries keep the looser trailing-segment match). (2) A remote-host
-  `file://server/share/...` URI or a UNC path (`\\server\share\...`) is a network share, not a
-  local folder, and can no longer be satisfied by a plain local-path entry: such a feed is
-  flagged unless an allowlist entry names its **exact** full path. This closes a path where a
-  malicious `nuget.config` edit could redirect an "allowlisted local feed" to an
-  attacker-controlled remote share.
-- **Non-git checkouts surface unaudited parent `nuget.config` (#47).** When no repository
-  boundary (`.git`) can be located, package sources declared in parent directories are out of
-  audit scope even though a restore would still honour them; `nucheck` now emits a visible
-  `info` finding naming those excluded config files instead of silently failing open.
+- **Unused-package check (advisory only).** `nucheck` now heuristically detects
+  NuGet packages declared as direct `<PackageReference>` entries in `*.csproj` files
+  (and `Directory.Packages.props` for central package management) under the audited
+  file's directory whose namespace cannot be found in any `.cs` source file. Findings
+  appear in all three output formats as a clearly-labelled advisory section
+  ("Possibly unused packages — heuristic"). This check reads **direct** package
+  references only, never the transitive lock-file closure, to avoid false-positives on
+  transitively-resolved deps.
+
+  The check is **advisory only**: it never changes the process exit code. Build-tool,
+  analyzer, MSBuild-task, and `PrivateAssets` packages commonly produce false positives
+  because they have no runtime namespace. Suppress individual packages via
+  `ignoreUnusedPackages` in `.dependably-check` (union of `common` and `nuget`
+  sections, same pattern as `allowedRegistryHosts`):
+
+  ```json
+  {
+    "common": { "ignoreUnusedPackages": ["StyleCop.Analyzers"] },
+    "nuget":  { "ignoreUnusedPackages": ["Microsoft.CodeAnalysis.Analyzers"] }
+  }
+  ```
 
 ### Changed
 
@@ -79,38 +82,43 @@ All notable changes to `nucheck` are documented here. The format is based on
   the gate (exit 1), the human (summary) formatter now omits the misleading checkmark,
   matching the existing behaviour of the `table` formatter.
 
-### Added
+### Fixed
 
-- **Unified `--fail-on <key>=<value>` CI gate (repeatable).** The single suite-wide gate
-  mechanism. `severity=<critical|high|moderate|low|info>` fails the build only on findings
-  at-or-above the level (relax or raise the gate — relaxed-out vulnerabilities still print);
-  `count=<N>` fails when the vulnerability count exceeds `N`. Multiple rules are OR-ed. With
-  no `--fail-on`, the default is unchanged — any vulnerability or policy error fails (exit
-  `1`). A bad key/value is a usage error (exit `2`). `--severity` remains a **display
-  filter** only and no longer influences the exit code; the gate always evaluates the full,
-  unfiltered result, and the JSON `summary.exitCode` mirrors the real process exit code.
+- **The "✓ All packages are secure" line can no longer print beside a non-zero exit.** The
+  `human` and `table` formatters now decide the all-clear checkmark from the real process
+  exit code (and the presence of any policy finding), not just from the error-severity policy
+  count. Previously an `info`-severity policy finding gated by `--fail-on severity=info` (such
+  as the non-git parent-config notice) exited 1 while the output still claimed success.
 
-- **Unused-package check (advisory only).** `nucheck` now heuristically detects
-  NuGet packages declared as direct `<PackageReference>` entries in `*.csproj` files
-  (and `Directory.Packages.props` for central package management) under the audited
-  file's directory whose namespace cannot be found in any `.cs` source file. Findings
-  appear in all three output formats as a clearly-labelled advisory section
-  ("Possibly unused packages — heuristic"). This check reads **direct** package
-  references only, never the transitive lock-file closure, to avoid false-positives on
-  transitively-resolved deps.
+### Security
 
-  The check is **advisory only**: it never changes the process exit code. Build-tool,
-  analyzer, MSBuild-task, and `PrivateAssets` packages commonly produce false positives
-  because they have no runtime namespace. Suppress individual packages via
-  `ignoreUnusedPackages` in `.dependably-check` (union of `common` and `nuget`
-  sections, same pattern as `allowedRegistryHosts`):
+- **Repo-declared local folder feeds are now fail-closed (BREAKING default-gate change).**
+  The source-trust check previously ignored local folder feeds; it now reports every enabled
+  repo-declared local feed — a relative path, an absolute path, or a `file://` URI — as a
+  policy **error** unless its path is listed in the new `allowedLocalFeeds` allowlist
+  (`common` ∪ `nuget` sections of `.dependably-check`). A committed folder feed can serve
+  tampered `.nupkg` files that a restore honours without touching any registry, so trusting
+  it must be an explicit, reviewed decision. Repos that declare a local feed will now fail CI
+  until the feed is allowlisted.
+- **Hardened `allowedLocalFeeds` against two allowlist bypasses.** (1) Entries prefixed with
+  `./` (or `../`) are anchored to the repo root and matched by canonical absolute path, so
+  `./local-packages` grants only `<repo>/local-packages` and never a same-named feed elsewhere
+  in the tree (bare-name entries keep the looser trailing-segment match). (2) A remote-host
+  `file://server/share/...` URI or a UNC path (`\\server\share\...`) is a network share, not a
+  local folder, and can no longer be satisfied by a plain local-path entry: such a feed is
+  flagged unless an allowlist entry names its **exact** full path. This closes a path where a
+  malicious `nuget.config` edit could redirect an "allowlisted local feed" to an
+  attacker-controlled remote share.
+- **Non-git checkouts surface unaudited parent `nuget.config` (#47).** When no repository
+  boundary (`.git`) can be located, package sources declared in parent directories are out of
+  audit scope even though a restore would still honour them; `nucheck` now emits a visible
+  `info` finding naming those excluded config files instead of silently failing open.
 
-  ```json
-  {
-    "common": { "ignoreUnusedPackages": ["StyleCop.Analyzers"] },
-    "nuget":  { "ignoreUnusedPackages": ["Microsoft.CodeAnalysis.Analyzers"] }
-  }
-  ```
+## [1.1.1] - 2026-06-21
+
+Released under the previous package id `Dependably.NuGetCheck` (command `nuget-check`); no
+functional changes were recorded separately from 1.1.0. Superseded by 2.0.0, which renames
+the package to `Dependably.NuCheck` (command `nucheck`).
 
 ## [1.1.0] - 2026-06-21
 
@@ -171,3 +179,8 @@ Advisory Database, matching installed versions with the real `NuGet.Versioning` 
 ### Packaging
 
 - Published as a `dotnet tool` (`PackAsTool`); metadata includes `PackageProjectUrl`.
+
+[Unreleased]: https://github.com/dependably/nucheck/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/dependably/nucheck/compare/v1.1.1...v2.0.0
+[1.1.1]: https://github.com/dependably/nucheck/compare/v1.1.0...v1.1.1
+[1.1.0]: https://github.com/dependably/nucheck/releases/tag/v1.1.0
