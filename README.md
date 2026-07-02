@@ -35,8 +35,11 @@ correctly handles NuGet's 4-part versions (e.g. `1.8.3.1`) and interval ranges
   mechanism. `severity=<level>` fails only on findings at-or-above a level (relax/raise the
   gate); `count=<N>` fails when the vulnerability count exceeds N. See
   [CI gate](#ci-gate--fail-on).
-- **Source-trust policy**: flags any configured NuGet package source whose host is not
-  public (`api.nuget.org` / `nuget.org`) and not allowlisted in `.dependably-check`.
+- **Source-trust policy**: flags any repo-declared NuGet package source whose host is not
+  public (`api.nuget.org` / `nuget.org`) and not allowlisted in `.dependably-check`, **and
+  any repo-declared local folder feed** (relative path or `file://` URI) not listed in
+  `allowedLocalFeeds`. Local feeds are fail-closed on purpose — a committed folder feed can
+  smuggle tampered `.nupkg` files past a restore.
 - **Unused-package check (advisory)**: heuristically detects direct `<PackageReference>`
   packages whose namespace does not appear in `.cs` source files. Never exits non-zero.
   Dev/build/analyzer-only references (`PrivateAssets="all"`, analyzer/build-only
@@ -144,18 +147,43 @@ stranger's repo never flags your personal feeds). A repo that declares no `nuget
 makes no untrusted-source claim and produces no findings. Every enabled `http(s)` source
 whose host is neither a built-in public host (`api.nuget.org`, `nuget.org`) nor
 explicitly allowlisted is reported as a **policy error**, and the process exits
-non-zero. Local folder feeds and disabled sources are ignored.
+non-zero. Disabled sources are ignored.
 
-Allowlist private/internal registries in a repo-root `.dependably-check` file (JSON),
-shared across the Dependably checker tools. This tool reads the union of
-`common.allowedRegistryHosts` and `nuget.allowedRegistryHosts` (bare hostnames):
+**Local folder feeds are fail-closed.** Every enabled repo-declared local folder feed —
+a relative path, an absolute path, or a `file://` URI — is likewise reported as a policy
+error unless its path is listed in `allowedLocalFeeds`. A committed folder feed is a
+supply-chain smuggling vector: it can serve tampered `.nupkg` files that a restore honours
+without ever touching a registry. (This is a **breaking change to the default gate**: repos
+that declare a local feed now fail CI until the feed is allowlisted — see the CHANGELOG.)
+
+Allowlist private/internal registries and trusted local feeds in a repo-root
+`.dependably-check` file (JSON), shared across the Dependably checker tools. This tool
+reads the union of `common` and `nuget` values for both `allowedRegistryHosts` (bare
+hostnames) and `allowedLocalFeeds` (feed paths):
 
 ```json
 {
-  "common": { "allowedRegistryHosts": ["dependably.northwardlabs.ca"] },
-  "nuget":  { "allowedRegistryHosts": [] }
+  "common": {
+    "allowedRegistryHosts": ["dependably.northwardlabs.ca"],
+    "allowedLocalFeeds": ["./local-packages"]
+  },
+  "nuget": {
+    "allowedRegistryHosts": [],
+    "allowedLocalFeeds": ["file:///opt/mirror"]
+  }
 }
 ```
+
+An `allowedLocalFeeds` entry matches by trailing path segment (so `local-packages` trusts
+a resolved `<repo>/local-packages`), with two safeguards against allowlist bypass:
+
+- **Anchor to the repo root** by prefixing the entry with `./` (or `../`). `./local-packages`
+  grants **only** `<repo>/local-packages`, not a same-named `local-packages` folder sitting
+  elsewhere in the tree. Bare-name entries keep the looser trailing-segment match.
+- **Remote-host `file://` and UNC feeds are never trusted by a local-path entry.** A
+  `file://server/share/...` URI or a UNC path (`\\server\share\...`) points at a *network*
+  share, not a local folder, so a bare entry like `local-packages` cannot satisfy it; such a
+  feed is trusted only by an **exact** allowlist entry naming its full path.
 
 The file is discovered by walking up from the current directory (stopping at the repo
 root, i.e. a directory containing `.git`), or pointed at explicitly with `--config`.

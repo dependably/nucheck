@@ -103,6 +103,114 @@ public class ProgramTests : IDisposable
     }
 
     [Fact]
+    public void Severity_filter_high_includes_critical_findings()
+    {
+        // Regression: --severity high performed an exact match, so a critical advisory was
+        // hidden from output while GateTrips still tripped, causing the tool to print "all
+        // secure" with exit 1. The filter must be at-or-above so critical is included.
+        var path = WritePackagesConfig("Critical.Pkg", "1.5.0");
+        var source = Source(
+            ("Critical.Pkg", new Advisory("Severe", "critical", ">= 1.0.0, < 2.0.0", ["u"])));
+
+        var (exit, output, _) = Run([path, "--severity", "high", "--format", "json"], _ => source);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("Critical.Pkg", output); // must appear in filtered output
+        Assert.Contains("critical", output);
+    }
+
+    [Fact]
+    public void Severity_filter_high_excludes_moderate_findings()
+    {
+        // Moderate advisories are below high on the ladder; --severity high must filter them out.
+        var path = WritePackagesConfig("Moderate.Pkg", "1.5.0");
+        var source = Source(
+            ("Moderate.Pkg", new Advisory("Meh", "moderate", ">= 1.0.0, < 2.0.0", ["u"])));
+
+        // Gate still trips (default any-vuln rule), but filtered output has no moderate.
+        var (exit, output, _) = Run([path, "--severity", "high", "--format", "json"], _ => source);
+
+        Assert.Equal(1, exit);
+        Assert.DoesNotContain("Moderate.Pkg", output);
+    }
+
+    [Fact]
+    public void Severity_bogus_value_is_usage_error_exits_two()
+    {
+        // --severity bogus was silently accepted before the fix; now it is a usage error.
+        var path = WritePackagesConfig("Safe.Pkg", "1.0.0");
+        var (exit, output, error) = Run([path, "--severity", "bogus"], _ => Source());
+
+        Assert.Equal(2, exit);
+        Assert.Contains("--severity", error);
+        Assert.Contains("Usage:", output);
+    }
+
+    [Fact]
+    public void Severity_filter_high_moderate_only_summary_shows_hidden_count_not_all_secure()
+    {
+        // Regression (#1): when --severity high hides ALL advisories (e.g. only moderate
+        // findings) but GateTrips still fires on the unfiltered result, the summary formatter
+        // must NOT print "all secure" — that contradicts exit 1.  It must instead report how
+        // many advisories were hidden by the display filter.
+        var path = WritePackagesConfig("Moderate.Pkg", "1.5.0");
+        var source = Source(
+            ("Moderate.Pkg", new Advisory("Meh", "moderate", ">= 1.0.0, < 2.0.0", ["u"])));
+
+        // Default format is "human" (SummaryResultFormatter).
+        var (exit, output, _) = Run([path, "--severity", "high"], _ => source);
+
+        Assert.Equal(1, exit);
+        Assert.DoesNotContain("All packages are secure", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("hidden by --severity high", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("1 advisory(ies)", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Severity_filter_high_moderate_only_table_shows_hidden_count_not_all_secure()
+    {
+        // Same scenario via --format table (TableResultFormatter).
+        var path = WritePackagesConfig("Moderate.Pkg", "1.5.0");
+        var source = Source(
+            ("Moderate.Pkg", new Advisory("Meh", "moderate", ">= 1.0.0, < 2.0.0", ["u"])));
+
+        var (exit, output, _) = Run([path, "--severity", "high", "--format", "table"], _ => source);
+
+        Assert.Equal(1, exit);
+        Assert.DoesNotContain("All packages are secure", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("hidden by --severity high", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("1 advisory(ies)", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Severity_filter_high_mixed_critical_and_moderate_shows_only_critical()
+    {
+        // Mixed partial-failure scenario: one critical advisory and one moderate advisory on
+        // the SAME package. --severity high must keep the critical (at-or-above) and drop
+        // the moderate. Gate trips on the unfiltered result; display shows only critical.
+        var path = WritePackagesConfig("Mixed.Pkg", "1.5.0");
+        var criticalAdvisory = new Advisory("CVE-2025-CRIT", "critical", ">= 1.0.0, < 2.0.0", ["u"]);
+
+        // FakeAdvisorySource maps one package id → list of advisories; build the source
+        // directly so Mixed.Pkg gets both advisories.
+        var map = new Dictionary<string, IReadOnlyList<Advisory>>
+        {
+            ["Mixed.Pkg"] =
+            [
+                criticalAdvisory,
+                new Advisory("CVE-2025-MOD", "moderate", ">= 1.0.0, < 2.0.0", ["u"]),
+            ],
+        };
+        var source = new FakeAdvisorySource(map);
+
+        var (exit, output, _) = Run([path, "--severity", "high", "--format", "json"], _ => source);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("CVE-2025-CRIT", output);
+        Assert.DoesNotContain("CVE-2025-MOD", output);
+    }
+
+    [Fact]
     public void Fail_on_severity_high_ignores_moderate_vuln_for_gating()
     {
         // The default would trip on any vuln; --fail-on severity=high relaxes the gate so a
@@ -216,6 +324,23 @@ public class ProgramTests : IDisposable
         var (exit, _, error) = Run([path], _ => Source());
         Assert.Equal(2, exit);
         Assert.Contains("Error:", error);
+    }
+
+    // ---- #20 / #48 (consolidated): unknown --source value exits 2 ---------------
+
+    [Fact]
+    public void Unknown_source_value_is_operational_error_exits_two()
+    {
+        // --source bogus → CreateSource hits the default branch, writes an error, returns null.
+        // RunAsync maps null source → ExitError (2).
+        var path = WritePackagesConfig("Safe.Pkg", "1.0.0");
+
+        // factory: null so CreateSource() is invoked with the real options.
+        var (exit, _, error) = Run([path, "--source", "bogus"], null);
+
+        Assert.Equal(2, exit);
+        Assert.Contains("unknown --source", error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("bogus", error);
     }
 
     private string WritePackagesConfig(string id, string version)
