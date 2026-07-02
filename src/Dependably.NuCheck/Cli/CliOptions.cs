@@ -66,7 +66,7 @@ public sealed class CliOptions
     /// <summary>
     /// A usage error produced while parsing (e.g. an unknown option), or null when the
     /// arguments parsed cleanly. The first error wins. <see cref="Program"/> routes a
-    /// non-null value through the usage-error path (message to stderr, help, exit 1).
+    /// non-null value through the usage-error path (message to stderr, help, exit 2).
     /// </summary>
     public string? Error { get; private set; }
 
