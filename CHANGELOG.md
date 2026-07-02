@@ -6,6 +6,14 @@ All notable changes to `nucheck` are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **The "✓ All packages are secure" line can no longer print beside a non-zero exit.** The
+  `human` and `table` formatters now decide the all-clear checkmark from the real process
+  exit code (and the presence of any policy finding), not just from the error-severity policy
+  count. Previously an `info`-severity policy finding gated by `--fail-on severity=info` (such
+  as the non-git parent-config notice) exited 1 while the output still claimed success.
+
 ### Security
 
 - **Repo-declared local folder feeds are now fail-closed (BREAKING default-gate change).**

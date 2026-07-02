@@ -24,11 +24,15 @@ correctly handles NuGet's 4-part versions (e.g. `1.8.3.1`) and interval ranges
   static parse — no MSBuild evaluation (properties, `Condition`s, imports, SDK-implicit
   packages are not expanded) — and version ranges / floating versions are audited at their
   declared **lower bound**, not the version a restore would resolve. For exact resolved
-  versions, point the tool at a `packages.lock.json`.
+  versions, point the tool at a `packages.lock.json`. Because conditions are not evaluated,
+  a package id declared at more than one version (e.g. per-`TargetFramework` `Condition`s, or
+  a file-local `<PackageVersion>` alongside a central one) has **every distinct declared
+  version audited** — a deliberate fail-safe so a vulnerable pin is never masked by a sibling,
+  at the cost of occasionally flagging a version a given build would not actually restore.
 - **Output formats**: `human` (default), `table`, `json`. `--format json` emits the shared
   Dependably finding schema v1 envelope (see [JSON output](#json-output)) so any suite tool's
   JSON parses the same way.
-- **Severity filtering**: `--severity critical|high|moderate|low` — a DISPLAY filter that
+- **Severity filtering**: `--severity critical|high|moderate|low|info` — a DISPLAY filter that
   narrows what is printed. It is distinct from the CI gate (`--fail-on`) and never changes
   the exit code.
 - **Unified CI gate**: `--fail-on <key>=<value>` (repeatable) — the one suite-wide gate
