@@ -182,10 +182,16 @@ public static partial class UnusedPackageService
             yield break;
         }
 
-        foreach (var element in doc.Descendants()
-            .Where(e => e.Name.LocalName.Equals("PackageReference", StringComparison.OrdinalIgnoreCase)))
+        // Central Package Management uses <PackageVersion> in Directory.Packages.props
+        // instead of <PackageReference>. Recognise both so that orphaned central-version
+        // declarations are visible to the unused-package scan.
+        var isCpmProps = Path.GetFileName(filePath)
+            .Equals("Directory.Packages.props", StringComparison.OrdinalIgnoreCase);
+
+        foreach (var element in doc.Descendants().Where(e => IsPackageElement(e, isCpmProps)))
         {
-            // <PackageReference Include="Foo.Bar" Version="..." />
+            // <PackageReference Include="Foo.Bar" Version="..." /> or
+            // <PackageVersion Include="Foo.Bar" Version="..." /> (CPM)
             var include = element.Attribute("Include")?.Value
                 ?? element.Attribute("Update")?.Value;
             if (string.IsNullOrWhiteSpace(include))
@@ -202,6 +208,23 @@ public static partial class UnusedPackageService
 
             yield return include;
         }
+    }
+
+    /// <summary>
+    /// Returns true for elements that represent a direct package reference: always
+    /// <c>PackageReference</c>, and additionally <c>PackageVersion</c> when parsing
+    /// a <c>Directory.Packages.props</c> file (Central Package Management).
+    /// </summary>
+    private static bool IsPackageElement(XElement element, bool includeCpmPackageVersion)
+    {
+        var name = element.Name.LocalName;
+        if (name.Equals("PackageReference", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return includeCpmPackageVersion
+            && name.Equals("PackageVersion", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

@@ -480,4 +480,91 @@ public class UnusedPackageServiceTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    // --- Ticket #24: Directory.Packages.props PackageVersion (CPM) detection ----------
+
+    [Fact]
+    public void Disk_CPM_PackageVersion_orphan_is_detected()
+    {
+        // Standard CPM: Directory.Packages.props uses <PackageVersion>, projects use
+        // <PackageReference> without a version. A PackageVersion with no matching
+        // PackageReference anywhere is an orphaned central declaration.
+        // Before the fix, PackageVersion was invisible to the scan (false negative).
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "Directory.Packages.props"), """
+                <Project>
+                  <ItemGroup>
+                    <PackageVersion Include="Orphaned.Pkg" Version="1.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // No .csproj uses Orphaned.Pkg and no .cs file references it.
+            var findings = UnusedPackageService.Check(dir, []);
+
+            var finding = Assert.Single(findings);
+            Assert.Equal("Orphaned.Pkg", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_CPM_PackageVersion_used_is_not_flagged()
+    {
+        // A CPM PackageVersion entry whose namespace appears in source must not be flagged.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "Directory.Packages.props"), """
+                <Project>
+                  <ItemGroup>
+                    <PackageVersion Include="Newtonsoft.Json" Version="13.0.3" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            File.WriteAllText(Path.Combine(dir, "Program.cs"), "using Newtonsoft.Json;");
+
+            var findings = UnusedPackageService.Check(dir, []);
+            Assert.Empty(findings);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_CPM_partial_failure_mixed_PackageVersion_orphaned_and_used()
+    {
+        // Mixed CPM batch: one orphaned PackageVersion, one used. Only the orphan fires.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "Directory.Packages.props"), """
+                <Project>
+                  <ItemGroup>
+                    <PackageVersion Include="Newtonsoft.Json" Version="13.0.3" />
+                    <PackageVersion Include="Orphaned.Pkg" Version="1.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            File.WriteAllText(Path.Combine(dir, "Program.cs"), "using Newtonsoft.Json;");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            var finding = Assert.Single(findings);
+            Assert.Equal("Orphaned.Pkg", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }
