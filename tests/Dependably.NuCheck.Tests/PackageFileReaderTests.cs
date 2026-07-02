@@ -390,6 +390,61 @@ public class PackageFileReaderTests : IDisposable
         Assert.Equal("1.0.0", package.Version.ToString());
     }
 
+    // --- Ticket #3: malformed Directory.Packages.props must surface, not silently fall back ---
+
+    [Fact]
+    public void Read_throws_when_nearest_directory_packages_props_is_malformed_xml()
+    {
+        // MSBuild stops at the first Directory.Packages.props; if it is malformed, the
+        // build fails. nucheck must do the same — fail closed, not fall back silently.
+        var dir = NewTempDir();
+        File.WriteAllText(Path.Combine(dir, "Directory.Packages.props"), "<Project><unclosed>");
+        var csproj = Path.Combine(dir, "foo.csproj");
+        File.WriteAllText(csproj, """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="X" />
+  </ItemGroup>
+</Project>
+""");
+
+        var ex = Assert.Throws<InvalidDataException>(() => PackageFileReader.Read(csproj));
+        Assert.Contains("Directory.Packages.props", ex.Message);
+    }
+
+    [Fact]
+    public void Read_does_not_silently_fall_back_to_ancestor_props_when_nearest_is_malformed()
+    {
+        // Mixed partial-failure: a malformed nearest props sits between the csproj and a
+        // valid ancestor props. The tool must NOT skip the malformed file and use the
+        // ancestor — that would resolve wrong versions and produce a false-negative audit.
+        var ancestor = NewTempDir();
+        File.WriteAllText(Path.Combine(ancestor, "Directory.Packages.props"), """
+<Project>
+  <ItemGroup>
+    <PackageVersion Include="X" Version="99.0.0" />
+  </ItemGroup>
+</Project>
+""");
+
+        var subdir = Path.Combine(ancestor, $"sub-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(subdir);
+        _tempDirs.Add(subdir);
+        File.WriteAllText(Path.Combine(subdir, "Directory.Packages.props"), "<Project><broken>");
+
+        var csproj = Path.Combine(subdir, "foo.csproj");
+        File.WriteAllText(csproj, """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="X" />
+  </ItemGroup>
+</Project>
+""");
+
+        // Must throw — not silently return the ancestor's 99.0.0.
+        Assert.Throws<InvalidDataException>(() => PackageFileReader.Read(csproj));
+    }
+
     private string WriteTemp(string extension, string content)
     {
         var path = Path.Combine(Path.GetTempPath(), $"nugetcheck-{Guid.NewGuid():N}{extension}");

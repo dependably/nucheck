@@ -375,9 +375,14 @@ public static class PackageFileReader
                 {
                     return ToVersionMap(GatherPackageVersions(XDocument.Load(candidate)));
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // A malformed props file up the tree is ignored; keep walking.
+                    // MSBuild stops at the first Directory.Packages.props it finds; if that
+                    // file is malformed, the build fails. Match that fail-closed behaviour:
+                    // surface the error rather than silently falling back to a higher-level
+                    // file whose versions would be wrong.
+                    throw new InvalidDataException(
+                        $"Failed to parse '{candidate}': {ex.Message}", ex);
                 }
             }
 
