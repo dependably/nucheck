@@ -179,4 +179,32 @@ public class CliOptionsTests
         Assert.NotNull(options.Error);
         Assert.Contains("--fail-on", options.Error);
     }
+
+    // ---- #20: --source flag and Source default ----------------------------------
+
+    [Fact]
+    public void Parse_source_defaults_to_github()
+    {
+        var options = CliOptions.Parse(["./p.config"]);
+
+        Assert.Equal("github", options.Source);
+    }
+
+    [Fact]
+    public void Parse_reads_source_osv()
+    {
+        var options = CliOptions.Parse(["./p.config", "--source", "osv"]);
+
+        Assert.Equal("osv", options.Source);
+        Assert.Null(options.Error);
+    }
+
+    [Fact]
+    public void Parse_reads_source_github_explicit()
+    {
+        var options = CliOptions.Parse(["./p.config", "--source", "github"]);
+
+        Assert.Equal("github", options.Source);
+        Assert.Null(options.Error);
+    }
 }

@@ -188,4 +188,26 @@ public class AuditResultTests
         Assert.Single(filtered.UnusedPackages);
         Assert.Equal("Foo.Bar", filtered.UnusedPackages[0].Id);
     }
+
+    // ---- #21: count gate does not count policy findings -------------------------
+
+    [Fact]
+    public void GateTrips_count_does_not_trip_on_policy_finding_only_result()
+    {
+        // A result with zero vulnerabilities but one policy finding:
+        // - the count gate (failOnCount=0) does NOT trip (VulnerabilityCount == 0)
+        // - the default gate (no rules) DOES trip (HasFailures is true via PolicyErrorCount)
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities = [],
+            PolicyFindings = [new SourceFinding("evil.host", "private", "untrusted source")],
+        };
+
+        // Count gate: 0 vulns > 0 is false → does not trip.
+        Assert.False(result.GateTrips(null, 0));
+
+        // Default gate (no rules): HasFailures is true because PolicyErrorCount > 0 → trips.
+        Assert.True(result.GateTrips(null, null));
+    }
 }

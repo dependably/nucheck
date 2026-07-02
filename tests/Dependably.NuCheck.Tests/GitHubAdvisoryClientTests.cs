@@ -1,4 +1,6 @@
 using System.Net;
+using System.Net.Http.Headers;
+using System.Text;
 using Dependably.NuCheck.Services;
 using Dependably.NuCheck.Tests.Fakes;
 
@@ -112,6 +114,102 @@ public class GitHubAdvisoryClientTests
     }
 
     private static Task NoDelay(TimeSpan _, CancellationToken __) => Task.CompletedTask;
+
+    // ---- #12: 403 secondary rate-limit retry paths ----------------------------
+
+    /// <summary>
+    /// A custom handler that lets each call return a full <see cref="HttpResponseMessage"/>
+    /// (with response headers), which the tuple-based FakeHttpMessageHandler cannot do.
+    /// </summary>
+    private sealed class FullResponseHandler : HttpMessageHandler
+    {
+        private readonly Func<int, HttpResponseMessage> _factory;
+        private int _calls;
+
+        public int Calls => _calls;
+
+        public FullResponseHandler(Func<int, HttpResponseMessage> factory) => _factory = factory;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            _calls++;
+            return Task.FromResult(_factory(_calls));
+        }
+    }
+
+    [Fact]
+    public async Task Forbidden_with_retry_after_header_is_retried()
+    {
+        // Attempt 1: 403 with Retry-After: 0 (secondary rate limit) → should retry.
+        // Attempt 2: 200 with valid GraphQL body → should succeed.
+        var handler = new FullResponseHandler(call =>
+        {
+            if (call == 1)
+            {
+                var response = new HttpResponseMessage(HttpStatusCode.Forbidden)
+                {
+                    Content = new StringContent("secondary rate limit", Encoding.UTF8, "application/json"),
+                };
+                response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.Zero);
+                return response;
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(GraphQlBody, Encoding.UTF8, "application/json"),
+            };
+        });
+        var client = new GitHubAdvisoryClient(new HttpClient(handler), "token", delay: NoDelay);
+
+        var advisories = await client.GetAdvisoriesAsync("Newtonsoft.Json");
+
+        Assert.Equal(2, handler.Calls);
+        Assert.Single(advisories);
+    }
+
+    [Fact]
+    public async Task Forbidden_with_ratelimit_remaining_zero_is_retried()
+    {
+        // Attempt 1: 403 with x-ratelimit-remaining: 0 → should retry.
+        // Attempt 2: 200 with valid GraphQL body → should succeed.
+        var handler = new FullResponseHandler(call =>
+        {
+            if (call == 1)
+            {
+                var response = new HttpResponseMessage(HttpStatusCode.Forbidden)
+                {
+                    Content = new StringContent("exhausted", Encoding.UTF8, "application/json"),
+                };
+                response.Headers.Add("x-ratelimit-remaining", "0");
+                return response;
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(GraphQlBody, Encoding.UTF8, "application/json"),
+            };
+        });
+        var client = new GitHubAdvisoryClient(new HttpClient(handler), "token", delay: NoDelay);
+
+        var advisories = await client.GetAdvisoriesAsync("Newtonsoft.Json");
+
+        Assert.Equal(2, handler.Calls);
+        Assert.Single(advisories);
+    }
+
+    // ---- #11: GraphQL 'MEDIUM' → 'moderate' normalisation ---------------------
+
+    [Fact]
+    public void ParseGraphQl_normalises_medium_severity_to_moderate()
+    {
+        const string body = """
+{"data":{"securityVulnerabilities":{"nodes":[
+  {"advisory":{"summary":"Medium severity issue","severity":"MEDIUM","references":[{"url":"https://example/1"}]},"vulnerableVersionRange":">= 1.0.0, < 2.0.0"}
+]}}}
+""";
+        var advisory = Assert.Single(GitHubAdvisoryClient.ParseGraphQl(body));
+        Assert.Equal("moderate", advisory.Severity);
+    }
 
     [Fact]
     public async Task Rate_limited_graphql_200_with_errors_throws()

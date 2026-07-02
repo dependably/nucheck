@@ -218,6 +218,23 @@ public class ProgramTests : IDisposable
         Assert.Contains("Error:", error);
     }
 
+    // ---- #20 / #48 (consolidated): unknown --source value exits 2 ---------------
+
+    [Fact]
+    public void Unknown_source_value_is_operational_error_exits_two()
+    {
+        // --source bogus → CreateSource hits the default branch, writes an error, returns null.
+        // RunAsync maps null source → ExitError (2).
+        var path = WritePackagesConfig("Safe.Pkg", "1.0.0");
+
+        // factory: null so CreateSource() is invoked with the real options.
+        var (exit, _, error) = Run([path, "--source", "bogus"], null);
+
+        Assert.Equal(2, exit);
+        Assert.Contains("unknown --source", error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("bogus", error);
+    }
+
     private string WritePackagesConfig(string id, string version)
     {
         // Place the manifest in its own directory with an isolating nuget.config so the
