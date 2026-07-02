@@ -206,6 +206,66 @@ public class SourceTrustServiceTests : IDisposable
         Assert.Empty(SourceTrustService.Check(dir, []));
     }
 
+    [Fact]
+    public void Subtree_disable_does_not_mask_root_enabled_untrusted_source()
+    {
+        // Root nuget.config declares "evil" ENABLED; a subdir disables it. Root-level restores
+        // still use the untrusted feed, so the finding must fire. Before the enabled-wins fix
+        // the subtree pass (visited after the root pass) overwrote the enabled entry with the
+        // disabled one via last-write-wins, yielding 0 findings — order-dependent and wrong.
+        var dir = NewRepo("""
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources>
+            <clear />
+            <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+            <add key="evil" value="https://nuget.evil.example/v3/index.json" />
+          </packageSources>
+        </configuration>
+        """);
+
+        var srcDir = Path.Combine(dir, "src");
+        Directory.CreateDirectory(srcDir);
+        File.WriteAllText(Path.Combine(srcDir, "nuget.config"), """
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <disabledPackageSources>
+            <add key="evil" value="true" />
+          </disabledPackageSources>
+        </configuration>
+        """);
+
+        var finding = Assert.Single(SourceTrustService.Check(dir, []));
+        Assert.Equal("nuget.evil.example", finding.Host);
+        Assert.Equal("evil", finding.Source);
+    }
+
+    [Fact]
+    public void Nuget_config_in_dot_directory_declaring_untrusted_host_produces_one_finding()
+    {
+        // A repo-declared config under a dot-directory (e.g. .build/tools/nuget.config) governs
+        // real restores in that subtree. On Unix/macOS the dot-directory reports as Hidden, so
+        // the default EnumerationOptions.AttributesToSkip (Hidden | System) silently skipped it,
+        // auditing clean. With AttributesToSkip = None it must be discovered and flagged.
+        var dir = NewRepo(nugetConfigXml: null);
+        var dotDir = Path.Combine(dir, ".build", "tools");
+        Directory.CreateDirectory(dotDir);
+        File.WriteAllText(Path.Combine(dotDir, "nuget.config"), """
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources>
+            <clear />
+            <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+            <add key="acme" value="https://nuget.pkg.github.com/acme/index.json" />
+          </packageSources>
+        </configuration>
+        """);
+
+        var finding = Assert.Single(SourceTrustService.Check(dir, []));
+        Assert.Equal("nuget.pkg.github.com", finding.Host);
+        Assert.Equal("acme", finding.Source);
+    }
+
     // --- Ticket 35: UNC / file:// network-share feeds -----------------------------------
 
     [Fact]

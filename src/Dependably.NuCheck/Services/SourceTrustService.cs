@@ -85,6 +85,11 @@ public static class SourceTrustService
             RecurseSubdirectories = true,
             MatchCasing = MatchCasing.CaseInsensitive,
             IgnoreInaccessible = true,
+            // Do NOT skip Hidden/System entries: on Unix/macOS a dot-directory (e.g.
+            // .build/tools or .config) reports as Hidden, and repos legitimately keep a
+            // nuget.config there. The explicit bin/obj/.git segment filter below is the only
+            // intended exclusion; the default (Hidden | System) would silently miss the rest.
+            AttributesToSkip = FileAttributes.None,
         };
 
         foreach (var configFile in Directory.EnumerateFiles(root, "nuget.config", options))
@@ -105,6 +110,12 @@ public static class SourceTrustService
     /// state resolved solely from repo-declared <c>&lt;disabledPackageSources&gt;</c> — the
     /// merged <see cref="PackageSource.IsEnabled"/> flag is deliberately ignored so an
     /// auditor's machine-local <c>disabledPackageSources</c> cannot suppress a finding.
+    /// <para>
+    /// Merge is ENABLED-WINS across audited configs/subtrees: a source enabled by ANY
+    /// repo-scoped config must be evaluated, so a disable in one subtree cannot mask the same
+    /// source being enabled (and used for real restores) in another. This makes the verdict
+    /// independent of the order in which the root and subtree passes are visited.
+    /// </para>
     /// </summary>
     private static void AddUnderRootSources(
         ISettings settings,
@@ -127,7 +138,14 @@ public static class SourceTrustService
             }
 
             source.IsEnabled = !repoDisabledNames.Contains(source.Name);
-            acc[(source.Name, source.Source)] = source;
+            var key = (source.Name, source.Source);
+
+            // Enabled-wins: only overwrite when this pass enables the source, or when it is
+            // not yet known. A disabled entry never clobbers an already-enabled one.
+            if (source.IsEnabled || !acc.ContainsKey(key))
+            {
+                acc[key] = source;
+            }
         }
     }
 
