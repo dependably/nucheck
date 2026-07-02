@@ -6,6 +6,19 @@ namespace Dependably.NuCheck.Output;
 /// <summary>Formats the result as a plain-text table.</summary>
 public sealed class TableResultFormatter : IResultFormatter
 {
+    private readonly string? _severityFilter;
+
+    /// <param name="severityFilter">
+    /// The active <c>--severity</c> display filter (a normalised ladder word such as
+    /// <c>"moderate"</c>), or <c>null</c> when no filter is in effect. When set, the
+    /// "all secure" checkmark is replaced with a message explaining that other severities
+    /// may still exist so the checkmark does not contradict a non-zero exit code.
+    /// </param>
+    public TableResultFormatter(string? severityFilter = null)
+    {
+        _severityFilter = severityFilter;
+    }
+
     public string Format(AuditResult result)
     {
         var builder = new StringBuilder();
@@ -26,20 +39,11 @@ public sealed class TableResultFormatter : IResultFormatter
         return builder.ToString();
     }
 
-    private static void AppendVulnerabilities(StringBuilder builder, AuditResult result)
+    private void AppendVulnerabilities(StringBuilder builder, AuditResult result)
     {
         if (result.Vulnerabilities.Count == 0)
         {
-            if (result.HiddenAdvisoryCount > 0)
-            {
-                builder.AppendLine(
-                    $"0 advisories at or above {result.DisplaySeverityFilter} shown; " +
-                    $"{result.HiddenAdvisoryCount} advisory(ies) hidden by --severity {result.DisplaySeverityFilter}.");
-            }
-            else
-            {
-                builder.AppendLine("✓ All packages are secure");
-            }
+            AppendNoVulnerabilities(builder, result);
             return;
         }
 
@@ -52,11 +56,46 @@ public sealed class TableResultFormatter : IResultFormatter
         }
     }
 
+    /// <summary>
+    /// Emit the appropriate "no advisory" line when the vulnerability list is empty.
+    /// The all-secure checkmark is suppressed when a severity display filter is active
+    /// (other severities may exist and trip the exit-code gate) or when policy errors
+    /// are present (the block appears a few lines below and contradicts the checkmark).
+    /// </summary>
+    private void AppendNoVulnerabilities(StringBuilder builder, AuditResult result)
+    {
+        // A --severity filter hid real advisories: report the exact hidden count so the
+        // output cannot read "all secure" beside a non-zero exit.
+        if (result.HiddenAdvisoryCount > 0)
+        {
+            builder.AppendLine(
+                $"0 advisories at or above {result.DisplaySeverityFilter} shown; " +
+                $"{result.HiddenAdvisoryCount} advisory(ies) hidden by --severity {result.DisplaySeverityFilter}.");
+            return;
+        }
+
+        // Filter active but nothing was hidden (no advisories at all): still qualify.
+        if (_severityFilter is not null)
+        {
+            builder.AppendLine($"No advisories matching severity '{_severityFilter}' (others may exist — see exit code)");
+            return;
+        }
+
+        // No filter, but policy errors tripped the gate: suppress the checkmark — the
+        // POLICY FINDINGS block below already covers that failing state.
+        if (result.PolicyErrorCount > 0)
+        {
+            return;
+        }
+
+        builder.AppendLine("✓ All packages are secure");
+    }
+
     private static void AppendAdvisories(StringBuilder builder, IEnumerable<Models.Advisory> advisories)
     {
         foreach (var advisory in advisories)
         {
-            builder.AppendLine($"   [{Severity.Normalize(advisory.Severity)}] {advisory.Summary}");
+            builder.AppendLine($"   [{Severity.Normalize(advisory.Severity)}] {TextSanitizer.Sanitize(advisory.Summary)}");
             var detail = AdvisoryDetail(advisory);
             if (detail.Length > 0)
             {
@@ -74,17 +113,17 @@ public sealed class TableResultFormatter : IResultFormatter
         var parts = new List<string>(3);
         if (!string.IsNullOrEmpty(advisory.AdvisoryId))
         {
-            parts.Add(advisory.AdvisoryId);
+            parts.Add(TextSanitizer.Sanitize(advisory.AdvisoryId));
         }
 
         if (!string.IsNullOrEmpty(advisory.Cve))
         {
-            parts.Add(advisory.Cve);
+            parts.Add(TextSanitizer.Sanitize(advisory.Cve));
         }
 
         if (!string.IsNullOrEmpty(advisory.FixedVersion))
         {
-            parts.Add($"fixed in {advisory.FixedVersion}");
+            parts.Add($"fixed in {TextSanitizer.Sanitize(advisory.FixedVersion)}");
         }
 
         return string.Join(" | ", parts);
@@ -101,7 +140,7 @@ public sealed class TableResultFormatter : IResultFormatter
         builder.AppendLine("POLICY FINDINGS");
         foreach (var finding in result.PolicyFindings)
         {
-            builder.AppendLine($"   [{Severity.Normalize(finding.Severity)}] {finding.Source} -> {finding.Host}: {finding.Message}");
+            builder.AppendLine($"   [{Severity.Normalize(finding.Severity)}] {TextSanitizer.Sanitize(finding.Source)} -> {TextSanitizer.Sanitize(finding.Host)}: {TextSanitizer.Sanitize(finding.Message)}");
         }
     }
 
@@ -116,7 +155,7 @@ public sealed class TableResultFormatter : IResultFormatter
         builder.AppendLine("POSSIBLY UNUSED PACKAGES (HEURISTIC — ADVISORY ONLY)");
         foreach (var finding in result.UnusedPackages)
         {
-            builder.AppendLine($"   {finding.Id}: {finding.Message}");
+            builder.AppendLine($"   {TextSanitizer.Sanitize(finding.Id)}: {TextSanitizer.Sanitize(finding.Message)}");
         }
     }
 
@@ -131,9 +170,9 @@ public sealed class TableResultFormatter : IResultFormatter
         builder.AppendLine("UNVERIFIABLE ADVISORY RANGES (investigate manually — range could not be parsed)");
         foreach (var finding in result.UnverifiableAdvisories)
         {
-            var id = string.IsNullOrEmpty(finding.AdvisoryId) ? string.Empty : $" [{finding.AdvisoryId}]";
+            var id = string.IsNullOrEmpty(finding.AdvisoryId) ? string.Empty : $" [{TextSanitizer.Sanitize(finding.AdvisoryId)}]";
             var sev = string.IsNullOrEmpty(finding.AdvisorySeverity) ? string.Empty : $" [{Severity.Normalize(finding.AdvisorySeverity)}]";
-            builder.AppendLine($"   {finding.PackageId}{id}{sev}: {finding.VulnerableVersionRange}");
+            builder.AppendLine($"   {TextSanitizer.Sanitize(finding.PackageId)}{id}{sev}: {TextSanitizer.Sanitize(finding.VulnerableVersionRange)}");
         }
     }
 }

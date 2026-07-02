@@ -8,7 +8,7 @@ public sealed class CliOptions
 {
     private static readonly Dictionary<string, Action<CliOptions, string>> ValueFlags = new(StringComparer.Ordinal)
     {
-        ["--format"] = (o, v) => o.Format = v,
+        ["--format"] = (o, v) => o.ApplyFormat(v),
         ["--severity"] = (o, v) => o.ApplySeverity(v),
         ["--source"] = (o, v) => o.Source = v,
         ["--config"] = (o, v) => o.ConfigPath = v,
@@ -114,6 +114,43 @@ public sealed class CliOptions
     }
 
     /// <summary>
+    /// Validate and store the <c>--format</c> value. Accepts the three recognised
+    /// tokens (<c>human</c>, <c>table</c>, <c>json</c>) case-insensitively after
+    /// trimming; rejects anything else as a usage error so a typo like
+    /// <c>--format jsonl</c> does not silently produce human-readable prose and
+    /// break a downstream JSON parser that expected the schema-v1 envelope.
+    /// </summary>
+    private void ApplyFormat(string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant();
+        if (!Output.FormatterFactory.ValidFormats.Contains(normalized))
+        {
+            Error ??= $"invalid --format '{value}': use {string.Join(", ", Output.FormatterFactory.ValidFormats)}";
+            return;
+        }
+
+        Format = normalized;
+    }
+
+    /// <summary>
+    /// Validate and store the <c>--severity</c> display-filter value. Accepts the five
+    /// ladder words plus <c>medium</c> as an alias for <c>moderate</c>; rejects anything
+    /// else as a usage error so a typo like <c>--severity foo</c> does not silently
+    /// suppress all output.
+    /// </summary>
+    private void ApplySeverity(string value)
+    {
+        var level = Models.Severity.ParseLevel(value);
+        if (level is null)
+        {
+            Error ??= $"invalid --severity '{value}': use critical, high, moderate, low, or info";
+            return;
+        }
+
+        Severity = level;
+    }
+
+    /// <summary>
     /// Apply one repeatable <c>--fail-on &lt;key&gt;=&lt;value&gt;</c> gate rule. Recognises
     /// <c>severity=&lt;critical|high|moderate|low|info&gt;</c> and <c>count=&lt;N&gt;</c>.
     /// A missing <c>=</c>, an unknown key, or an out-of-range value is a usage error
@@ -158,24 +195,5 @@ public sealed class CliOptions
                 Error ??= $"unknown --fail-on key '{key}': use severity or count";
                 break;
         }
-    }
-
-    /// <summary>
-    /// Validate and store the <c>--severity</c> display-filter level. Accepts the same
-    /// five ladder words as <c>--fail-on severity=&lt;level&gt;</c> (plus the alias
-    /// <c>medium</c>→<c>moderate</c>). An unrecognised word is a usage error that routes
-    /// through the exit-2 path; unlike <see cref="Models.Severity.Normalize"/> this does
-    /// NOT swallow a typo into <c>info</c>.
-    /// </summary>
-    private void ApplySeverity(string raw)
-    {
-        var level = Models.Severity.ParseLevel(raw);
-        if (level is null)
-        {
-            Error ??= $"invalid --severity '{raw}': use critical, high, moderate, low, or info";
-            return;
-        }
-
-        Severity = level;
     }
 }

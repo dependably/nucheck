@@ -172,6 +172,44 @@ public class AuditResultTests
         Assert.True(WithVuln("moderate").GateTrips("high", 0));
     }
 
+    // ---- issue #8: severity alias normalisation ----------------------------------------
+
+    [Fact]
+    public void FilterBySeverity_normalises_medium_alias_to_match_moderate_advisories()
+    {
+        // Advisory severity is pre-normalised to "moderate" by the advisory clients.
+        // Passing "medium" to FilterBySeverity must normalise to the "moderate" rank so that
+        // '--severity medium' does not silently suppress moderate output. Filtering is
+        // at-or-above rank, so the moderate advisory is kept and the higher one too.
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities =
+            [
+                new PackageVulnerability("Pkg", "2.0.0",
+                [
+                    new Advisory("Moderate issue", "moderate", ">= 1.0", []),
+                    new Advisory("High issue", "high", ">= 1.0", []),
+                ]),
+            ],
+        };
+
+        var filtered = result.FilterBySeverity("medium");
+
+        var vulnerability = Assert.Single(filtered.Vulnerabilities);
+        Assert.Equal(2, vulnerability.Advisories.Count);
+        Assert.Contains(vulnerability.Advisories, a => a.Severity == "moderate");
+        Assert.Contains(vulnerability.Advisories, a => a.Severity == "high");
+    }
+
+    [Fact]
+    public void FilterBySeverity_returns_this_unchanged_for_unrecognised_level()
+    {
+        // An unrecognised level must never silently suppress all findings.
+        var result = Build();
+        Assert.Same(result, result.FilterBySeverity("bogus"));
+    }
+
     [Fact]
     public void GateTrips_count_only_still_gates_a_policy_error()
     {

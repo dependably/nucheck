@@ -6,6 +6,19 @@ namespace Dependably.NuCheck.Output;
 /// <summary>Formats the result as a brief human-readable summary.</summary>
 public sealed class SummaryResultFormatter : IResultFormatter
 {
+    private readonly string? _severityFilter;
+
+    /// <param name="severityFilter">
+    /// The active <c>--severity</c> display filter (a normalised ladder word), or
+    /// <c>null</c> when no filter is in effect. When set, the "all secure" message
+    /// is replaced with an accurate qualified message so it cannot contradict the
+    /// process exit code when other-severity advisories caused the gate to trip.
+    /// </param>
+    public SummaryResultFormatter(string? severityFilter = null)
+    {
+        _severityFilter = severityFilter;
+    }
+
     public string Format(AuditResult result)
     {
         var builder = new StringBuilder();
@@ -13,16 +26,7 @@ public sealed class SummaryResultFormatter : IResultFormatter
 
         if (result.VulnerabilityCount == 0)
         {
-            if (result.HiddenAdvisoryCount > 0)
-            {
-                builder.AppendLine(
-                    $"0 advisories at or above {result.DisplaySeverityFilter} shown; " +
-                    $"{result.HiddenAdvisoryCount} advisory(ies) hidden by --severity {result.DisplaySeverityFilter}.");
-            }
-            else
-            {
-                builder.AppendLine("✓ All packages are secure - no known vulnerabilities found.");
-            }
+            AppendNoVulnerabilities(builder, result);
         }
         else
         {
@@ -46,7 +50,7 @@ public sealed class SummaryResultFormatter : IResultFormatter
                     .ToList();
                 if (fixes.Count > 0)
                 {
-                    builder.AppendLine($"    Fixed in: {string.Join(", ", fixes)}");
+                    builder.AppendLine($"    Fixed in: {string.Join(", ", fixes.Select(TextSanitizer.Sanitize))}");
                 }
             }
         }
@@ -55,6 +59,42 @@ public sealed class SummaryResultFormatter : IResultFormatter
         AppendUnusedPackages(builder, result);
         AppendUnverifiableAdvisories(builder, result);
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// Emit the appropriate "no advisory" line when the vulnerability count is zero.
+    /// When a severity filter is active the all-secure message is replaced with a
+    /// qualified note so it cannot contradict a non-zero process exit code caused by
+    /// advisories at other severities. When policy errors are present the checkmark is
+    /// suppressed entirely — the POLICY FINDINGS block below already covers that state.
+    /// </summary>
+    private void AppendNoVulnerabilities(StringBuilder builder, AuditResult result)
+    {
+        // A --severity filter hid real advisories: report the exact hidden count so the
+        // output cannot read "all secure" beside a non-zero exit.
+        if (result.HiddenAdvisoryCount > 0)
+        {
+            builder.AppendLine(
+                $"0 advisories at or above {result.DisplaySeverityFilter} shown; " +
+                $"{result.HiddenAdvisoryCount} advisory(ies) hidden by --severity {result.DisplaySeverityFilter}.");
+            return;
+        }
+
+        // Filter active but nothing was hidden (no advisories at all): still qualify.
+        if (_severityFilter is not null)
+        {
+            builder.AppendLine($"No advisories matching severity '{_severityFilter}' (others may exist — see exit code)");
+            return;
+        }
+
+        // No filter, but policy errors tripped the gate: suppress the checkmark — the
+        // POLICY FINDINGS block below already covers that failing state.
+        if (result.PolicyErrorCount > 0)
+        {
+            return;
+        }
+
+        builder.AppendLine("✓ All packages are secure - no known vulnerabilities found.");
     }
 
     private static void AppendPolicyFindings(StringBuilder builder, AuditResult result)
@@ -68,7 +108,7 @@ public sealed class SummaryResultFormatter : IResultFormatter
         builder.AppendLine($"⚠ Found {result.PolicyFindings.Count} policy finding(s):");
         foreach (var finding in result.PolicyFindings)
         {
-            builder.AppendLine($"  • [{Severity.Normalize(finding.Severity)}] {finding.Message}");
+            builder.AppendLine($"  • [{Severity.Normalize(finding.Severity)}] {TextSanitizer.Sanitize(finding.Message)}");
         }
     }
 
@@ -83,7 +123,7 @@ public sealed class SummaryResultFormatter : IResultFormatter
         builder.AppendLine($"ℹ Possibly unused packages (heuristic) — {result.UnusedPackages.Count} finding(s):");
         foreach (var finding in result.UnusedPackages)
         {
-            builder.AppendLine($"  • {finding.Message}");
+            builder.AppendLine($"  • {TextSanitizer.Sanitize(finding.Message)}");
         }
     }
 
@@ -98,9 +138,9 @@ public sealed class SummaryResultFormatter : IResultFormatter
         builder.AppendLine($"⚠ {result.UnverifiableAdvisories.Count} unverifiable advisory range(s) — range could not be parsed, investigate manually:");
         foreach (var finding in result.UnverifiableAdvisories)
         {
-            var id = string.IsNullOrEmpty(finding.AdvisoryId) ? string.Empty : $" [{finding.AdvisoryId}]";
+            var id = string.IsNullOrEmpty(finding.AdvisoryId) ? string.Empty : $" [{TextSanitizer.Sanitize(finding.AdvisoryId)}]";
             var sev = string.IsNullOrEmpty(finding.AdvisorySeverity) ? string.Empty : $" [{Severity.Normalize(finding.AdvisorySeverity)}]";
-            builder.AppendLine($"  • {finding.PackageId}{id}{sev}: {finding.VulnerableVersionRange}");
+            builder.AppendLine($"  • {TextSanitizer.Sanitize(finding.PackageId)}{id}{sev}: {TextSanitizer.Sanitize(finding.VulnerableVersionRange)}");
         }
     }
 }

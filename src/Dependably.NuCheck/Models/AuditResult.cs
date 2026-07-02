@@ -178,7 +178,8 @@ public sealed class AuditResult
     /// <summary>
     /// Return a copy keeping only advisories at or above the given severity level on the
     /// suite ladder (<c>critical &gt; high &gt; moderate &gt; low &gt; info</c>).
-    /// A null/blank severity returns this result unchanged.
+    /// A null/blank or unrecognised severity returns this result unchanged (a no-op rather
+    /// than silently hiding all findings).
     /// <para>
     /// The comparison uses <see cref="Severity.Rank"/> after normalisation so that raw
     /// advisory words like <c>medium</c> are treated as <c>moderate</c>, and
@@ -194,7 +195,16 @@ public sealed class AuditResult
             return this;
         }
 
-        var filterRank = Severity.Rank(Severity.Normalize(severity));
+        // Validate/normalise the caller-supplied level: an unrecognised value returns this
+        // unchanged rather than silently hiding all findings. The rank is then used for an
+        // at-or-above comparison (so "medium" == "moderate", and "high" includes "critical").
+        var canonical = Severity.ParseLevel(severity);
+        if (canonical is null)
+        {
+            return this;
+        }
+
+        var filterRank = Severity.Rank(canonical);
         var filtered = Vulnerabilities
             .Select(v => v with
             {

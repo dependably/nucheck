@@ -50,7 +50,26 @@ All notable changes to `nucheck` are documented here. The format is based on
   severities map onto it (`medium`→`moderate`, `unknown`→`info`; the policy word `error`→`high`).
   The `human` and `table` outputs print the ladder words too.
 - **`--format` token renamed `summary` → `human`** (the default). `table` and `json` are
-  unchanged. Any unrecognised token still falls back to the human formatter.
+  unchanged. **Breaking:** an unrecognised `--format` token is now a usage error (exit 2);
+  previously it silently fell back to the human formatter. Scripts relying on the silent
+  fallback must be updated to pass a valid token (`human`, `table`, or `json`).
+- **Breaking:** an unrecognised `--severity` token is now a usage error (exit 2); previously
+  it may have silently passed through. Valid levels are `critical`, `high`, `moderate`,
+  `low`, `info`.
+- **`--severity` filter emits a qualified message when no advisories match.** When zero
+  advisories match the active `--severity` filter (but other-severity advisories may still
+  trip the exit-code gate), the "all packages are secure" message is replaced with
+  "No advisories matching severity '&lt;level&gt;' (others may exist — see exit code)" in both
+  the `human` and `table` formats so the display never contradicts a non-zero exit code.
+- **Advisory text is sanitized against control-character injection (#34).** ANSI escape
+  sequences, carriage returns, and other C0/C1 control characters in advisory fields
+  (summary, advisory id, CVE, fixed version, source-trust host/message) are replaced with
+  spaces before they reach any output formatter, preventing terminal-escape injection from
+  a malicious advisory payload.
+- **`human` format suppresses the "all packages are secure" checkmark when policy errors
+  are present (#43).** When vulnerabilities are zero but a source-trust policy error trips
+  the gate (exit 1), the human (summary) formatter now omits the misleading checkmark,
+  matching the existing behaviour of the `table` formatter.
 
 ### Added
 

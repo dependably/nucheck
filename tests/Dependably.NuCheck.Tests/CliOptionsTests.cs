@@ -148,6 +148,38 @@ public class CliOptionsTests
         Assert.Contains("--first-bad", options.Error);
     }
 
+    // ---- issue #44: --format validation and normalisation ---------------------------
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("JSON")]
+    [InlineData("table")]
+    [InlineData("human")]
+    public void Parse_format_accepts_valid_tokens(string value)
+    {
+        var options = CliOptions.Parse(["./p.config", "--format", value]);
+
+        Assert.Null(options.Error);
+        Assert.Equal(value.Trim().ToLowerInvariant(), options.Format);
+    }
+
+    [Theory]
+    [InlineData("jsonl")]
+    [InlineData("xml")]
+    [InlineData("unknown")]
+    public void Parse_format_rejects_invalid_value(string value)
+    {
+        // A typo like '--format jsonl' previously silently produced summary prose;
+        // it is now a usage error so a CI pipeline is not silently broken.
+        var options = CliOptions.Parse(["./p.config", "--format", value]);
+
+        Assert.NotNull(options.Error);
+        Assert.Contains("--format", options.Error);
+        Assert.Contains(value, options.Error);
+    }
+
+    // ---- issue #8: --severity validation and normalisation --------------------------
+
     [Theory]
     [InlineData("critical", "critical")]
     [InlineData("high", "high")]
@@ -156,7 +188,7 @@ public class CliOptionsTests
     [InlineData("low", "low")]
     [InlineData("info", "info")]
     [InlineData("HIGH", "high")]        // case-insensitive
-    public void Parse_severity_valid_ladder_word_is_accepted(string value, string expected)
+    public void Parse_severity_normalises_to_ladder_word(string value, string expected)
     {
         var options = CliOptions.Parse(["./p.config", "--severity", value]);
 
@@ -165,15 +197,16 @@ public class CliOptionsTests
     }
 
     [Theory]
-    [InlineData("bogus")]   // not a ladder word
+    [InlineData("foo")]
+    [InlineData("bogus")]
+    [InlineData("SEVERE")]
     [InlineData("unknown")]
     [InlineData("HIGHT")]   // typo
-    [InlineData("")]        // empty string reached via a different path; validate anyway
-    public void Parse_severity_invalid_value_is_usage_error(string value)
+    public void Parse_severity_rejects_invalid_value(string value)
     {
-        // Bug: --severity bogus was silently accepted, causing FilterBySeverity to match
-        // nothing and print "all secure" even when vulnerabilities were present. A bogus
-        // --severity must be a usage error (exit 2) like a bogus --fail-on severity value.
+        // A bogus --severity was previously accepted silently, causing FilterBySeverity to
+        // match nothing and print "all secure" even when vulnerabilities were present. It
+        // must be a usage error (exit 2), like a bogus --fail-on severity value.
         var options = CliOptions.Parse(["./p.config", "--severity", value]);
 
         Assert.NotNull(options.Error);

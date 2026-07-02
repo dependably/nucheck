@@ -145,14 +145,27 @@ public class FormatterTests
 
     [Theory]
     [InlineData("json", typeof(JsonResultFormatter))]
-    [InlineData("JSON", typeof(JsonResultFormatter))]
+    [InlineData("JSON", typeof(JsonResultFormatter))]        // case-insensitive
+    [InlineData("Json ", typeof(JsonResultFormatter))]       // trailing space trimmed
+    [InlineData("  json  ", typeof(JsonResultFormatter))]    // surrounding whitespace trimmed
     [InlineData("table", typeof(TableResultFormatter))]
     [InlineData("human", typeof(SummaryResultFormatter))]
-    [InlineData("unknown", typeof(SummaryResultFormatter))]
-    [InlineData(null, typeof(SummaryResultFormatter))]
+    [InlineData(null, typeof(SummaryResultFormatter))]       // null defaults to human/summary
     public void Factory_selects_formatter(string? format, Type expected)
     {
         Assert.IsType(expected, FormatterFactory.Get(format, "9.9.9", "packages.config"));
+    }
+
+    [Theory]
+    [InlineData("unknown")]
+    [InlineData("jsonl")]
+    [InlineData("xml")]
+    public void Factory_throws_for_unrecognised_format(string format)
+    {
+        // An unrecognised token must never silently fall through to summary output;
+        // a CI pipeline expecting the JSON schema-v1 envelope would receive prose instead.
+        Assert.Throws<ArgumentException>(() =>
+            FormatterFactory.Get(format, "9.9.9", "packages.config"));
     }
 
     [Fact]
@@ -262,6 +275,171 @@ public class FormatterTests
         Assert.Equal("info", finding.GetProperty("severity").GetString());
         Assert.Equal("Serilog", finding.GetProperty("extra").GetProperty("package").GetString());
         Assert.Contains("heuristic", finding.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ---- issue #43: "All packages are secure" misleading when filter is active -------
+
+    private static AuditResult OnlyHighResult() => new()
+    {
+        TotalPackages = 2,
+        Vulnerabilities =
+        [
+            new PackageVulnerability("Pkg", "1.0.0",
+            [
+                new Advisory("High issue", "high", ">= 1.0", []),
+            ]),
+        ],
+    };
+
+    [Fact]
+    public void Table_filtered_result_shows_no_match_message_not_all_secure()
+    {
+        // A project has a high-severity vuln but the user passes --severity critical.
+        // The filtered display has zero advisories; the formatter must NOT claim
+        // "All packages are secure" because the exit code will be 1.
+        var filtered = OnlyHighResult().FilterBySeverity("critical");
+        Assert.Empty(filtered.Vulnerabilities);
+
+        var output = new TableResultFormatter("critical").Format(filtered);
+
+        // The merged formatter reports the exact hidden count (richer than a bare
+        // "no advisories matching" note) — never "all secure" beside a non-zero exit.
+        Assert.DoesNotContain("All packages are secure", output, StringComparison.Ordinal);
+        Assert.Contains("hidden by --severity critical", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Summary_filtered_result_shows_no_match_message_not_all_secure()
+    {
+        var filtered = OnlyHighResult().FilterBySeverity("critical");
+        var output = new SummaryResultFormatter("critical").Format(filtered);
+
+        Assert.DoesNotContain("All packages are secure", output, StringComparison.Ordinal);
+        Assert.Contains("hidden by --severity critical", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Table_no_filter_and_clean_result_shows_all_secure()
+    {
+        // Without a filter, an actually clean result still gets the checkmark.
+        var output = new TableResultFormatter().Format(CleanResult());
+        Assert.Contains("All packages are secure", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Summary_no_filter_and_clean_result_shows_all_secure()
+    {
+        var output = new SummaryResultFormatter().Format(CleanResult());
+        Assert.Contains("All packages are secure", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Table_suppresses_all_secure_when_policy_errors_are_present()
+    {
+        // When vulnerabilities are zero but policy errors tripped the gate, the
+        // "all secure" checkmark appears immediately above the POLICY FINDINGS
+        // block and would be factually false.
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities = [],
+            PolicyFindings = [new SourceFinding("nuget.evil.example", "s", "untrusted")],
+        };
+
+        var output = new TableResultFormatter().Format(result);
+
+        Assert.DoesNotContain("All packages are secure", output, StringComparison.Ordinal);
+        Assert.Contains("POLICY FINDINGS", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Summary_suppresses_all_secure_when_policy_errors_are_present()
+    {
+        // Mirror of the table-formatter test: when zero vulnerabilities but a policy
+        // error trips the gate (exit 1), the summary formatter must NOT emit the
+        // "All packages are secure" checkmark — the POLICY FINDINGS block below it
+        // already communicates the failure.
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities = [],
+            PolicyFindings = [new SourceFinding("nuget.evil.example", "s", "untrusted")],
+        };
+
+        var output = new SummaryResultFormatter().Format(result);
+
+        Assert.DoesNotContain("All packages are secure", output, StringComparison.Ordinal);
+        Assert.Contains("policy finding", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ---- issue #34: control-character / ANSI injection sanitization -----------------
+
+    private static AuditResult InjectionResult() => new()
+    {
+        TotalPackages = 1,
+        Vulnerabilities =
+        [
+            new PackageVulnerability("Pkg", "1.0.0",
+            [
+                new Advisory(
+                    "Fake OK\x1B[0m\r\n✓ All packages are secure",
+                    "high",
+                    ">= 1.0",
+                    [],
+                    AdvisoryId: "GHSA-\x0Ainjected",
+                    Cve: "CVE-fake\x1B[2J",
+                    FixedVersion: "2.0.0\x0D\x0A"),
+            ]),
+        ],
+        PolicyFindings =
+        [
+            new SourceFinding(
+                "nuget.evil.example\x1B[1A",
+                "private\x0Asrc",
+                "untrusted\x1B[2Khost"),
+        ],
+        UnusedPackages =
+        [
+            new UnusedPackageFinding("Pkg", "msg with\x0Dnewline"),
+        ],
+    };
+
+    [Fact]
+    public void Table_formatter_strips_control_characters_from_advisory_fields()
+    {
+        var output = new TableResultFormatter().Format(InjectionResult());
+
+        // Use Ordinal comparison: CurrentCulture treats C0 control chars as ignorable
+        // (zero-weight), making DoesNotContain(ESC) pass vacuously even when ESC is present.
+        // ESC and newlines must not appear in the output so a forged extra row cannot
+        // be injected into the table; they are replaced with spaces.
+        Assert.DoesNotContain("", output, StringComparison.Ordinal);  // ESC stripped
+        Assert.False(output.Contains('\r'), "CR must not appear in output");
+        // The sanitized payload must still appear (content kept, control chars replaced).
+        Assert.Contains("Fake OK", output, StringComparison.Ordinal);
+        Assert.Contains("GHSA-", output, StringComparison.Ordinal);
+        Assert.Contains("CVE-fake", output, StringComparison.Ordinal);
+        Assert.Contains("fixed in 2.0.0", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Table_formatter_strips_control_characters_from_policy_and_unused_fields()
+    {
+        var output = new TableResultFormatter().Format(InjectionResult());
+
+        Assert.DoesNotContain("", output, StringComparison.Ordinal);
+        Assert.Contains("nuget.evil.example", output, StringComparison.Ordinal);
+        Assert.Contains("untrusted", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Summary_formatter_strips_control_characters_from_policy_and_unused_fields()
+    {
+        var output = new SummaryResultFormatter().Format(InjectionResult());
+
+        Assert.DoesNotContain("", output, StringComparison.Ordinal);
+        Assert.False(output.Contains('\r'), "CR must not appear in output");
+        Assert.Contains("untrusted", output, StringComparison.Ordinal);
     }
 
     [Fact]
