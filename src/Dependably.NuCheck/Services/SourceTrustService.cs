@@ -205,16 +205,28 @@ public static class SourceTrustService
             }
 
             var host = uri.Host;
-            if (trusted.Contains(host))
+            if (!trusted.Contains(host))
             {
+                findings.Add(new SourceFinding(
+                    host,
+                    source.Name,
+                    $"NuGet source '{source.Name}' ({source.Source}) uses untrusted host '{host}'. "
+                        + "Add it to allowedRegistryHosts in .dependably-check to permit it."));
                 continue;
             }
 
-            findings.Add(new SourceFinding(
-                host,
-                source.Name,
-                $"NuGet source '{source.Name}' ({source.Source}) uses untrusted host '{host}'. "
-                    + "Add it to allowedRegistryHosts in .dependably-check to permit it."));
+            // Trusted host, but plain http is still MITM-able (NuGet flags NU1803 for the
+            // same reason). Emit a warning so repos using http://nuget.org or an allowlisted
+            // http-only feed are nudged to switch to https.
+            if (uri.Scheme == Uri.UriSchemeHttp)
+            {
+                findings.Add(new SourceFinding(
+                    host,
+                    source.Name,
+                    $"NuGet source '{source.Name}' ({source.Source}) uses plain http on trusted host '{host}'. "
+                        + "Switch to https to prevent on-path injection of package content.",
+                    "warning"));
+            }
         }
 
         return findings;

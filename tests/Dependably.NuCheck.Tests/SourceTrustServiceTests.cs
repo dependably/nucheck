@@ -305,6 +305,72 @@ public class SourceTrustServiceTests : IDisposable
         Assert.Empty(SourceTrustService.Check(dir, []));
     }
 
+    // --- Ticket #31: plain-HTTP sources on trusted hosts must produce a warning -----------
+
+    [Fact]
+    public void Http_source_on_trusted_host_produces_warning_finding()
+    {
+        // A plain-http feed on an allowlisted host is MITM-able and must be warned about
+        // even though the host itself is trusted. Before the fix, the source passed clean.
+        var sources = new[]
+        {
+            new PackageSource("http://corp.nuget.example/v3/index.json", "corp"),
+        };
+
+        var finding = Assert.Single(SourceTrustService.Check(sources, ["corp.nuget.example"]));
+        Assert.Equal("corp.nuget.example", finding.Host);
+        Assert.Equal("corp", finding.Source);
+        Assert.Equal("warning", finding.Severity);
+        Assert.Contains("plain http", finding.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Https_source_on_trusted_host_produces_no_finding()
+    {
+        var sources = new[]
+        {
+            new PackageSource("https://corp.nuget.example/v3/index.json", "corp"),
+        };
+
+        Assert.Empty(SourceTrustService.Check(sources, ["corp.nuget.example"]));
+    }
+
+    [Fact]
+    public void Http_source_on_untrusted_host_produces_error_not_warning()
+    {
+        // An untrusted host overrides the scheme concern: the finding must still be "error"
+        // for untrusted host, not downgraded to "warning" (the scheme is a secondary risk).
+        var sources = new[]
+        {
+            new PackageSource("http://evil.nuget.example/v3/index.json", "evil"),
+        };
+
+        var finding = Assert.Single(SourceTrustService.Check(sources, []));
+        Assert.Equal("evil.nuget.example", finding.Host);
+        Assert.Equal("error", finding.Severity);
+    }
+
+    [Fact]
+    public void Http_mixed_sources_partial_failure_trusted_warning_untrusted_error()
+    {
+        // Batch: trusted-http (warning) + trusted-https (clean) + untrusted-https (error).
+        // The plain-http check and the trust check must fire independently.
+        var sources = new[]
+        {
+            new PackageSource("http://corp.nuget.example/v3/index.json", "corp-http"),
+            new PackageSource("https://corp.nuget.example/v3/index.json", "corp-https"),
+            new PackageSource("https://evil.nuget.example/v3/index.json", "evil"),
+        };
+
+        var findings = SourceTrustService.Check(sources, ["corp.nuget.example"]);
+
+        Assert.Equal(2, findings.Count);
+        var warning = findings.Single(f => f.Severity == "warning");
+        Assert.Equal("corp-http", warning.Source);
+        var error = findings.Single(f => f.Severity == "error");
+        Assert.Equal("evil", error.Source);
+    }
+
     // --- Ticket #25: allowedHosts entries must be trimmed before trust-set insertion ------
 
     [Fact]
