@@ -39,6 +39,11 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
     // clears hasNextPage (or never advances the cursor) can't loop the CLI forever.
     private const int MaxGraphQlPages = 1000;
 
+    // Safety cap on REST Link-header pagination so a buggy or hostile API that always
+    // returns a Link: rel="next" header (self-referencing or otherwise) can't loop
+    // the CLI forever.
+    private const int MaxRestPages = 1000;
+
     private readonly HttpClient _http;
     private readonly string _token;
     private readonly bool _useRest;
@@ -106,7 +111,8 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
     /// <summary>Build the securityVulnerabilities query, adding an <c>after:</c> cursor for pages after the first.</summary>
     private static string BuildGraphQlQuery(string escapedPackage, string? afterCursor)
     {
-        var after = string.IsNullOrEmpty(afterCursor) ? string.Empty : $", after: \"{afterCursor}\"";
+        var escapedCursor = afterCursor?.Replace("\\", "\\\\").Replace("\"", "\\\"");
+        var after = string.IsNullOrEmpty(escapedCursor) ? string.Empty : $", after: \"{escapedCursor}\"";
         return
             "{ securityVulnerabilities(first: 100" + after + ", ecosystem: NUGET, package: \"" + escapedPackage + "\") " +
             "{ nodes { advisory { ghsaId summary severity identifiers { type value } references { url } } " +
@@ -124,7 +130,7 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
         string? url = $"{RestUrl}?ecosystem=nuget&affects={Uri.EscapeDataString(packageId)}&per_page=100";
         var advisories = new List<Advisory>();
 
-        while (url is not null)
+        for (var page = 0; page < MaxRestPages && url is not null; page++)
         {
             string? nextUrl = null;
             var pageUrl = url;
@@ -215,7 +221,8 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
                 // Network-level failure (DNS, TCP reset, TLS handshake, timeout) — treat
                 // as transient and retry with exponential backoff. CancellationToken
                 // cancellations are not HttpRequestException so they propagate normally.
-                await _delay(TimeSpan.FromSeconds(Math.Pow(2, attempt)), cancellationToken).ConfigureAwait(false);
+                var networkBackoff = TimeSpan.FromSeconds(Math.Pow(2, attempt));
+                await _delay(networkBackoff < MaxBackoff ? networkBackoff : MaxBackoff, cancellationToken).ConfigureAwait(false);
             }
         }
     }

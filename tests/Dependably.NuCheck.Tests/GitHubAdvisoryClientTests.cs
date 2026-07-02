@@ -517,6 +517,36 @@ public class GitHubAdvisoryClientTests
         Assert.Contains("per_page=100", capturedUrl, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Rest_pagination_terminates_at_cap_when_server_always_returns_link_next()
+    {
+        // Regression guard for unbounded REST pagination loop (fix/github-client review finding #5).
+        // Without the MaxRestPages cap: while (url is not null) loops forever because the
+        // fake always returns a Link: rel="next" pointing to the same URL — the test would hang.
+        // With the cap: the for loop exits after MaxRestPages (1000) iterations.
+        const string selfUrl = "https://api.github.com/advisories?ecosystem=nuget&affects=Pkg&per_page=100";
+        var calls = 0;
+        var handler = new FakeHttpMessageHandler(req =>
+        {
+            calls++;
+            var r = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("[]", Encoding.UTF8, "application/json"),
+            };
+            r.Headers.Add("Link", $"<{selfUrl}>; rel=\"next\""); // self-referencing: always a next page
+            return r;
+        });
+        var client = new GitHubAdvisoryClient(new HttpClient(handler), "token", useRest: true);
+
+        var advisories = await client.GetAdvisoriesAsync("Pkg");
+
+        // The call must return (not hang). Exactly MaxRestPages (1000) requests are made —
+        // proving the cap was hit rather than the loop ending naturally (which would require
+        // a missing Link header).
+        Assert.Empty(advisories);
+        Assert.Equal(1000, calls);
+    }
+
     // #28 — REST parser emits one Advisory per vulnerabilities[] entry
 
     [Fact]
