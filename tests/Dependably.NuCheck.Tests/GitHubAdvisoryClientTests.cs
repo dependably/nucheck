@@ -32,6 +32,58 @@ public class GitHubAdvisoryClientTests
     }
 
     [Fact]
+    public async Task GraphQl_path_follows_cursor_pagination_across_pages()
+    {
+        const string page1 = """
+{"data":{"securityVulnerabilities":{"nodes":[
+  {"advisory":{"summary":"First","severity":"HIGH","references":[{"url":"https://example/1"}]},"vulnerableVersionRange":">= 1.0.0, < 2.0.0"}
+],"pageInfo":{"hasNextPage":true,"endCursor":"CURSOR1"}}}}
+""";
+        const string page2 = """
+{"data":{"securityVulnerabilities":{"nodes":[
+  {"advisory":{"summary":"Second","severity":"LOW","references":[{"url":"https://example/2"}]},"vulnerableVersionRange":">= 2.0.0, < 3.0.0"}
+],"pageInfo":{"hasNextPage":false,"endCursor":"CURSOR2"}}}}
+""";
+        var requestBodies = new List<string>();
+        var handler = new FakeHttpMessageHandler(request =>
+        {
+            requestBodies.Add(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+            return (HttpStatusCode.OK, requestBodies.Count == 1 ? page1 : page2);
+        });
+        var client = new GitHubAdvisoryClient(new HttpClient(handler), "token");
+
+        var advisories = await client.GetAdvisoriesAsync("Newtonsoft.Json");
+
+        // Both pages are accumulated, not just the first 100-node page.
+        Assert.Equal(2, advisories.Count);
+        Assert.Contains(advisories, a => a.Summary == "First");
+        Assert.Contains(advisories, a => a.Summary == "Second");
+
+        // Two requests were made; the second carried the first page's endCursor as `after:`.
+        Assert.Equal(2, requestBodies.Count);
+        Assert.Contains("pageInfo", requestBodies[0]);
+        Assert.DoesNotContain("after", requestBodies[0]);
+        Assert.Contains("CURSOR1", requestBodies[1]);
+    }
+
+    [Fact]
+    public async Task GraphQl_path_stops_when_has_next_page_is_false()
+    {
+        var calls = 0;
+        var handler = new FakeHttpMessageHandler(_ =>
+        {
+            calls++;
+            return (HttpStatusCode.OK, GraphQlBody); // no pageInfo -> treated as last page
+        });
+        var client = new GitHubAdvisoryClient(new HttpClient(handler), "token");
+
+        var advisories = await client.GetAdvisoriesAsync("Newtonsoft.Json");
+
+        Assert.Single(advisories);
+        Assert.Equal(1, calls); // a single page with no next-page cursor is not re-fetched
+    }
+
+    [Fact]
     public async Task Rest_path_parses_matching_package_range()
     {
         var client = new GitHubAdvisoryClient(
