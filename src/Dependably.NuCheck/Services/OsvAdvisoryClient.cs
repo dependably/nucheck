@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -85,7 +86,7 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
         foreach (var vuln in vulns.EnumerateArray())
         {
             var id = GetString(vuln, "id");
-            var severity = NormalizeSeverity(GetNestedString(vuln, "database_specific", "severity"));
+            var severity = SeverityFor(vuln);
             var summary = BuildSummary(id, vuln);
             var references = ExtractReferences(id, vuln);
             var advisoryId = ExtractAdvisoryId(id, vuln);
@@ -364,6 +365,165 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
             "" => "unknown",
             _ => normalized,
         };
+    }
+
+    /// <summary>
+    /// Prefer OSV's GHSA-specific <c>database_specific.severity</c> label; when it is absent,
+    /// fall back to the schema's top-level <c>severity[]</c> CVSS array, deriving a band from
+    /// the highest-priority CVSS score available.
+    /// </summary>
+    private static string SeverityFor(JsonElement vuln)
+    {
+        var labelled = NormalizeSeverity(GetNestedString(vuln, "database_specific", "severity"));
+        return labelled != "unknown" ? labelled : CvssSeverity(vuln);
+    }
+
+    // OSV CVSS score types, most-recent first: a v4 score is preferred over v3, then v2.
+    private static readonly string[] CvssTypePreference = ["CVSS_V4", "CVSS_V3", "CVSS_V2"];
+
+    private static string CvssSeverity(JsonElement vuln)
+    {
+        if (!vuln.TryGetProperty("severity", out var severities) || severities.ValueKind != JsonValueKind.Array)
+        {
+            return "unknown";
+        }
+
+        var score = BestCvssScore(severities);
+        return score is null ? "unknown" : SeverityBand(score.Value);
+    }
+
+    private static double? BestCvssScore(JsonElement severities)
+    {
+        foreach (var type in CvssTypePreference)
+        {
+            foreach (var entry in severities.EnumerateArray())
+            {
+                if (entry.ValueKind == JsonValueKind.Object
+                    && GetString(entry, "type").Equals(type, StringComparison.OrdinalIgnoreCase)
+                    && TryCvssScore(GetString(entry, "score"), out var score))
+                {
+                    return score;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Read a CVSS base score from an OSV <c>score</c> string: either a bare numeric value
+    /// (e.g. "9.8") or a CVSS v3.x vector string, from which the base score is computed.
+    /// </summary>
+    private static bool TryCvssScore(string score, out double value)
+    {
+        if (double.TryParse(score, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+        {
+            return true;
+        }
+
+        return TryComputeCvssV3BaseScore(score, out value);
+    }
+
+    private static string SeverityBand(double score) => score switch
+    {
+        >= 9.0 => "critical",
+        >= 7.0 => "high",
+        >= 4.0 => "moderate",
+        > 0.0 => "low",
+        _ => "unknown",
+    };
+
+    private static bool TryComputeCvssV3BaseScore(string vector, out double score)
+    {
+        score = 0;
+        if (!vector.StartsWith("CVSS:3", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var metrics = ParseVectorMetrics(vector);
+        if (!metrics.TryGetValue("AV", out var av) || !metrics.TryGetValue("AC", out var ac)
+            || !metrics.TryGetValue("PR", out var pr) || !metrics.TryGetValue("UI", out var ui)
+            || !metrics.TryGetValue("S", out var s) || !metrics.TryGetValue("C", out var c)
+            || !metrics.TryGetValue("I", out var i) || !metrics.TryGetValue("A", out var a))
+        {
+            return false;
+        }
+
+        var scopeChanged = s.Equals("C", StringComparison.OrdinalIgnoreCase);
+        score = CvssV3BaseScore(av, ac, pr, ui, c, i, a, scopeChanged);
+        return true;
+    }
+
+    private static Dictionary<string, string> ParseVectorMetrics(string vector)
+    {
+        var metrics = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var part in vector.Split('/'))
+        {
+            var kv = part.Split(':', 2);
+            if (kv.Length == 2)
+            {
+                metrics[kv[0]] = kv[1];
+            }
+        }
+
+        return metrics;
+    }
+
+    private static double CvssV3BaseScore(
+        string av, string ac, string pr, string ui, string c, string i, string a, bool scopeChanged)
+    {
+        var iss = 1 - ((1 - ImpactWeight(c)) * (1 - ImpactWeight(i)) * (1 - ImpactWeight(a)));
+        var impact = scopeChanged
+            ? (7.52 * (iss - 0.029)) - (3.25 * Math.Pow(iss - 0.02, 15))
+            : 6.42 * iss;
+        if (impact <= 0)
+        {
+            return 0;
+        }
+
+        var exploitability = 8.22 * AttackVectorWeight(av) * AttackComplexityWeight(ac)
+            * PrivilegesRequiredWeight(pr, scopeChanged) * UserInteractionWeight(ui);
+        var raw = scopeChanged ? 1.08 * (impact + exploitability) : impact + exploitability;
+        return RoundUp(Math.Min(raw, 10));
+    }
+
+    private static double ImpactWeight(string metric) => metric.ToUpperInvariant() switch
+    {
+        "H" => 0.56,
+        "L" => 0.22,
+        _ => 0.0,
+    };
+
+    private static double AttackVectorWeight(string metric) => metric.ToUpperInvariant() switch
+    {
+        "N" => 0.85,
+        "A" => 0.62,
+        "L" => 0.55,
+        "P" => 0.2,
+        _ => 0.0,
+    };
+
+    private static double AttackComplexityWeight(string metric)
+        => metric.Equals("H", StringComparison.OrdinalIgnoreCase) ? 0.44 : 0.77;
+
+    private static double PrivilegesRequiredWeight(string metric, bool scopeChanged) => metric.ToUpperInvariant() switch
+    {
+        "L" => scopeChanged ? 0.68 : 0.62,
+        "H" => scopeChanged ? 0.5 : 0.27,
+        _ => 0.85,
+    };
+
+    private static double UserInteractionWeight(string metric)
+        => metric.Equals("R", StringComparison.OrdinalIgnoreCase) ? 0.62 : 0.85;
+
+    // CVSS v3.1 "Roundup": round up to one decimal place.
+    private static double RoundUp(double value)
+    {
+        var intInput = (int)Math.Round(value * 100000, MidpointRounding.AwayFromZero);
+        return intInput % 10000 == 0
+            ? intInput / 100000.0
+            : (Math.Floor(intInput / 10000.0) + 1) / 10.0;
     }
 
     private static string GetString(JsonElement element, string property)

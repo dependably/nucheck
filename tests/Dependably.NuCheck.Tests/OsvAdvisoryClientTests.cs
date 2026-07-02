@@ -180,6 +180,64 @@ public class OsvAdvisoryClientTests
         Assert.Equal(2, calls);
     }
 
+    // --- Ticket 18: top-level CVSS severity[] fallback -------------------------------------
+
+    [Fact]
+    public void ParseOsv_derives_severity_from_cvss_v3_vector_when_database_specific_absent()
+    {
+        // No database_specific.severity; a top-level CVSS_V3 vector scoring 9.8 => critical.
+        const string body = """
+{"vulns":[{"id":"X",
+  "severity":[{"type":"CVSS_V3","score":"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}],
+  "affected":[{"package":{"ecosystem":"NuGet","name":"P"},
+    "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"1.0.0"},{"fixed":"1.5.0"}]}]}]}]}
+""";
+        var advisory = Assert.Single(OsvAdvisoryClient.ParseOsv(body, "P"));
+        Assert.Equal("critical", advisory.Severity);
+    }
+
+    [Fact]
+    public void ParseOsv_derives_severity_from_numeric_cvss_score()
+    {
+        // A bare numeric base score in the 4.0-6.9 band => moderate.
+        const string body = """
+{"vulns":[{"id":"X",
+  "severity":[{"type":"CVSS_V3","score":"5.5"}],
+  "affected":[{"package":{"ecosystem":"NuGet","name":"P"},
+    "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"1.0.0"},{"fixed":"1.5.0"}]}]}]}]}
+""";
+        var advisory = Assert.Single(OsvAdvisoryClient.ParseOsv(body, "P"));
+        Assert.Equal("moderate", advisory.Severity);
+    }
+
+    [Fact]
+    public void ParseOsv_prefers_database_specific_severity_over_cvss_array()
+    {
+        // database_specific label wins even when a CVSS vector is also present.
+        const string body = """
+{"vulns":[{"id":"X","database_specific":{"severity":"LOW"},
+  "severity":[{"type":"CVSS_V3","score":"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}],
+  "affected":[{"package":{"ecosystem":"NuGet","name":"P"},
+    "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"1.0.0"},{"fixed":"1.5.0"}]}]}]}]}
+""";
+        var advisory = Assert.Single(OsvAdvisoryClient.ParseOsv(body, "P"));
+        Assert.Equal("low", advisory.Severity);
+    }
+
+    [Fact]
+    public void ParseOsv_prefers_cvss_v4_over_v3_in_severity_array()
+    {
+        // V4 (critical) is chosen ahead of a V3 entry that alone would read low.
+        const string body = """
+{"vulns":[{"id":"X",
+  "severity":[{"type":"CVSS_V3","score":"2.0"},{"type":"CVSS_V4","score":"9.5"}],
+  "affected":[{"package":{"ecosystem":"NuGet","name":"P"},
+    "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"1.0.0"},{"fixed":"1.5.0"}]}]}]}]}
+""";
+        var advisory = Assert.Single(OsvAdvisoryClient.ParseOsv(body, "P"));
+        Assert.Equal("critical", advisory.Severity);
+    }
+
     // --- Ticket 29: unsorted / consecutive events -----------------------------------------
 
     [Fact]
