@@ -178,9 +178,21 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
     private static TimeSpan RetryDelay(HttpResponseMessage response, int attempt)
     {
         var retryAfter = response.Headers.RetryAfter;
+
+        // delta-seconds form: Retry-After: 30
         if (retryAfter?.Delta is { } delta && delta > TimeSpan.Zero)
         {
             return delta < MaxBackoff ? delta : MaxBackoff;
+        }
+
+        // HTTP-date form: Retry-After: Wed, 01 Jul 2026 12:00:00 GMT
+        if (retryAfter?.Date is { } date)
+        {
+            var wait = date - DateTimeOffset.UtcNow;
+            if (wait > TimeSpan.Zero)
+            {
+                return wait < MaxBackoff ? wait : MaxBackoff;
+            }
         }
 
         var backoff = TimeSpan.FromSeconds(Math.Pow(2, attempt));

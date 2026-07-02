@@ -1,4 +1,6 @@
 using System.Net;
+using System.Net.Http.Headers;
+using System.Text;
 using Dependably.NuCheck.Services;
 using Dependably.NuCheck.Tests.Fakes;
 
@@ -164,6 +166,83 @@ public class GitHubAdvisoryClientTests
     }
 
     private static Task NoDelay(TimeSpan _, CancellationToken __) => Task.CompletedTask;
+
+    // #16 — Retry-After HTTP-date form
+
+    [Fact]
+    public async Task Retry_After_http_date_form_is_honoured_and_capped_at_max_backoff()
+    {
+        // Set a Retry-After date 5 minutes in the future — well above MaxBackoff (60 s).
+        // Old code skipped the date branch and used exponential backoff (1 s for attempt 0).
+        // New code computes the wait from the date, clamped to MaxBackoff (60 s).
+        var retryDate = DateTimeOffset.UtcNow.AddSeconds(300);
+        var captured = TimeSpan.Zero;
+        var calls = 0;
+        var handler = new FakeHttpMessageHandler(req =>
+        {
+            calls++;
+            if (calls == 1)
+            {
+                var r = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+                {
+                    Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+                };
+                r.Headers.RetryAfter = new RetryConditionHeaderValue(retryDate);
+                return r;
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(GraphQlBody, Encoding.UTF8, "application/json"),
+            };
+        });
+        var client = new GitHubAdvisoryClient(
+            new HttpClient(handler), "token",
+            delay: (ts, _) => { captured = ts; return Task.CompletedTask; });
+
+        await client.GetAdvisoriesAsync("Newtonsoft.Json");
+
+        Assert.Equal(2, calls);
+        // Old code: 1 s (2^0 backoff). New code: MaxBackoff (60 s) because 300 s > MaxBackoff.
+        Assert.Equal(TimeSpan.FromSeconds(60), captured);
+    }
+
+    [Fact]
+    public async Task Retry_After_http_date_form_in_the_past_falls_through_to_backoff()
+    {
+        // A Retry-After date already in the past has a negative computed wait; fall through
+        // to exponential backoff. Old code also fell through, so both paths agree here,
+        // but the assertion confirms the backoff value is used (2^0 = 1 s) rather than
+        // a nonsensical zero or negative delay.
+        var pastDate = DateTimeOffset.UtcNow.AddSeconds(-10);
+        var captured = TimeSpan.Zero;
+        var calls = 0;
+        var handler = new FakeHttpMessageHandler(req =>
+        {
+            calls++;
+            if (calls == 1)
+            {
+                var r = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+                {
+                    Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+                };
+                r.Headers.RetryAfter = new RetryConditionHeaderValue(pastDate);
+                return r;
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(GraphQlBody, Encoding.UTF8, "application/json"),
+            };
+        });
+        var client = new GitHubAdvisoryClient(
+            new HttpClient(handler), "token",
+            delay: (ts, _) => { captured = ts; return Task.CompletedTask; });
+
+        await client.GetAdvisoriesAsync("Newtonsoft.Json");
+
+        Assert.Equal(TimeSpan.FromSeconds(1), captured); // 2^0 = 1 s for attempt 0
+    }
 
     [Fact]
     public async Task Rate_limited_graphql_200_with_errors_throws()
