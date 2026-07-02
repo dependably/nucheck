@@ -287,6 +287,40 @@ public class OsvAdvisoryClientTests
         Assert.Equal(">= 2.0.0, < 2.5.0", advisories[1].VulnerableVersionRange);
     }
 
+    // --- Ticket 39: ValueKind guards in event parsing ------------------------------------
+
+    [Fact]
+    public void ParseOsv_skips_event_with_null_json_value()
+    {
+        // introduced:null has ValueKind==Null. Old code calls GetString() and throws;
+        // new code skips the null event and processes the remaining valid events.
+        const string body = """
+{"vulns":[{"id":"X","affected":[{"package":{"ecosystem":"NuGet","name":"P"},
+  "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":null},{"introduced":"1.0.0"},{"fixed":"2.0.0"}]}]}]}]}
+""";
+        var advisory = Assert.Single(OsvAdvisoryClient.ParseOsv(body, "P"));
+        Assert.Equal(">= 1.0.0, < 2.0.0", advisory.VulnerableVersionRange);
+    }
+
+    [Fact]
+    public void ParseOsv_continues_after_non_string_event_value_in_one_vuln()
+    {
+        // Mixed response: first vuln has a numeric "introduced", second is well-formed.
+        // Old code: GetString() on a Number throws, aborting the entire parse.
+        // New code: the non-string event is skipped; both vulns produce advisories.
+        const string body = """
+{"vulns":[
+  {"id":"X","affected":[{"package":{"ecosystem":"NuGet","name":"P"},
+    "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":42},{"fixed":"2.0.0"}]}]}]},
+  {"id":"Y","affected":[{"package":{"ecosystem":"NuGet","name":"P"},
+    "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"1.0.0"},{"fixed":"3.0.0"}]}]}]}
+]}
+""";
+        var advisories = OsvAdvisoryClient.ParseOsv(body, "P");
+        // The well-formed advisory from "Y" must survive even when "X" has bad event data.
+        Assert.Contains(advisories, a => a.VulnerableVersionRange == ">= 1.0.0, < 3.0.0");
+    }
+
     // --- Ticket 23: exponential backoff + Retry-After support ----------------------------
 
     [Fact]

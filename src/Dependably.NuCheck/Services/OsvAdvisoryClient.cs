@@ -231,15 +231,15 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
         var parsed = new List<RangeEvent>();
         foreach (var ev in events.EnumerateArray())
         {
-            if (ev.TryGetProperty("introduced", out var introduced))
+            if (ev.TryGetProperty("introduced", out var introduced) && introduced.ValueKind == JsonValueKind.String)
             {
                 parsed.Add(new RangeEvent(EventKind.Introduced, introduced.GetString()));
             }
-            else if (ev.TryGetProperty("fixed", out var fixedVersion))
+            else if (ev.TryGetProperty("fixed", out var fixedVersion) && fixedVersion.ValueKind == JsonValueKind.String)
             {
                 parsed.Add(new RangeEvent(EventKind.Fixed, fixedVersion.GetString()));
             }
-            else if (ev.TryGetProperty("last_affected", out var lastAffected))
+            else if (ev.TryGetProperty("last_affected", out var lastAffected) && lastAffected.ValueKind == JsonValueKind.String)
             {
                 parsed.Add(new RangeEvent(EventKind.LastAffected, lastAffected.GetString()));
             }
