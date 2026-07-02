@@ -265,4 +265,32 @@ public class GitHubAdvisoryClientTests
 """;
         Assert.Empty(GitHubAdvisoryClient.ParseRest(body, "Newtonsoft.Json"));
     }
+
+    // #38 — ParseGraphQl safe on non-object 2xx body
+
+    [Fact]
+    public void ParseGraphQl_throws_InvalidOperationException_wrapping_JsonException_on_non_json_body()
+    {
+        // Old code let JsonException propagate raw; new code wraps it with a clear message.
+        var ex = Assert.Throws<InvalidOperationException>(() => GitHubAdvisoryClient.ParseGraphQl("not-valid-json{{{{"));
+        Assert.Contains("unparseable", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ParseGraphQl_throws_descriptive_exception_on_null_json_body()
+    {
+        // "null" is valid JSON but root is not an Object — old code throws from TryGetProperty
+        // with a generic CLR message; new code throws with "unexpected response".
+        var ex = Assert.Throws<InvalidOperationException>(() => GitHubAdvisoryClient.ParseGraphQl("null"));
+        Assert.Contains("unexpected response", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ParseGraphQl_throws_descriptive_exception_on_array_json_body()
+    {
+        // Array root is valid JSON but not an Object — old code throws from TryGetProperty
+        // with a generic CLR message; new code throws with "unexpected response".
+        var ex = Assert.Throws<InvalidOperationException>(() => GitHubAdvisoryClient.ParseGraphQl("[1,2,3]"));
+        Assert.Contains("unexpected response", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
 }

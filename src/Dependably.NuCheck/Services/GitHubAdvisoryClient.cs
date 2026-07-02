@@ -199,7 +199,30 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
     /// <summary>Parse a single GraphQL page into its advisories plus the pageInfo cursor state.</summary>
     private static GraphQlPage ParseGraphQlPage(string body)
     {
-        using var document = JsonDocument.Parse(body);
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(body);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException("GitHub GraphQL API returned an unparseable response.", ex);
+        }
+
+        using (document)
+        {
+            return ParseGraphQlDocument(document);
+        }
+    }
+
+    private static GraphQlPage ParseGraphQlDocument(JsonDocument document)
+    {
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException(
+                $"GitHub GraphQL API returned an unexpected response (root is {document.RootElement.ValueKind}).");
+        }
+
         ThrowOnGraphQlErrors(document.RootElement);
 
         if (!TryGetSecurityVulnerabilities(document.RootElement, out var sv)
