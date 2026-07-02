@@ -323,6 +323,73 @@ public class PackageFileReaderTests : IDisposable
         Assert.Equal("3.1.0", package.Version.ToString());
     }
 
+    [Fact]
+    public void Read_audits_every_distinct_version_of_a_duplicated_packagereference()
+    {
+        // The same package pinned to two different exact versions for two TargetFrameworks
+        // (Condition-gated, common multi-TFM pattern). Conditions are deliberately NOT
+        // evaluated, so BOTH declared versions must be audited — a vulnerable legacy pin
+        // must not be masked by a clean newer one.
+        var path = WriteTemp(".csproj", """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup Condition="'$(TargetFramework)'=='net48'">
+    <PackageReference Include="X" Version="1.0.0" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)'=='net8.0'">
+    <PackageReference Include="X" Version="2.0.0" />
+  </ItemGroup>
+</Project>
+""");
+
+        var packages = PackageFileReader.Read(path);
+
+        Assert.Equal(2, packages.Count);
+        Assert.Contains(packages, p => p.Id == "X" && p.Version.ToString() == "1.0.0");
+        Assert.Contains(packages, p => p.Id == "X" && p.Version.ToString() == "2.0.0");
+    }
+
+    [Fact]
+    public void Read_audits_every_distinct_version_of_a_duplicated_packageversion()
+    {
+        // Central Package Management with the same id declared at two versions (per-TFM
+        // Condition). Both distinct versions must survive — no last-wins collapse.
+        var path = WriteTemp(".props", """
+<Project>
+  <ItemGroup Condition="'$(TargetFramework)'=='net48'">
+    <PackageVersion Include="X" Version="1.0.0" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)'=='net8.0'">
+    <PackageVersion Include="X" Version="2.0.0" />
+  </ItemGroup>
+</Project>
+""");
+
+        var packages = PackageFileReader.Read(path);
+
+        Assert.Equal(2, packages.Count);
+        Assert.Contains(packages, p => p.Id == "X" && p.Version.ToString() == "1.0.0");
+        Assert.Contains(packages, p => p.Id == "X" && p.Version.ToString() == "2.0.0");
+    }
+
+    [Fact]
+    public void Read_collapses_exact_and_range_that_resolve_to_the_same_version()
+    {
+        // An exact "1.0.0" and a range "[1.0.0,2.0.0)" both resolve to 1.0.0 — the same
+        // audited version. They collapse to a single entry (exact preferred over range).
+        var path = WriteTemp(".csproj", """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="X" Version="[1.0.0,2.0.0)" />
+    <PackageReference Include="X" Version="1.0.0" />
+  </ItemGroup>
+</Project>
+""");
+
+        var package = Assert.Single(PackageFileReader.Read(path));
+        Assert.Equal("X", package.Id);
+        Assert.Equal("1.0.0", package.Version.ToString());
+    }
+
     private string WriteTemp(string extension, string content)
     {
         var path = Path.Combine(Path.GetTempPath(), $"nugetcheck-{Guid.NewGuid():N}{extension}");

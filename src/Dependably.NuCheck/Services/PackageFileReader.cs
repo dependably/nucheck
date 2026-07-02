@@ -249,19 +249,21 @@ public static class PackageFileReader
             .ToList();
 
         // A Directory.Packages.props' whole purpose is to declare PackageVersions; with
-        // no PackageReferences, audit those centrally-managed entries directly.
+        // no PackageReferences, audit those centrally-managed entries directly. Every
+        // DISTINCT declared version is audited — duplicate (e.g. per-TFM) ids are not
+        // collapsed to one version.
         if (localVersions.Count > 0 && packageReferences.Count == 0)
         {
-            return BuildPackageRefs(localVersions.Select(kv => (kv.Key, kv.Value)));
+            return BuildPackageRefs(localVersions);
         }
 
         // Otherwise resolve each PackageReference. Under Central Package Management the
         // version lives in a Directory.Packages.props up the tree; merge those, then let
         // any file-local <PackageVersion> win.
         var versionMap = FindCentralPackageVersions(path);
-        foreach (var kv in localVersions)
+        foreach (var (id, version) in localVersions)
         {
-            versionMap[kv.Key] = kv.Value;
+            versionMap[id] = version;
         }
 
         var resolved = new List<(string Id, string Version)>();
@@ -312,11 +314,13 @@ public static class PackageFileReader
 
     /// <summary>
     /// Collects every <c>&lt;PackageVersion Include="X" Version="Y" /&gt;</c> (the
-    /// Central Package Management definitions) into an id -> version map.
+    /// Central Package Management definitions) as (id, version) pairs. Duplicate ids —
+    /// e.g. a version declared per <c>TargetFramework</c> via <c>Condition</c>s — are
+    /// each preserved so no conditionally-declared version is silently dropped.
     /// </summary>
-    private static Dictionary<string, string> GatherPackageVersions(XDocument doc)
+    private static List<(string Id, string Version)> GatherPackageVersions(XDocument doc)
     {
-        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var versions = new List<(string Id, string Version)>();
         foreach (var element in doc.Descendants()
             .Where(e => e.Name.LocalName.Equals("PackageVersion", StringComparison.OrdinalIgnoreCase)))
         {
@@ -327,8 +331,25 @@ public static class PackageFileReader
                     ?.Value;
             if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(version))
             {
-                map[id] = version;
+                versions.Add((id, version));
             }
+        }
+
+        return versions;
+    }
+
+    /// <summary>
+    /// Collapses (id, version) pairs into an id -> version lookup for resolving a
+    /// <c>&lt;PackageReference&gt;</c> that omits its own version (Central Package
+    /// Management). A reference resolves to a single central version, so the last
+    /// declaration for an id wins here.
+    /// </summary>
+    private static Dictionary<string, string> ToVersionMap(IEnumerable<(string Id, string Version)> versions)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (id, version) in versions)
+        {
+            map[id] = version;
         }
 
         return map;
@@ -352,7 +373,7 @@ public static class PackageFileReader
             {
                 try
                 {
-                    return GatherPackageVersions(XDocument.Load(candidate));
+                    return ToVersionMap(GatherPackageVersions(XDocument.Load(candidate)));
                 }
                 catch
                 {
@@ -374,12 +395,15 @@ public static class PackageFileReader
 
     /// <summary>
     /// Converts resolved (id, version-string) pairs to <see cref="PackageRef"/>,
-    /// skipping any whose version cannot be determined, and de-duplicating
-    /// case-insensitively by id (preferring an exact version over a range lower bound).
+    /// skipping any whose version cannot be determined. De-duplication is keyed on
+    /// (id, resolved version) — like the lock-file path — so every DISTINCT declared
+    /// version of a package is audited (e.g. conditionally-declared per-TargetFramework
+    /// versions of the same id). Entries that resolve to the SAME version are collapsed,
+    /// preferring an exact version over a range whose lower bound matches it.
     /// </summary>
     private static List<PackageRef> BuildPackageRefs(IEnumerable<(string Id, string Version)> entries)
     {
-        var byId = new Dictionary<string, (PackageRef Ref, bool Exact)>(StringComparer.OrdinalIgnoreCase);
+        var byIdVersion = new Dictionary<string, (PackageRef Ref, bool Exact)>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var (id, versionString) in entries)
         {
@@ -388,13 +412,14 @@ public static class PackageFileReader
                 continue; // No usable version — cannot audit, skip.
             }
 
-            if (!byId.TryGetValue(id, out var existing) || (exact && !existing.Exact))
+            var key = $"{id}@{version.ToNormalizedString()}";
+            if (!byIdVersion.TryGetValue(key, out var existing) || (exact && !existing.Exact))
             {
-                byId[id] = (new PackageRef(id, version), exact);
+                byIdVersion[key] = (new PackageRef(id, version), exact);
             }
         }
 
-        return byId.Values.Select(v => v.Ref).ToList();
+        return byIdVersion.Values.Select(v => v.Ref).ToList();
     }
 
     /// <summary>
