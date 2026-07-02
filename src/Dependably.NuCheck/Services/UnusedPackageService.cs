@@ -1024,11 +1024,14 @@ public static partial class UnusedPackageService
     /// When inside a hole (<c>holeDepth &gt; 0</c>) all content is dispatched through
     /// <see cref="EmitRawMultiDollarHoleChar"/> so that nested strings, comments, and
     /// char literals cannot desync the hole-depth counter or trigger a false close.
+    /// Inside a hole, plain-code braces are tracked via a separate <c>codeDepth</c> counter
+    /// (per Roslyn token balancing) so that initialiser brace-runs do not desync the hole.
     /// </summary>
     private static int EmitRawMultiDollarContent(
         string content, int i, int quoteCount, int dollarCount, System.Text.StringBuilder sb)
     {
         var holeDepth = 0;
+        var codeDepth = 0; // tracks plain-code braces inside the current hole
         while (i < content.Length)
         {
             var c = content[i];
@@ -1037,7 +1040,7 @@ public static partial class UnusedPackageService
                 // Inside a hole — dispatch through the nested-token-aware handler so that
                 // braces/quotes inside nested strings or comments do not affect hole depth
                 // or the closing-delimiter search.
-                i = EmitRawMultiDollarHoleChar(content, i, c, sb, dollarCount, ref holeDepth);
+                i = EmitRawMultiDollarHoleChar(content, i, c, sb, dollarCount, ref holeDepth, ref codeDepth);
             }
             else if (c == '"')
             {
@@ -1049,6 +1052,10 @@ public static partial class UnusedPackageService
             {
                 // A dollarCount-wide { run opens a hole; shorter runs are literal text.
                 i = AdvanceRawMultiDollarBraceRun(content, i, '{', dollarCount, sb, ref holeDepth, +1);
+                if (holeDepth > 0)
+                {
+                    codeDepth = 0; // reset code-brace depth on every hole entry
+                }
             }
             else
             {
@@ -1066,12 +1073,13 @@ public static partial class UnusedPackageService
     /// skipping or recursing into nested string literals, comments, and char literals so
     /// that their braces and quotes do not affect <paramref name="holeDepth"/> or trigger
     /// a false closing-delimiter match.
-    /// Mirrors <see cref="EmitInterpolatedHoleChar"/> but uses
-    /// <paramref name="dollarCount"/>-wide brace-run accounting for depth changes.
+    /// Mirrors <see cref="EmitInterpolatedHoleChar"/> but uses per-token code-brace depth
+    /// (<paramref name="codeDepth"/>) to separate plain-code braces from hole-close sequences,
+    /// and only closes the hole when N consecutive <c>}</c> appear at code-brace depth 0.
     /// </summary>
     private static int EmitRawMultiDollarHoleChar(
         string content, int i, char c, System.Text.StringBuilder sb,
-        int dollarCount, ref int holeDepth)
+        int dollarCount, ref int holeDepth, ref int codeDepth)
     {
         // Skip comments so a brace or quote inside them does not desync hole depth.
         if (c == '/' && i + 1 < content.Length && content[i + 1] == '/')
@@ -1122,15 +1130,19 @@ public static partial class UnusedPackageService
             return SkipCharLiteral(content, i);
         }
 
-        // Brace runs — dollarCount-wide runs open/close holes; shorter runs are code.
+        // Plain code braces — per Roslyn token balancing, each { increments codeDepth
+        // and each } either decrements codeDepth (code block) or, when codeDepth is
+        // already 0, counts toward the N-consecutive-} hole-close sequence.
         if (c == '{')
         {
-            return AdvanceRawMultiDollarBraceRun(content, i, '{', dollarCount, sb, ref holeDepth, +1);
+            codeDepth++;
+            sb.Append(c);
+            return i + 1;
         }
 
         if (c == '}')
         {
-            return AdvanceRawMultiDollarBraceRun(content, i, '}', dollarCount, sb, ref holeDepth, -1);
+            return AdvanceRawMultiDollarHoleCloseBrace(content, i, dollarCount, sb, ref holeDepth, ref codeDepth);
         }
 
         sb.Append(c);
@@ -1166,10 +1178,13 @@ public static partial class UnusedPackageService
     }
 
     /// <summary>
-    /// Advances past a run of <paramref name="brace"/> characters in the body of a
-    /// multi-dollar raw string, emitting all of them as code and adjusting
-    /// <paramref name="holeDepth"/> by <paramref name="depthDelta"/> when the run meets or
-    /// exceeds <paramref name="dollarCount"/>.
+    /// Advances past a run of <paramref name="brace"/> characters in the <em>literal body</em>
+    /// of a multi-dollar raw string (i.e. while <c>holeDepth == 0</c>), emitting all of them
+    /// as code and setting <paramref name="holeDepth"/> to 1 when the run meets or exceeds
+    /// <paramref name="dollarCount"/> (hole-open). Only called for <c>'{'</c> from the literal
+    /// context in <see cref="EmitRawMultiDollarContent"/>; inside a hole, brace handling is
+    /// performed by <see cref="EmitRawMultiDollarHoleChar"/> and
+    /// <see cref="AdvanceRawMultiDollarHoleCloseBrace"/>.
     /// </summary>
     private static int AdvanceRawMultiDollarBraceRun(
         string content, int i, char brace, int dollarCount,
@@ -1188,6 +1203,53 @@ public static partial class UnusedPackageService
         }
 
         return i;
+    }
+
+    /// <summary>
+    /// Processes a <c>}</c> encountered at plain-code level inside a multi-dollar raw
+    /// interpolated string hole (called from <see cref="EmitRawMultiDollarHoleChar"/>).
+    /// Uses per-token Roslyn-style code-brace balancing: when <paramref name="codeDepth"/>
+    /// is positive the <c>}</c> closes a code block (decrement, emit, continue); when it is
+    /// zero the <c>}</c> may be part of the N-consecutive-<c>}</c> hole-close sequence.
+    /// Exactly <paramref name="dollarCount"/> consecutive <c>}</c> at code depth 0 closes the
+    /// hole (<paramref name="holeDepth"/> is set to 0). A shorter run at code depth 0 is not a
+    /// hole-close — the braces are emitted as code (fail-safe: preserve rather than strip).
+    /// </summary>
+    private static int AdvanceRawMultiDollarHoleCloseBrace(
+        string content, int i, int dollarCount,
+        System.Text.StringBuilder sb, ref int holeDepth, ref int codeDepth)
+    {
+        if (codeDepth > 0)
+        {
+            // This } closes a code block or initialiser — balance codeDepth, emit, continue.
+            codeDepth--;
+            sb.Append('}');
+            return i + 1;
+        }
+
+        // codeDepth == 0: check for the N-consecutive-} hole-close sequence.
+        var runLen = CountCharRun(content, i, '}');
+        if (runLen >= dollarCount)
+        {
+            // Consume exactly dollarCount } to close the hole; leave any surplus for the
+            // outer loop (they may be literal-body } after the hole closes).
+            for (var j = 0; j < dollarCount; j++)
+            {
+                sb.Append('}');
+            }
+
+            holeDepth = 0;
+            return i + dollarCount;
+        }
+
+        // Short run at code depth 0 — not a hole-close.
+        // Fail-safe: emit all of them as code and keep scanning the hole.
+        for (var j = 0; j < runLen; j++)
+        {
+            sb.Append('}');
+        }
+
+        return i + runLen;
     }
 
     /// <summary>

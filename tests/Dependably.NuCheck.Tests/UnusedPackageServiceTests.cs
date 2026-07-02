@@ -1452,4 +1452,102 @@ public class UnusedPackageServiceTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    // --- Brace-depth arithmetic fix: per-token codeDepth model (#46) ------------------------
+    //
+    // Root cause: AdvanceRawMultiDollarBraceRun used a single holeDepth counter for both
+    // the "are we in a hole?" state and code-brace balancing inside the hole.  A consecutive
+    // run of } characters whose length >= dollarCount was treated as a hole-close even when
+    // those braces were plain code (e.g. closing nested initializer levels), causing two
+    // failure modes:
+    //
+    //   R1 (false close): the run desynchronised holeDepth to 0 mid-hole, causing the next
+    //      closing-delimiter search to trigger on a nested """…""" inside the hole and strip
+    //      the real usage that followed.
+    //
+    //   R2 (phantom depth): {{…}} inside the hole (codeDepth levels) pushed holeDepth to 2,
+    //      so the real hole-close }} only decremented it to 1, the closing """ was then
+    //      consumed as a nested raw-string inside the still-open phantom hole, and all code
+    //      that followed the literal (including real usage) was stripped.
+    //
+    // Fix: introduce a separate codeDepth counter for plain code braces inside the hole.
+    // Each plain { in code increments codeDepth; each } decrements codeDepth when positive
+    // (code block close) or, when codeDepth == 0, counts toward the N-consecutive-} hole-close
+    // sequence.  This makes the two counters orthogonal and matches Roslyn's token model.
+
+    [Fact]
+    public void Disk_raw_multi_dollar_code_initialiser_brace_run_false_close_usage_is_not_flagged()
+    {
+        // R1: $$"""{{ (new List<int[]>{new[]{1}}).Count + """q""".Length + Foo.Bar.X.Run().Length }}"""
+        // The brace run }}} (closing inner array, then outer list) had length 2 == dollarCount,
+        // which the old code misread as a hole-close.  After that false close the nested """q"""
+        // was treated as the literal's closing delimiter, stripping Foo.Bar.X.Run().Length.
+        // Serilog is genuinely unused and must still be flagged (partial-failure control).
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.Bar" Version="1.0.0" />
+                    <PackageReference Include="Serilog" Version="3.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // Exact reproducer: Foo.Bar used ONLY inside the $$"""...""" hole whose code
+            // contains a collection initialiser with a consecutive brace run matching dollarCount.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                """""public class C { static void M() { var n = $$"""{{ (new System.Collections.Generic.List<int[]>{new[]{1}}).Count + """q""".Length + Foo.Bar.X.Run().Length }}"""; } }""""");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            // Foo.Bar IS used (inside the hole) — only Serilog should be flagged.
+            var finding = Assert.Single(findings);
+            Assert.Equal("Serilog", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_raw_multi_dollar_phantom_depth_does_not_strip_post_literal_usage()
+    {
+        // R2: $$"""{{ (new int[1,1]{{1} }).Length }}"""; var b = Foo.Bar.X.Run(); …
+        // The old code treated {{ inside the hole as a nested hole-open (holeDepth→2).
+        // The real }} then only decremented to 1, the closing """ was consumed as a nested
+        // raw-string inside the phantom hole, and everything after the literal — including
+        // Foo.Bar.X.Run() — was silently stripped.
+        // Serilog is genuinely unused and must still be flagged (partial-failure control).
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.Bar" Version="1.0.0" />
+                    <PackageReference Include="Serilog" Version="3.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // Exact reproducer: Foo.Bar used ONLY after the $$"""...""" literal; the hole
+            // contains a 2-D array initialiser with a {{ run that the old code misread as a
+            // nested hole-open, leaving the outer hole unclosed and consuming the real usage.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                """""public class C { static int M() { var n = $$"""{{ (new int[1,1]{{1} }).Length }}"""; var b = Foo.Bar.X.Run(); return n.Length + b.Length; } }""""");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            // Foo.Bar IS used (after the literal) — only Serilog should be flagged.
+            var finding = Assert.Single(findings);
+            Assert.Equal("Serilog", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }
