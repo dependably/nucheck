@@ -6,6 +6,19 @@ namespace Dependably.NuCheck.Output;
 /// <summary>Formats the result as a brief human-readable summary.</summary>
 public sealed class SummaryResultFormatter : IResultFormatter
 {
+    private readonly string? _severityFilter;
+
+    /// <param name="severityFilter">
+    /// The active <c>--severity</c> display filter (a normalised ladder word), or
+    /// <c>null</c> when no filter is in effect. When set, the "all secure" message
+    /// is replaced with an accurate qualified message so it cannot contradict the
+    /// process exit code when other-severity advisories caused the gate to trip.
+    /// </param>
+    public SummaryResultFormatter(string? severityFilter = null)
+    {
+        _severityFilter = severityFilter;
+    }
+
     public string Format(AuditResult result)
     {
         var builder = new StringBuilder();
@@ -13,7 +26,7 @@ public sealed class SummaryResultFormatter : IResultFormatter
 
         if (result.VulnerabilityCount == 0)
         {
-            builder.AppendLine("✓ All packages are secure - no known vulnerabilities found.");
+            AppendNoVulnerabilities(builder);
         }
         else
         {
@@ -45,6 +58,23 @@ public sealed class SummaryResultFormatter : IResultFormatter
         AppendPolicyFindings(builder, result);
         AppendUnusedPackages(builder, result);
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// Emit the appropriate "no advisory" line when the vulnerability count is zero.
+    /// When a severity filter is active, the all-secure message is replaced with a
+    /// qualified note so it cannot contradict a non-zero process exit code caused by
+    /// advisories at other severities.
+    /// </summary>
+    private void AppendNoVulnerabilities(StringBuilder builder)
+    {
+        if (_severityFilter is not null)
+        {
+            builder.AppendLine($"No advisories matching severity '{_severityFilter}' (others may exist — see exit code)");
+            return;
+        }
+
+        builder.AppendLine("✓ All packages are secure - no known vulnerabilities found.");
     }
 
     private static void AppendPolicyFindings(StringBuilder builder, AuditResult result)

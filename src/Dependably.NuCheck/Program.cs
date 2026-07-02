@@ -115,7 +115,7 @@ public static class Program
             // --severity is a DISPLAY filter only: it narrows what is printed, never the gate.
             // The formatter is handed the real exit code so JSON's summary.exitCode matches.
             var display = result.FilterBySeverity(options.Severity);
-            Console.WriteLine(FormatterFactory.Get(options.Format, ToolVersion, options.FilePath, exitCode).Format(display));
+            Console.WriteLine(FormatterFactory.Get(options.Format, ToolVersion, options.FilePath, exitCode, options.Severity).Format(display));
 
             return exitCode;
         }

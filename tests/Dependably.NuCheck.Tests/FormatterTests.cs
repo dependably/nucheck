@@ -264,6 +264,80 @@ public class FormatterTests
         Assert.Contains("heuristic", finding.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
     }
 
+    // ---- issue #43: "All packages are secure" misleading when filter is active -------
+
+    private static AuditResult OnlyHighResult() => new()
+    {
+        TotalPackages = 2,
+        Vulnerabilities =
+        [
+            new PackageVulnerability("Pkg", "1.0.0",
+            [
+                new Advisory("High issue", "high", ">= 1.0", []),
+            ]),
+        ],
+    };
+
+    [Fact]
+    public void Table_filtered_result_shows_no_match_message_not_all_secure()
+    {
+        // A project has a high-severity vuln but the user passes --severity critical.
+        // The filtered display has zero advisories; the formatter must NOT claim
+        // "All packages are secure" because the exit code will be 1.
+        var filtered = OnlyHighResult().FilterBySeverity("critical");
+        Assert.Empty(filtered.Vulnerabilities);
+
+        var output = new TableResultFormatter("critical").Format(filtered);
+
+        Assert.DoesNotContain("All packages are secure", output, StringComparison.Ordinal);
+        Assert.Contains("No advisories matching severity 'critical'", output, StringComparison.Ordinal);
+        Assert.Contains("see exit code", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Summary_filtered_result_shows_no_match_message_not_all_secure()
+    {
+        var filtered = OnlyHighResult().FilterBySeverity("critical");
+        var output = new SummaryResultFormatter("critical").Format(filtered);
+
+        Assert.DoesNotContain("All packages are secure", output, StringComparison.Ordinal);
+        Assert.Contains("No advisories matching severity 'critical'", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Table_no_filter_and_clean_result_shows_all_secure()
+    {
+        // Without a filter, an actually clean result still gets the checkmark.
+        var output = new TableResultFormatter().Format(CleanResult());
+        Assert.Contains("All packages are secure", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Summary_no_filter_and_clean_result_shows_all_secure()
+    {
+        var output = new SummaryResultFormatter().Format(CleanResult());
+        Assert.Contains("All packages are secure", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Table_suppresses_all_secure_when_policy_errors_are_present()
+    {
+        // When vulnerabilities are zero but policy errors tripped the gate, the
+        // "all secure" checkmark appears immediately above the POLICY FINDINGS
+        // block and would be factually false.
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities = [],
+            PolicyFindings = [new SourceFinding("nuget.evil.example", "s", "untrusted")],
+        };
+
+        var output = new TableResultFormatter().Format(result);
+
+        Assert.DoesNotContain("All packages are secure", output, StringComparison.Ordinal);
+        Assert.Contains("POLICY FINDINGS", output, StringComparison.Ordinal);
+    }
+
     // ---- issue #34: control-character / ANSI injection sanitization -----------------
 
     private static AuditResult InjectionResult() => new()

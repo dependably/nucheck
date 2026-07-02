@@ -6,6 +6,19 @@ namespace Dependably.NuCheck.Output;
 /// <summary>Formats the result as a plain-text table.</summary>
 public sealed class TableResultFormatter : IResultFormatter
 {
+    private readonly string? _severityFilter;
+
+    /// <param name="severityFilter">
+    /// The active <c>--severity</c> display filter (a normalised ladder word such as
+    /// <c>"moderate"</c>), or <c>null</c> when no filter is in effect. When set, the
+    /// "all secure" checkmark is replaced with a message explaining that other severities
+    /// may still exist so the checkmark does not contradict a non-zero exit code.
+    /// </param>
+    public TableResultFormatter(string? severityFilter = null)
+    {
+        _severityFilter = severityFilter;
+    }
+
     public string Format(AuditResult result)
     {
         var builder = new StringBuilder();
@@ -24,11 +37,11 @@ public sealed class TableResultFormatter : IResultFormatter
         return builder.ToString();
     }
 
-    private static void AppendVulnerabilities(StringBuilder builder, AuditResult result)
+    private void AppendVulnerabilities(StringBuilder builder, AuditResult result)
     {
         if (result.Vulnerabilities.Count == 0)
         {
-            builder.AppendLine("✓ All packages are secure");
+            AppendNoVulnerabilities(builder, result);
             return;
         }
 
@@ -39,6 +52,28 @@ public sealed class TableResultFormatter : IResultFormatter
             AppendAdvisories(builder, vulnerability.Advisories);
             index++;
         }
+    }
+
+    /// <summary>
+    /// Emit the appropriate "no advisory" line when the vulnerability list is empty.
+    /// The all-secure checkmark is suppressed when a severity display filter is active
+    /// (other severities may exist and trip the exit-code gate) or when policy errors
+    /// are present (the block appears a few lines below and contradicts the checkmark).
+    /// </summary>
+    private void AppendNoVulnerabilities(StringBuilder builder, AuditResult result)
+    {
+        if (_severityFilter is not null)
+        {
+            builder.AppendLine($"No advisories matching severity '{_severityFilter}' (others may exist — see exit code)");
+            return;
+        }
+
+        if (result.PolicyErrorCount > 0)
+        {
+            return;
+        }
+
+        builder.AppendLine("✓ All packages are secure");
     }
 
     private static void AppendAdvisories(StringBuilder builder, IEnumerable<Models.Advisory> advisories)
