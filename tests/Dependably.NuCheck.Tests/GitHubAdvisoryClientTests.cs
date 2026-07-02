@@ -423,6 +423,100 @@ public class GitHubAdvisoryClientTests
         Assert.Empty(GitHubAdvisoryClient.ParseRest(body, "Newtonsoft.Json"));
     }
 
+    // #5 — REST Link-header pagination
+
+    [Fact]
+    public async Task Rest_follows_link_header_pagination_across_pages()
+    {
+        // Page 1 carries two advisories and a Link: rel="next" header pointing to page 2.
+        // Page 2 carries one advisory and no Link header (last page).
+        // Old code issued only a single GET and returned after the first page.
+        const string page1Body = """
+[{"summary":"First","severity":"high","html_url":"https://example/1",
+  "vulnerabilities":[{"package":{"ecosystem":"nuget","name":"Pkg"},"vulnerable_version_range":"< 2.0"}]},
+ {"summary":"Second","severity":"low","html_url":"https://example/2",
+  "vulnerabilities":[{"package":{"ecosystem":"nuget","name":"Pkg"},"vulnerable_version_range":">= 2.0, < 3.0"}]}]
+""";
+        const string page2Body = """
+[{"summary":"Third","severity":"moderate","html_url":"https://example/3",
+  "vulnerabilities":[{"package":{"ecosystem":"nuget","name":"Pkg"},"vulnerable_version_range":">= 3.0, < 4.0"}]}]
+""";
+        const string page2Url = "https://api.github.com/advisories?ecosystem=nuget&affects=Pkg&per_page=100&page=2";
+
+        var requests = new List<string?>();
+        var handler = new FakeHttpMessageHandler(req =>
+        {
+            requests.Add(req.RequestUri?.ToString());
+            var isPage1 = requests.Count == 1;
+            var body = isPage1 ? page1Body : page2Body;
+            var r = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            };
+            if (isPage1)
+            {
+                r.Headers.Add("Link", $"<{page2Url}>; rel=\"next\", <https://api.github.com/advisories?page=5>; rel=\"last\"");
+            }
+
+            return r;
+        });
+        var client = new GitHubAdvisoryClient(new HttpClient(handler), "token", useRest: true);
+
+        var advisories = await client.GetAdvisoriesAsync("Pkg");
+
+        // All three advisories from both pages must be returned.
+        Assert.Equal(3, advisories.Count);
+        Assert.Contains(advisories, a => a.Summary == "First");
+        Assert.Contains(advisories, a => a.Summary == "Second");
+        Assert.Contains(advisories, a => a.Summary == "Third");
+
+        // Two HTTP requests were made; the second used the URL from the Link header.
+        Assert.Equal(2, requests.Count);
+        Assert.Contains("per_page=100", requests[0], StringComparison.Ordinal);
+        Assert.Equal(page2Url, requests[1]);
+    }
+
+    [Fact]
+    public async Task Rest_stops_when_no_link_next_header()
+    {
+        // Ensure a single-page response (no Link header) does not trigger a second request.
+        var calls = 0;
+        var handler = new FakeHttpMessageHandler(req =>
+        {
+            calls++;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(RestBody, Encoding.UTF8, "application/json"),
+            };
+        });
+        var client = new GitHubAdvisoryClient(new HttpClient(handler), "token", useRest: true);
+
+        var advisories = await client.GetAdvisoriesAsync("Newtonsoft.Json");
+
+        Assert.Equal(1, calls);
+        Assert.Single(advisories);
+    }
+
+    [Fact]
+    public async Task Rest_includes_per_page_100_on_initial_request()
+    {
+        string? capturedUrl = null;
+        var handler = new FakeHttpMessageHandler(req =>
+        {
+            capturedUrl = req.RequestUri?.ToString();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("[]", Encoding.UTF8, "application/json"),
+            };
+        });
+        var client = new GitHubAdvisoryClient(new HttpClient(handler), "token", useRest: true);
+
+        await client.GetAdvisoriesAsync("Newtonsoft.Json");
+
+        Assert.NotNull(capturedUrl);
+        Assert.Contains("per_page=100", capturedUrl, StringComparison.Ordinal);
+    }
+
     // #28 — REST parser emits one Advisory per vulnerabilities[] entry
 
     [Fact]

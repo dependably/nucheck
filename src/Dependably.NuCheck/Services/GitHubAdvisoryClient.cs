@@ -113,18 +113,69 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
             "firstPatchedVersion { identifier } vulnerableVersionRange } pageInfo { hasNextPage endCursor } } }";
     }
 
+    /// <summary>
+    /// Follow Link-header pagination for the REST advisories API. GitHub returns at most
+    /// <c>per_page</c> items per response (default 30, max 100). When more pages exist the
+    /// response carries a <c>Link: &lt;url&gt;; rel="next"</c> header. Loop until no next
+    /// URL is present, accumulating advisories from all pages.
+    /// </summary>
     private async Task<IReadOnlyList<Advisory>> QueryRestAsync(string packageId, CancellationToken cancellationToken)
     {
-        var url = $"{RestUrl}?ecosystem=nuget&affects={Uri.EscapeDataString(packageId)}";
+        string? url = $"{RestUrl}?ecosystem=nuget&affects={Uri.EscapeDataString(packageId)}&per_page=100";
+        var advisories = new List<Advisory>();
 
-        var body = await SendWithRetryAsync(() =>
+        while (url is not null)
         {
-            var request = new HttpRequestMessage(HttpMethod.Get, url);
-            AddHeaders(request);
-            return request;
-        }, cancellationToken).ConfigureAwait(false);
+            string? nextUrl = null;
+            var pageUrl = url;
+            var body = await SendWithRetryAsync(
+                () =>
+                {
+                    var request = new HttpRequestMessage(HttpMethod.Get, pageUrl);
+                    AddHeaders(request);
+                    return request;
+                },
+                cancellationToken,
+                onSuccess: response => nextUrl = ExtractLinkNext(response)).ConfigureAwait(false);
 
-        return ParseRest(body, packageId);
+            advisories.AddRange(ParseRest(body, packageId));
+            url = nextUrl;
+        }
+
+        return advisories;
+    }
+
+    /// <summary>
+    /// Extract the URL for <c>rel="next"</c> from the <c>Link</c> response header, or null
+    /// when absent. GitHub paginates REST advisory results with this header.
+    /// </summary>
+    private static string? ExtractLinkNext(HttpResponseMessage response)
+    {
+        if (!response.Headers.TryGetValues("Link", out var values))
+        {
+            return null;
+        }
+
+        foreach (var header in values)
+        {
+            foreach (var part in header.Split(','))
+            {
+                var trimmed = part.Trim();
+                if (!trimmed.EndsWith("; rel=\"next\"", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var semicolon = trimmed.LastIndexOf(';');
+                var urlPart = trimmed[..semicolon].Trim();
+                if (urlPart.StartsWith('<') && urlPart.EndsWith('>'))
+                {
+                    return urlPart[1..^1];
+                }
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -133,8 +184,13 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
     /// rebuilt per attempt (an <see cref="HttpRequestMessage"/> can only be sent once).
     /// On the final attempt the response is validated by <see cref="EnsureSuccess"/>,
     /// so a persistent failure surfaces loudly rather than as an empty advisory list.
+    /// <paramref name="onSuccess"/> is invoked with the live response before it is disposed,
+    /// allowing callers to capture response headers (e.g. the <c>Link</c> pagination header).
     /// </summary>
-    private async Task<string> SendWithRetryAsync(Func<HttpRequestMessage> createRequest, CancellationToken cancellationToken)
+    private async Task<string> SendWithRetryAsync(
+        Func<HttpRequestMessage> createRequest,
+        CancellationToken cancellationToken,
+        Action<HttpResponseMessage>? onSuccess = null)
     {
         for (var attempt = 0; ; attempt++)
         {
@@ -151,6 +207,7 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
                 }
 
                 EnsureSuccess(response.StatusCode, body);
+                onSuccess?.Invoke(response);
                 return body;
             }
             catch (HttpRequestException) when (attempt < _maxRetries)
