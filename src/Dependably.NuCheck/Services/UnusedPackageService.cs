@@ -657,14 +657,26 @@ public static partial class UnusedPackageService
 
     /// <summary>
     /// Emits a character while inside an interpolation hole, or skips/recurses into a
-    /// nested string literal to maintain correct brace-depth accounting and preserve
-    /// code inside nested interpolated-string holes.
+    /// nested string literal or comment to maintain correct brace-depth accounting and
+    /// preserve code inside nested interpolated-string holes.
     /// </summary>
     private static int EmitInterpolatedHoleChar(string content, int i, char c, System.Text.StringBuilder sb)
     {
+        // Comments must be skipped so that a brace or quote inside a comment does not
+        // desync hole depth or trigger string-boundary detection.
+        if (c == '/' && i + 1 < content.Length && content[i + 1] == '/')
+        {
+            return SkipLineComment(content, i);
+        }
+
+        if (c == '/' && i + 1 < content.Length && content[i + 1] == '*')
+        {
+            return SkipBlockComment(content, i);
+        }
+
         if (c == '$')
         {
-            // $"...", $@"...", @$"...", or $"""...""" — recurse so nested hole code is preserved.
+            // $"...", $@"...", $"""...""", $$"""...""" — recurse so nested hole code is preserved.
             return EmitNestedInterpolatedString(content, i, sb);
         }
 
@@ -672,6 +684,13 @@ public static partial class UnusedPackageService
         {
             // @$"..." — verbatim interpolated string; preserve nested hole code.
             return SkipInterpolatedString(content, i + 3, sb, verbatim: true);
+        }
+
+        if (c == '"' && i + 1 < content.Length && content[i + 1] == '"' && i + 2 < content.Length && content[i + 2] == '"')
+        {
+            // """...""" — raw string literal inside hole; skip so its content does not
+            // affect brace accounting. (Interpolated raw strings are dispatched via $/$$ above.)
+            return SkipRawStringLiteral(content, i);
         }
 
         if (c == '"')
@@ -705,6 +724,14 @@ public static partial class UnusedPackageService
     private static int EmitNestedInterpolatedString(string content, int i, System.Text.StringBuilder sb)
     {
         var next = i + 1 < content.Length ? content[i + 1] : '\0';
+
+        if (next == '$')
+        {
+            // $$"...", $$"""...""", etc. — multi-dollar interpolated string; emit entire
+            // literal content as code (fail-safe) so any qualified name in a hole is visible.
+            return EmitMultiDollarInterpolatedLiteral(content, i, sb);
+        }
+
         if (next == '@' && i + 2 < content.Length && content[i + 2] == '"')
         {
             // $@"..." — verbatim interpolated; preserve nested hole code.

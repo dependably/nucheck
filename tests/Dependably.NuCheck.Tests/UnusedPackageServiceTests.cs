@@ -1164,6 +1164,88 @@ public class UnusedPackageServiceTests
         }
     }
 
+    // --- Follow-up review findings: two remaining over-strips in EmitInterpolatedHoleChar ------
+
+    // Review finding 1: EmitNestedInterpolatedString lacked a $$-branch. For a hole containing
+    // $$"""{{Foo.Bar.X.Run()}}""" the first $ was emitted as bare code; the second $ dispatched
+    // to SkipInterpolatedRawString as a single-dollar string, which treated {{ as a literal-brace
+    // escape and stripped the hole content, wrongly flagging Foo.Bar as unused.
+
+    [Fact]
+    public void Disk_nested_multi_dollar_raw_string_in_outer_hole_usage_is_not_flagged()
+    {
+        // Before the fix: $"{ $$"""{{Foo.Bar.X.Run()}}""" }" — first $ emitted as plain code;
+        // second $ routed to SkipInterpolatedRawString (single-dollar path), which treated {{ as
+        // a literal-brace escape (holeDepth 0) and stripped all hole content. Foo.Bar wrongly
+        // flagged unused.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.Bar" Version="1.0.0" />
+                    <PackageReference Include="Serilog" Version="3.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // Foo.Bar used ONLY inside $$"""{{…}}""" nested in a $"" hole; Serilog is unused.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                """"public class C { void M() { var s = $"{ $$"""{{Foo.Bar.X.Run()}}""" }"; } }"""");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            // Foo.Bar IS used (inside the nested multi-dollar hole) — only Serilog is flagged.
+            var finding = Assert.Single(findings);
+            Assert.Equal("Serilog", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // Review finding 2: comments (// and /* */) inside an interpolation hole were not handled.
+    // A } (or { or ") inside a comment reached AdvanceInterpolatedCloseBrace and closed the hole
+    // early, stripping the remaining hole code including the real usage.
+
+    [Fact]
+    public void Disk_block_comment_with_closing_brace_in_hole_does_not_strip_usage()
+    {
+        // Before the fix: $"{ x /* } */ + Foo.Bar.X.Run() }" — the } inside /* } */ was
+        // treated as a hole-closing brace (holeDepth decremented to 0), so everything after the
+        // comment was processed as literal string text and Foo.Bar was wrongly flagged unused.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.Bar" Version="1.0.0" />
+                    <PackageReference Include="Serilog" Version="3.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // Foo.Bar used ONLY after a block comment inside the hole; Serilog is unused.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                """public class C { void M(string x) { var s = $"{ x /* } */ + Foo.Bar.X.Run() }"; } }""");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            // Foo.Bar IS used (in the hole after the block comment) — only Serilog is flagged.
+            var finding = Assert.Single(findings);
+            Assert.Equal("Serilog", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // --- Existing finding 3 (kept for context) --------------------------------------------------
+
     // Finding 3: multi-dollar raw interpolated strings ($$"""...""", $$$"""...""") were not
     // recognised by the top-level dispatch; the trailing single-$ branch mis-parsed their
     // holes, stripping qualified names inside.  Fix: detect a $$+ run and emit the entire
