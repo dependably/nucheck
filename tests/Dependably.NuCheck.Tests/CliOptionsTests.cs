@@ -73,10 +73,26 @@ public class CliOptionsTests
     }
 
     [Fact]
-    public void Parse_keeps_only_first_positional_as_path()
+    public void Parse_extra_positional_argument_is_usage_error()
     {
+        // A second positional token (or any non-flag token after the path) is a usage
+        // error rather than being silently ignored.
         var options = CliOptions.Parse(["first.config", "second.config"]);
-        Assert.Equal("first.config", options.FilePath);
+
+        Assert.Equal("first.config", options.FilePath); // first positional is still captured
+        Assert.NotNull(options.Error);
+        Assert.Contains("second.config", options.Error);
+    }
+
+    [Fact]
+    public void Parse_extra_positional_argument_first_error_wins()
+    {
+        // When both a bad flag and an extra positional appear, the first error wins.
+        var options = CliOptions.Parse(["./p.config", "--bad-flag", "extra.config"]);
+
+        Assert.Equal("./p.config", options.FilePath);
+        Assert.NotNull(options.Error);
+        Assert.Contains("--bad-flag", options.Error); // first bad token, not the extra positional
     }
 
     [Fact]

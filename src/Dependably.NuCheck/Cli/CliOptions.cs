@@ -104,6 +104,10 @@ public sealed class CliOptions
             {
                 options.FilePath = arg;
             }
+            else
+            {
+                options.Error ??= $"unexpected argument: '{arg}'";
+            }
         }
 
         return options;
