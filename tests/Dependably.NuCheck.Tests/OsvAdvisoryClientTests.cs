@@ -181,4 +181,48 @@ public class OsvAdvisoryClientTests
     }
 
     private static Task NoDelay(TimeSpan _, CancellationToken __) => Task.CompletedTask;
+
+    // ---- #53: OSV trailing open interval with non-zero lower bound ---------------
+
+    [Fact]
+    public void ParseOsv_open_interval_with_nonzero_lower_bound_yields_correct_range()
+    {
+        // introduced:"1.0.0" with no fixed event → open-ended range ">= 1.0.0".
+        // The sentinel lower-bound "0" is already tested elsewhere; this validates
+        // a real non-zero lower bound is preserved.
+        const string body = """
+{"vulns":[{"id":"GHSA-open","affected":[{"package":{"ecosystem":"NuGet","name":"P"},
+  "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"1.0.0"}]}]}]}]}
+""";
+
+        var advisory = Assert.Single(OsvAdvisoryClient.ParseOsv(body, "P"));
+
+        Assert.Equal(">= 1.0.0", advisory.VulnerableVersionRange);
+        Assert.Null(advisory.FixedVersion);
+    }
+
+    [Fact]
+    public void ParseOsv_multiple_introduced_fixed_pairs_yield_multiple_advisories()
+    {
+        // Two closed intervals in one events array → 2 advisories.
+        const string body = """
+{"vulns":[{"id":"GHSA-multi","affected":[{"package":{"ecosystem":"NuGet","name":"P"},
+  "ranges":[{"type":"ECOSYSTEM","events":[
+    {"introduced":"1.0.0"},{"fixed":"1.5.0"},
+    {"introduced":"2.0.0"},{"fixed":"2.3.0"}
+  ]}]}]}]}
+""";
+
+        var advisories = OsvAdvisoryClient.ParseOsv(body, "P");
+
+        Assert.Equal(2, advisories.Count);
+
+        var first = advisories[0];
+        Assert.Equal(">= 1.0.0, < 1.5.0", first.VulnerableVersionRange);
+        Assert.Equal("1.5.0", first.FixedVersion);
+
+        var second = advisories[1];
+        Assert.Equal(">= 2.0.0, < 2.3.0", second.VulnerableVersionRange);
+        Assert.Equal("2.3.0", second.FixedVersion);
+    }
 }
