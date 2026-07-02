@@ -451,6 +451,41 @@ public class PackageFileReaderTests : IDisposable
         Assert.Equal("3.0.0", package.Version.ToString());
     }
 
+    [Fact]
+    public void Read_resolves_versionless_reference_against_every_central_version_of_the_id()
+    {
+        // Central Package Management, cross-file: a version-LESS <PackageReference Include="X" />
+        // in the csproj, with an up-tree Directory.Packages.props declaring X TWICE at different
+        // versions (per-TargetFramework Condition). Conditions are not evaluated, so the reference
+        // can statically resolve to EITHER central version — both must be audited. A last-wins
+        // collapse here would silently mask the vulnerable legacy pin (1.0.0).
+        var dir = NewTempDir();
+        File.WriteAllText(Path.Combine(dir, "Directory.Packages.props"), """
+<Project>
+  <ItemGroup Condition="'$(TargetFramework)'=='net48'">
+    <PackageVersion Include="X" Version="1.0.0" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)'=='net8.0'">
+    <PackageVersion Include="X" Version="2.0.0" />
+  </ItemGroup>
+</Project>
+""");
+        var csproj = Path.Combine(dir, "foo.csproj");
+        File.WriteAllText(csproj, """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="X" />
+  </ItemGroup>
+</Project>
+""");
+
+        var packages = PackageFileReader.Read(csproj);
+
+        Assert.Equal(2, packages.Count);
+        Assert.Contains(packages, p => p.Id == "X" && p.Version.ToString() == "1.0.0");
+        Assert.Contains(packages, p => p.Id == "X" && p.Version.ToString() == "2.0.0");
+    }
+
     // --- Ticket #3: malformed Directory.Packages.props must surface, not silently fall back ---
 
     [Fact]
