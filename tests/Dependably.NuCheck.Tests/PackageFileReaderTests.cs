@@ -390,6 +390,67 @@ public class PackageFileReaderTests : IDisposable
         Assert.Equal("1.0.0", package.Version.ToString());
     }
 
+    // --- Ticket #36: floating-version lower-bound behaviour (documented at PackageFileReader.cs:224-227) ---
+
+    [Fact]
+    public void Read_audits_floating_major_wildcard_at_lower_bound()
+    {
+        // "6.*" is a floating version. TryResolveVersion falls through to VersionRange and
+        // resolves to MinVersion. NuGet.Versioning places the wildcard at the minor position,
+        // so MinVersion = 6.0 (two-part; no patch component). The documented lower-bound
+        // contract must hold: the audit uses 6.0, not some higher resolved version.
+        var path = WriteTemp(".csproj", """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="X" Version="6.*" />
+  </ItemGroup>
+</Project>
+""");
+
+        var package = Assert.Single(PackageFileReader.Read(path));
+        Assert.Equal("X", package.Id);
+        Assert.Equal("6.0", package.Version.ToString());
+    }
+
+    [Fact]
+    public void Read_audits_floating_minor_wildcard_at_lower_bound()
+    {
+        // "1.2.*" is a floating version; MinVersion = 1.2.0.
+        var path = WriteTemp(".csproj", """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="X" Version="1.2.*" />
+  </ItemGroup>
+</Project>
+""");
+
+        var package = Assert.Single(PackageFileReader.Read(path));
+        Assert.Equal("X", package.Id);
+        Assert.Equal("1.2.0", package.Version.ToString());
+    }
+
+    [Fact]
+    public void Read_skips_range_with_no_lower_bound()
+    {
+        // "(,2.0]" has no lower bound (MinVersion is null). TryResolveVersion returns false
+        // and the package is skipped — it cannot be audited at a conservative version.
+        // Siblings with resolvable versions are still returned.
+        var path = WriteTemp(".csproj", """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="NoLower" Version="(,2.0]" />
+    <PackageReference Include="Good" Version="3.0.0" />
+  </ItemGroup>
+</Project>
+""");
+
+        var packages = PackageFileReader.Read(path);
+
+        var package = Assert.Single(packages);
+        Assert.Equal("Good", package.Id);
+        Assert.Equal("3.0.0", package.Version.ToString());
+    }
+
     // --- Ticket #3: malformed Directory.Packages.props must surface, not silently fall back ---
 
     [Fact]
