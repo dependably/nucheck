@@ -213,7 +213,18 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
 
         // The OSV evaluation algorithm sorts a range's events by version before pairing
         // introduced/fixed, because the events array is not guaranteed to be ordered.
-        return PairIntervals(OrderedEvents(events));
+        var parsed = OrderedEvents(events);
+
+        // If the events array is non-empty but zero events successfully parsed (e.g., all
+        // values carry the wrong JSON type), return the conservative all-versions sentinel
+        // rather than silently producing no intervals. A false negative — missing a real
+        // vulnerability — is the worst possible outcome for a scanner.
+        if (parsed.Count == 0 && events.GetArrayLength() > 0)
+        {
+            return [(Comparator(lower: null, upper: null, upperInclusive: false), null)];
+        }
+
+        return PairIntervals(parsed);
     }
 
     private enum EventKind

@@ -321,6 +321,25 @@ public class OsvAdvisoryClientTests
         Assert.Contains(advisories, a => a.VulnerableVersionRange == ">= 1.0.0, < 3.0.0");
     }
 
+    [Fact]
+    public void ParseOsv_range_with_all_malformed_events_emits_conservative_flag_not_silent_drop()
+    {
+        // events:[{"introduced":42}] — the only event has a Number value, not a String.
+        // The ValueKind guard in OrderedEvents correctly skips it, leaving the parsed list
+        // empty even though the events array is non-empty.
+        // Current HEAD (silent-fail-open): OrderedEvents returns [], PairIntervals yields
+        // nothing, the range produces no intervals, the vuln is silently dropped — a false
+        // negative, the worst possible outcome for a vulnerability scanner.
+        // Fixed code: non-empty events array + zero successfully-parsed events → emit the
+        // conservative ">= 0.0.0" sentinel so the package is flagged rather than cleared.
+        const string body = """
+{"vulns":[{"id":"GHSA-aaaa-bbbb-0000","affected":[{"package":{"ecosystem":"NuGet","name":"P"},
+  "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":42}]}]}]}]}
+""";
+        var advisory = Assert.Single(OsvAdvisoryClient.ParseOsv(body, "P"));
+        Assert.Equal(">= 0.0.0", advisory.VulnerableVersionRange);
+    }
+
     // --- Ticket 23: exponential backoff + Retry-After support ----------------------------
 
     [Fact]
