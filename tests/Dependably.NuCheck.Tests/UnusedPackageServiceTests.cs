@@ -567,4 +567,158 @@ public class UnusedPackageServiceTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    // --- Ticket #46: comments, string literals, and namespace declarations must not
+    //     count as package usage in the qualified-name secondary scan -------------------
+
+    [Fact]
+    public void Disk_package_id_only_in_line_comment_is_still_flagged()
+    {
+        // Before the fix: QualifiedNamePattern ran on raw content and matched
+        // "Newtonsoft.Json" inside the comment, producing a false negative (no finding).
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                "// TODO: replace Newtonsoft.Json with System.Text.Json\npublic class C { }");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            var finding = Assert.Single(findings);
+            Assert.Equal("Newtonsoft.Json", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_package_id_only_in_block_comment_is_still_flagged()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                "/* Newtonsoft.Json formerly used here */\npublic class C { }");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            var finding = Assert.Single(findings);
+            Assert.Equal("Newtonsoft.Json", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_package_id_only_in_string_literal_is_still_flagged()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                "public class C { string s = \"Newtonsoft.Json\"; }");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            var finding = Assert.Single(findings);
+            Assert.Equal("Newtonsoft.Json", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_package_id_only_in_namespace_declaration_is_still_flagged()
+    {
+        // A file declaring `namespace Foo.Bar;` must not mark package `Foo.Bar` as used.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.Bar" Version="1.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            File.WriteAllText(Path.Combine(dir, "Ext.cs"), "namespace Foo.Bar;\npublic class Ext { }");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            var finding = Assert.Single(findings);
+            Assert.Equal("Foo.Bar", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_qualified_name_scan_partial_failure_real_usage_vs_comment_only()
+    {
+        // Mixed: one package used via a genuine qualified reference (no using directive),
+        // one mentioned only in a comment. Only the comment-only package should be flagged.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Acme.Widgets" Version="1.0.0" />
+                    <PackageReference Include="Acme.Gadgets" Version="1.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // Acme.Widgets used via qualified name; Acme.Gadgets only in a comment.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"), """
+                // We used to use Acme.Gadgets but switched.
+                public class C
+                {
+                    Acme.Widgets.Widget w = new Acme.Widgets.Widget();
+                }
+                """);
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            var finding = Assert.Single(findings);
+            Assert.Equal("Acme.Gadgets", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }

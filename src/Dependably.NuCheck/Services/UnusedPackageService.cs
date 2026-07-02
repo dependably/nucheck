@@ -46,12 +46,24 @@ public static partial class UnusedPackageService
     /// <summary>
     /// Matches multi-segment qualified identifiers (e.g. <c>Foo.Bar.Thing</c>) that may
     /// appear as qualified type references in code that does not use a <c>using</c> directive.
+    /// Applied only after comments and string/char literals have been stripped so that a
+    /// package id appearing only in a comment or string does not count as usage.
     /// </summary>
     [GeneratedRegex(
         @"\b([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\b",
         RegexOptions.None,
         RegexTimeoutMs)]
     private static partial Regex QualifiedNamePattern();
+
+    /// <summary>
+    /// Matches a <c>namespace</c> declaration (file-scoped or block-scoped) so the file's
+    /// own namespace identifier is not counted as package usage by <see cref="QualifiedNamePattern"/>.
+    /// </summary>
+    [GeneratedRegex(
+        @"\bnamespace\s+[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*",
+        RegexOptions.None,
+        RegexTimeoutMs)]
+    private static partial Regex NamespaceDeclarationPattern();
 
     /// <summary>
     /// Disk-based entry point. Reads <c>*.csproj</c> and <c>Directory.Packages.props</c>
@@ -379,10 +391,13 @@ public static partial class UnusedPackageService
     /// <summary>
     /// Extracts namespace usages from one file's text into <paramref name="usages"/>:
     /// explicit <c>using</c> directives (primary) plus qualified type references (secondary).
+    /// The secondary scan runs on a comment- and literal-stripped copy of the content so that
+    /// package ids mentioned only in comments, string values, or the file's own
+    /// <c>namespace</c> declaration are not counted as usage.
     /// </summary>
     private static void AddUsagesFromContent(string content, HashSet<string> usages)
     {
-        // Primary: explicit `using` directives are the most reliable indicator.
+        // Primary: explicit `using` directives on raw content — most reliable indicator.
         foreach (Match m in UsingDirectivePattern().Matches(content))
         {
             var ns = m.Groups[1].Value;
@@ -392,11 +407,148 @@ public static partial class UnusedPackageService
             }
         }
 
-        // Secondary: qualified type references for packages used without a `using`.
-        foreach (Match m in QualifiedNamePattern().Matches(content))
+        // Secondary: qualified type references — strip comments, string/char literals, and
+        // namespace declarations first so non-code mentions do not count as usage.
+        var codeOnly = NamespaceDeclarationPattern().Replace(
+            StripCommentsAndLiterals(content), " ");
+        foreach (Match m in QualifiedNamePattern().Matches(codeOnly))
         {
             usages.Add(m.Groups[1].Value);
         }
+    }
+
+    /// <summary>
+    /// Returns a copy of <paramref name="content"/> with <c>//</c> line comments,
+    /// <c>/* */</c> block comments, double-quoted string literals, verbatim (<c>@"</c>)
+    /// string literals, and single-quoted character literals replaced by empty space, so
+    /// dotted identifiers that appear only in those contexts are invisible to
+    /// <see cref="QualifiedNamePattern"/>.
+    /// </summary>
+    private static string StripCommentsAndLiterals(string content)
+    {
+        var sb = new System.Text.StringBuilder(content.Length);
+        var i = 0;
+        while (i < content.Length)
+        {
+            var next = i + 1 < content.Length ? content[i + 1] : '\0';
+            if (content[i] == '/' && next == '/')
+            {
+                i = SkipLineComment(content, i);
+            }
+            else if (content[i] == '/' && next == '*')
+            {
+                i = SkipBlockComment(content, i);
+            }
+            else if (content[i] == '@' && next == '"')
+            {
+                i = SkipVerbatimString(content, i);
+            }
+            else if (content[i] == '"')
+            {
+                i = SkipRegularString(content, i);
+            }
+            else if (content[i] == '\'')
+            {
+                i = SkipCharLiteral(content, i);
+            }
+            else
+            {
+                sb.Append(content[i]);
+                i++;
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    private static int SkipLineComment(string content, int i)
+    {
+        while (i < content.Length && content[i] != '\n')
+        {
+            i++;
+        }
+
+        return i;
+    }
+
+    private static int SkipBlockComment(string content, int i)
+    {
+        i += 2; // skip /*
+        while (i + 1 < content.Length && !(content[i] == '*' && content[i + 1] == '/'))
+        {
+            i++;
+        }
+
+        return Math.Min(i + 2, content.Length); // skip */
+    }
+
+    private static int SkipVerbatimString(string content, int i)
+    {
+        i += 2; // skip @"
+        while (i < content.Length)
+        {
+            if (content[i] == '"')
+            {
+                i++;
+                // "" inside a verbatim string is an escaped quote — keep scanning.
+                if (i < content.Length && content[i] == '"')
+                {
+                    i++;
+                }
+                else
+                {
+                    break; // closing "
+                }
+            }
+            else
+            {
+                i++;
+            }
+        }
+
+        return i;
+    }
+
+    private static int SkipRegularString(string content, int i)
+    {
+        i++; // skip opening "
+        while (i < content.Length && content[i] != '"' && content[i] != '\n')
+        {
+            if (content[i] == '\\')
+            {
+                i++; // skip escaped character
+            }
+
+            i++;
+        }
+
+        if (i < content.Length && content[i] == '"')
+        {
+            i++;
+        }
+
+        return i;
+    }
+
+    private static int SkipCharLiteral(string content, int i)
+    {
+        i++; // skip opening '
+        while (i < content.Length && content[i] != '\'' && content[i] != '\n')
+        {
+            if (content[i] == '\\')
+            {
+                i++; // skip escaped character
+            }
+
+            i++;
+        }
+
+        if (i < content.Length && content[i] == '\'')
+        {
+            i++;
+        }
+
+        return i;
     }
 
     private static bool IsExcludedPath(string path)
