@@ -84,8 +84,11 @@ public static class SourceTrustService
                 continue;
             }
 
-            // Only network feeds carry a host worth trusting; local folder feeds are file:// paths.
-            if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+            // Only network feeds carry a host worth trusting. http(s) always qualify; a
+            // file:// / UNC source with a non-empty host is a remote SMB share on an
+            // arbitrary server (e.g. \\evil-server\feed) and must be trust-checked too.
+            // Truly local folder feeds (empty host) remain out of scope.
+            if (!IsNetworkSource(uri))
             {
                 continue;
             }
@@ -104,6 +107,26 @@ public static class SourceTrustService
         }
 
         return findings;
+    }
+
+    /// <summary>
+    /// True when <paramref name="uri"/> reaches a network host worth trust-checking: any
+    /// http(s) feed, or a <c>file://</c> / UNC feed with a non-empty host (a remote share on
+    /// an arbitrary server). Truly local folder feeds (empty host) are not network sources.
+    /// </summary>
+    private static bool IsNetworkSource(Uri uri)
+    {
+        if (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
+        {
+            return true;
+        }
+
+        if (uri.IsUnc || uri.Scheme == Uri.UriSchemeFile)
+        {
+            return !string.IsNullOrEmpty(uri.Host);
+        }
+
+        return false;
     }
 
     /// <summary>

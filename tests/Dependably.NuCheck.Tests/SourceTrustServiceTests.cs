@@ -158,6 +158,44 @@ public class SourceTrustServiceTests : IDisposable
         Assert.Empty(SourceTrustService.Check(sources, []));
     }
 
+    // --- Ticket 35: UNC / file:// network-share feeds -----------------------------------
+
+    [Fact]
+    public void Unc_share_feed_is_flagged_as_untrusted_network_source()
+    {
+        var sources = new[]
+        {
+            new PackageSource(@"\\evil-server\feed", "unc"),
+        };
+
+        var finding = Assert.Single(SourceTrustService.Check(sources, []));
+        Assert.Equal("evil-server", finding.Host);
+        Assert.Equal("unc", finding.Source);
+    }
+
+    [Fact]
+    public void File_scheme_feed_with_remote_host_is_flagged()
+    {
+        var sources = new[]
+        {
+            new PackageSource("file://evil-server/feed", "filehost"),
+        };
+
+        var finding = Assert.Single(SourceTrustService.Check(sources, []));
+        Assert.Equal("evil-server", finding.Host);
+    }
+
+    [Fact]
+    public void Unc_share_feed_can_be_allowlisted_by_host()
+    {
+        var sources = new[]
+        {
+            new PackageSource(@"\\corp-share\feed", "corp"),
+        };
+
+        Assert.Empty(SourceTrustService.Check(sources, ["corp-share"]));
+    }
+
     public void Dispose()
     {
         GC.SuppressFinalize(this);
