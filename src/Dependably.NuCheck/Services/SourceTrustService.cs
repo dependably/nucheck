@@ -34,24 +34,46 @@ public static class SourceTrustService
         var settings = Settings.LoadDefaultSettings(directory);
         var repoRoot = FindRepoRoot(directory);
 
-        // Origin config paths of the package sources actually declared inside the repo
-        // tree. LoadDefaultSettings honours NuGet's <clear/> / enabled / disabled merge
-        // semantics; we then keep only the items whose declaring file lives under the
-        // repo root, discarding anything inherited from the user/global machine config.
-        var repoSourceNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var packageSources = settings.GetSection("packageSources");
-        if (packageSources is not null)
+        // Names of the package sources actually declared inside the repo tree, discarding
+        // anything inherited from the user/global machine config.
+        var repoSourceNames = UnderRootKeys(settings, "packageSources", repoRoot);
+
+        // Enabled/disabled is resolved solely from repo-declared <disabledPackageSources>:
+        // the merged PackageSource.IsEnabled flag also reflects the auditor's machine-local
+        // disabledPackageSources, which would let a local disable suppress a repo-declared
+        // untrusted source on one machine yet flag it in CI (non-reproducible verdict).
+        var repoDisabledNames = UnderRootKeys(settings, "disabledPackageSources", repoRoot);
+
+        var sources = new PackageSourceProvider(settings)
+            .LoadPackageSources()
+            .Where(source => repoSourceNames.Contains(source.Name))
+            .Select(source =>
+            {
+                source.IsEnabled = !repoDisabledNames.Contains(source.Name);
+                return source;
+            });
+
+        return Check(sources, allowedHosts);
+    }
+
+    /// <summary>
+    /// Keys of the items in section <paramref name="sectionName"/> whose declaring config
+    /// file lives at or under <paramref name="repoRoot"/>, discarding anything inherited from
+    /// the user/global machine config. <see cref="SourceItem"/> (packageSources) and plain
+    /// <see cref="AddItem"/> (disabledPackageSources) entries are both matched.
+    /// </summary>
+    private static HashSet<string> UnderRootKeys(ISettings settings, string sectionName, string repoRoot)
+    {
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var section = settings.GetSection(sectionName);
+        if (section is not null)
         {
-            repoSourceNames.UnionWith(packageSources.Items.OfType<SourceItem>()
+            keys.UnionWith(section.Items.OfType<AddItem>()
                 .Where(item => IsUnderRoot(item.ConfigPath, repoRoot))
                 .Select(item => item.Key));
         }
 
-        var sources = new PackageSourceProvider(settings)
-            .LoadPackageSources()
-            .Where(source => repoSourceNames.Contains(source.Name));
-
-        return Check(sources, allowedHosts);
+        return keys;
     }
 
     /// <summary>

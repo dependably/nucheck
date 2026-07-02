@@ -196,6 +196,67 @@ public class SourceTrustServiceTests : IDisposable
         Assert.Empty(SourceTrustService.Check(sources, ["corp-share"]));
     }
 
+    // --- Ticket 45: machine-local disabledPackageSources must not suppress findings ------
+
+    [Fact]
+    public void Machine_local_disabled_source_does_not_suppress_repo_declared_finding()
+    {
+        // Ancestor (machine/user) config disables "evil" by name. The repo declares "evil"
+        // as an enabled untrusted source. The verdict must depend only on what the repo
+        // declares, so the finding must still fire (reproducible across machines/CI).
+        var outer = Path.Combine(Path.GetTempPath(), $"srctrust-outer-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outer);
+        _tempDirs.Add(outer);
+        File.WriteAllText(Path.Combine(outer, "nuget.config"), """
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <disabledPackageSources>
+            <add key="evil" value="true" />
+          </disabledPackageSources>
+        </configuration>
+        """);
+
+        var repo = Path.Combine(outer, "repo");
+        Directory.CreateDirectory(repo);
+        Directory.CreateDirectory(Path.Combine(repo, ".git"));
+        File.WriteAllText(Path.Combine(repo, "nuget.config"), """
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources>
+            <clear />
+            <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+            <add key="evil" value="https://nuget.evil.example/v3/index.json" />
+          </packageSources>
+        </configuration>
+        """);
+
+        var finding = Assert.Single(SourceTrustService.Check(repo, []));
+        Assert.Equal("nuget.evil.example", finding.Host);
+        Assert.Equal("evil", finding.Source);
+    }
+
+    [Fact]
+    public void Repo_declared_disabled_source_is_still_suppressed()
+    {
+        // The complement of the reproducibility fix: a disable declared *inside the repo*
+        // still counts, so the source is legitimately skipped.
+        var dir = NewRepo("""
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources>
+            <clear />
+            <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+            <add key="evil" value="https://nuget.evil.example/v3/index.json" />
+          </packageSources>
+          <disabledPackageSources>
+            <add key="evil" value="true" />
+          </disabledPackageSources>
+        </configuration>
+        """);
+
+        Assert.Empty(SourceTrustService.Check(dir, []));
+    }
+
     public void Dispose()
     {
         GC.SuppressFinalize(this);
