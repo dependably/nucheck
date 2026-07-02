@@ -35,7 +35,8 @@ public sealed record UnusedPackageFinding(string Id, string Message);
 public sealed record UnverifiableAdvisoryFinding(
     string PackageId,
     string VulnerableVersionRange,
-    string? AdvisoryId = null);
+    string? AdvisoryId = null,
+    string? AdvisorySeverity = null);
 
 /// <summary>The outcome of auditing a packages file.</summary>
 public sealed class AuditResult
@@ -172,6 +173,7 @@ public sealed class AuditResult
             Vulnerabilities = filtered,
             PolicyFindings = PolicyFindings,
             UnusedPackages = UnusedPackages,
+            UnverifiableAdvisories = UnverifiableAdvisories,
         };
     }
 }

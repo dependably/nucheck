@@ -343,4 +343,26 @@ public class FormatterTests
         Assert.Equal("~> 1.0.0", extra.GetProperty("vulnerableRange").GetString());
         Assert.Equal("GHSA-xxxx-yyyy-zzzz", extra.GetProperty("advisoryId").GetString());
     }
+
+    [Fact]
+    public void Json_unverifiable_range_finding_carries_advisory_severity_in_extra()
+    {
+        // Regression for #27: the advisory's own severity (may be critical/high) must be
+        // preserved in extra.advisorySeverity so operators can distinguish severity levels
+        // even when the range could not be parsed. The finding's own severity stays "info".
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities = [],
+            UnverifiableAdvisories =
+            [
+                new UnverifiableAdvisoryFinding("Some.Pkg", "~> 1.0.0", "GHSA-xxxx-yyyy-zzzz", "critical"),
+            ],
+        };
+
+        using var document = JsonDocument.Parse(Json().Format(result));
+        var finding = document.RootElement.GetProperty("findings")[0];
+        Assert.Equal("info", finding.GetProperty("severity").GetString());       // gate posture unchanged
+        Assert.Equal("critical", finding.GetProperty("extra").GetProperty("advisorySeverity").GetString());
+    }
 }

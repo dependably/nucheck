@@ -90,7 +90,8 @@ public sealed class SummaryResultFormatter : IResultFormatter
         foreach (var finding in result.UnverifiableAdvisories)
         {
             var id = string.IsNullOrEmpty(finding.AdvisoryId) ? string.Empty : $" [{finding.AdvisoryId}]";
-            builder.AppendLine($"  • {finding.PackageId}{id}: {finding.VulnerableVersionRange}");
+            var sev = string.IsNullOrEmpty(finding.AdvisorySeverity) ? string.Empty : $" [{Severity.Normalize(finding.AdvisorySeverity)}]";
+            builder.AppendLine($"  • {finding.PackageId}{id}{sev}: {finding.VulnerableVersionRange}");
         }
     }
 }

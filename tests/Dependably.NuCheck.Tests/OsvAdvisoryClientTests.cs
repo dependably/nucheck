@@ -123,8 +123,9 @@ public class OsvAdvisoryClientTests
     {
         // Regression for #37: an OSV interval with introduced:"0" and no fixed event used to
         // emit ">= 0.0.0" which excludes 0.0.0-prerelease packages (they sort below 0.0.0 in
-        // NuGet SemVer).  The sentinel must now emit "(,)" — NuGet's native unbounded interval
-        // — so that any installed version, including 0.0.0-alpha, is matched.
+        // NuGet SemVer). The sentinel now emits ">= 0.0.0-0" — the minimum NuGet prerelease
+        // label (numeric 0 sorts below all alphanumeric labels) — so any installed version,
+        // including 0.0.0-alpha, is matched.
         const string body = """
 {"vulns":[{"id":"X","affected":[{"package":{"ecosystem":"NuGet","name":"P"},
   "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"0"}]}]}]}]}

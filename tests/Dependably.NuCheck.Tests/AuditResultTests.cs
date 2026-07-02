@@ -188,4 +188,23 @@ public class AuditResultTests
         Assert.Single(filtered.UnusedPackages);
         Assert.Equal("Foo.Bar", filtered.UnusedPackages[0].Id);
     }
+
+    [Fact]
+    public void FilterBySeverity_preserves_unverifiable_advisories()
+    {
+        // Regression for #27: --severity is a display filter that must never drop
+        // UnverifiableAdvisories — they are advisory-only warnings, not severity-filterable.
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities = Build().Vulnerabilities,
+            PolicyFindings = [],
+            UnverifiableAdvisories = [new UnverifiableAdvisoryFinding("Boom.Pkg", "~> 1.0.0", "GHSA-0000-0000-0000")],
+        };
+
+        var filtered = result.FilterBySeverity("high");
+
+        Assert.Single(filtered.UnverifiableAdvisories);
+        Assert.Equal("Boom.Pkg", filtered.UnverifiableAdvisories[0].PackageId);
+    }
 }

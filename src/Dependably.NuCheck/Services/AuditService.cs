@@ -89,7 +89,7 @@ public sealed class AuditService
                     break;
                 case VulnerabilityMatchResult.UnparseableRange:
                     unverifiable.Add(new UnverifiableAdvisoryFinding(
-                        package.Id, advisory.VulnerableVersionRange, advisory.AdvisoryId));
+                        package.Id, advisory.VulnerableVersionRange, advisory.AdvisoryId, advisory.Severity));
                     break;
             }
         }

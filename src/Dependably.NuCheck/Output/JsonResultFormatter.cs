@@ -168,6 +168,7 @@ public sealed class JsonResultFormatter : IResultFormatter
                     package = finding.PackageId,
                     vulnerableRange = finding.VulnerableVersionRange,
                     advisoryId = finding.AdvisoryId,
+                    advisorySeverity = finding.AdvisorySeverity,
                 },
             });
         }
