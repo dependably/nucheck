@@ -5,8 +5,9 @@ namespace Dependably.NuCheck.Config;
 /// <summary>
 /// The shared repo-root <c>.dependably-check</c> config, consumed across the
 /// Dependably checker tools. Only the data relevant to the NuGet checker is
-/// surfaced: the union of <c>common.allowedRegistryHosts</c> and
-/// <c>nuget.allowedRegistryHosts</c>. Other sections and unknown keys are ignored.
+/// surfaced: the union of the <c>common.*</c> and <c>nuget.*</c>
+/// <c>allowedRegistryHosts</c>, <c>ignoreUnusedPackages</c>, and
+/// <c>allowedLocalFeeds</c> arrays. Other sections and unknown keys are ignored.
 /// </summary>
 public sealed class DependablyCheckConfig
 {
@@ -15,10 +16,12 @@ public sealed class DependablyCheckConfig
 
     private DependablyCheckConfig(
         IReadOnlyList<string> allowedRegistryHosts,
-        IReadOnlyList<string> ignoreUnusedPackages)
+        IReadOnlyList<string> ignoreUnusedPackages,
+        IReadOnlyList<string> allowedLocalFeeds)
     {
         AllowedRegistryHosts = allowedRegistryHosts;
         IgnoreUnusedPackages = ignoreUnusedPackages;
+        AllowedLocalFeeds = allowedLocalFeeds;
     }
 
     /// <summary>
@@ -37,8 +40,20 @@ public sealed class DependablyCheckConfig
     /// </summary>
     public IReadOnlyList<string> IgnoreUnusedPackages { get; }
 
-    /// <summary>An empty config (no allowlisted hosts, no ignored packages), used when no file is found.</summary>
-    public static DependablyCheckConfig Empty { get; } = new([], []);
+    /// <summary>
+    /// Local folder feeds (relative paths or <c>file://</c> URIs) that are explicitly
+    /// trusted even though they are declared inside the repository tree. The union of the
+    /// config's <c>common</c> and <c>nuget</c> <c>allowedLocalFeeds</c>, de-duplicated
+    /// case-insensitively. An entry matches a source when it equals the source's path, or
+    /// when it is a trailing path-segment suffix of it (e.g. <c>feeds</c> or <c>./feeds</c>
+    /// matches a resolved <c>/repo/feeds</c>). Any enabled local feed NOT listed here is
+    /// reported as a policy error, because a repo-committed local feed can smuggle tampered
+    /// packages past a restore.
+    /// </summary>
+    public IReadOnlyList<string> AllowedLocalFeeds { get; }
+
+    /// <summary>An empty config (no allowlisted hosts, no ignored packages, no local feeds), used when no file is found.</summary>
+    public static DependablyCheckConfig Empty { get; } = new([], [], []);
 
     /// <summary>
     /// Loads the config. When <paramref name="explicitPath"/> is given it is read
@@ -113,7 +128,13 @@ public sealed class DependablyCheckConfig
             AppendStringArray(root, "common", "ignoreUnusedPackages", ignored, seenIgnored);
             AppendStringArray(root, "nuget", "ignoreUnusedPackages", ignored, seenIgnored);
 
-            return new DependablyCheckConfig(hosts, ignored);
+            var localFeeds = new List<string>();
+            var seenLocalFeeds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            AppendStringArray(root, "common", "allowedLocalFeeds", localFeeds, seenLocalFeeds);
+            AppendStringArray(root, "nuget", "allowedLocalFeeds", localFeeds, seenLocalFeeds);
+
+            return new DependablyCheckConfig(hosts, ignored, localFeeds);
         }
         catch (JsonException ex)
         {
