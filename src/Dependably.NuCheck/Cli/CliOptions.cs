@@ -85,6 +85,10 @@ public sealed class CliOptions
                 {
                     setValue(options, queue.Dequeue());
                 }
+                else
+                {
+                    options.Error ??= $"option '{arg}' requires a value";
+                }
             }
             else if (BoolFlags.TryGetValue(arg, out var setBool))
             {

@@ -48,10 +48,28 @@ public class CliOptionsTests
     }
 
     [Fact]
-    public void Parse_ignores_value_flag_without_argument()
+    public void Parse_value_flag_at_end_of_list_is_usage_error()
     {
+        // A value flag at the end of the argument list has no following value: this is a
+        // usage error, not a silent no-op (the flag keeps its default, but Error is set).
         var options = CliOptions.Parse(["--format"]);
-        Assert.Equal("human", options.Format);
+
+        Assert.NotNull(options.Error);
+        Assert.Contains("--format", options.Error);
+        Assert.Equal("human", options.Format); // default unchanged
+    }
+
+    [Theory]
+    [InlineData("--severity")]
+    [InlineData("--source")]
+    [InlineData("--config")]
+    [InlineData("--fail-on")]
+    public void Parse_every_value_flag_at_end_of_list_is_usage_error(string flag)
+    {
+        var options = CliOptions.Parse([flag]);
+
+        Assert.NotNull(options.Error);
+        Assert.Contains(flag, options.Error);
     }
 
     [Fact]
