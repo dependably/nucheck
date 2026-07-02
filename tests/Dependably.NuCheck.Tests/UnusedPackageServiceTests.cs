@@ -1368,4 +1368,88 @@ public class UnusedPackageServiceTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    // --- Structural fix: EmitRawMultiDollarContent hole-content must be nested-token-aware ----
+    //
+    // Root cause: when holeDepth > 0 the scanner used a naive brace-run counter with NO
+    // awareness of nested strings/comments inside the hole.  A }} that appears inside a
+    // nested "..." string or /* */ comment wrongly decremented holeDepth to 0, after which
+    // a subsequent """…""" run closed the literal early and the real usage after it was
+    // stripped.  Fix: route hole content through EmitRawMultiDollarHoleChar which mirrors
+    // the nested-token-aware EmitInterpolatedHoleChar dispatch, adapted for dollarCount-wide
+    // brace runs.
+
+    [Fact]
+    public void Disk_raw_multi_dollar_closing_braces_in_nested_string_do_not_strip_usage()
+    {
+        // Before the fix: $$"""{{ "}}" + """q""" + Foo.Bar.X.Run() }}""" — the }} inside
+        // the nested "..." string wrongly decremented holeDepth to 0, so EmitRawMultiDollarContent
+        // closed the literal early at """q""" and Foo.Bar.X.Run() was stripped as phantom
+        // raw-string content, wrongly flagging Foo.Bar as unused.
+        // Serilog is genuinely unused and must still be flagged (partial-failure control).
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.Bar" Version="1.0.0" />
+                    <PackageReference Include="Serilog" Version="3.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // Foo.Bar used ONLY inside the $$"""...""" hole; the hole also contains a
+            // nested regular string whose content includes }}, which must NOT affect
+            // hole depth.  Serilog is genuinely unused.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                """""public class C { static void M() { var s = $$"""{{ "}}" + """q""" + Foo.Bar.X.Run() }}"""; } }""""");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            // Foo.Bar IS used (in the hole) — only Serilog should be flagged.
+            var finding = Assert.Single(findings);
+            Assert.Equal("Serilog", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_raw_multi_dollar_closing_braces_in_block_comment_do_not_strip_usage()
+    {
+        // Before the fix: $$"""{{ /* }} */ """q""" + Foo.Bar.X.Run() }}""" — the }} inside
+        // the /* */ comment wrongly decremented holeDepth to 0, same failure mode as above.
+        // Serilog is genuinely unused and must still be flagged (partial-failure control).
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.Bar" Version="1.0.0" />
+                    <PackageReference Include="Serilog" Version="3.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // Foo.Bar used ONLY inside the $$"""...""" hole; the hole also contains a
+            // block comment whose content includes }}, which must NOT affect hole depth.
+            // Serilog is genuinely unused.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                """""public class C { static void M() { var s = $$"""{{ /* }} */ """q""" + Foo.Bar.X.Run() }}"""; } }""""");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            // Foo.Bar IS used (in the hole) — only Serilog should be flagged.
+            var finding = Assert.Single(findings);
+            Assert.Equal("Serilog", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }

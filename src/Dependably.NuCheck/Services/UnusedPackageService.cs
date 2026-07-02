@@ -1021,6 +1021,9 @@ public static partial class UnusedPackageService
     /// inside a hole does not prematurely close the literal. Only a quote run of length
     /// &gt;= <paramref name="quoteCount"/> at hole depth 0 closes the literal.
     /// Called with <paramref name="i"/> pointing past the opening delimiter.
+    /// When inside a hole (<c>holeDepth &gt; 0</c>) all content is dispatched through
+    /// <see cref="EmitRawMultiDollarHoleChar"/> so that nested strings, comments, and
+    /// char literals cannot desync the hole-depth counter or trigger a false close.
     /// </summary>
     private static int EmitRawMultiDollarContent(
         string content, int i, int quoteCount, int dollarCount, System.Text.StringBuilder sb)
@@ -1029,27 +1032,109 @@ public static partial class UnusedPackageService
         while (i < content.Length)
         {
             var c = content[i];
-            if (c == '"')
+            if (holeDepth > 0)
             {
+                // Inside a hole — dispatch through the nested-token-aware handler so that
+                // braces/quotes inside nested strings or comments do not affect hole depth
+                // or the closing-delimiter search.
+                i = EmitRawMultiDollarHoleChar(content, i, c, sb, dollarCount, ref holeDepth);
+            }
+            else if (c == '"')
+            {
+                // Outside a hole — a long-enough quote run closes the literal.
                 i = EmitRawMultiDollarQuoteRun(content, i, quoteCount, holeDepth, sb, out var closed);
                 if (closed) return i;
             }
             else if (c == '{')
             {
+                // A dollarCount-wide { run opens a hole; shorter runs are literal text.
                 i = AdvanceRawMultiDollarBraceRun(content, i, '{', dollarCount, sb, ref holeDepth, +1);
-            }
-            else if (c == '}' && holeDepth > 0)
-            {
-                i = AdvanceRawMultiDollarBraceRun(content, i, '}', dollarCount, sb, ref holeDepth, -1);
             }
             else
             {
+                // Literal text (including } at depth 0) — emit and advance.
                 sb.Append(c);
                 i++;
             }
         }
 
         return i;
+    }
+
+    /// <summary>
+    /// Emits a character while inside a hole of a multi-dollar raw interpolated string,
+    /// skipping or recursing into nested string literals, comments, and char literals so
+    /// that their braces and quotes do not affect <paramref name="holeDepth"/> or trigger
+    /// a false closing-delimiter match.
+    /// Mirrors <see cref="EmitInterpolatedHoleChar"/> but uses
+    /// <paramref name="dollarCount"/>-wide brace-run accounting for depth changes.
+    /// </summary>
+    private static int EmitRawMultiDollarHoleChar(
+        string content, int i, char c, System.Text.StringBuilder sb,
+        int dollarCount, ref int holeDepth)
+    {
+        // Skip comments so a brace or quote inside them does not desync hole depth.
+        if (c == '/' && i + 1 < content.Length && content[i + 1] == '/')
+        {
+            return SkipLineComment(content, i);
+        }
+
+        if (c == '/' && i + 1 < content.Length && content[i + 1] == '*')
+        {
+            return SkipBlockComment(content, i);
+        }
+
+        // Nested interpolated strings — dispatch so nested hole code is preserved.
+        if (c == '$')
+        {
+            return EmitNestedInterpolatedString(content, i, sb);
+        }
+
+        if (c == '@' && i + 1 < content.Length && content[i + 1] == '$'
+            && i + 2 < content.Length && content[i + 2] == '"')
+        {
+            // @$"..." — verbatim interpolated string; preserve nested hole code.
+            return SkipInterpolatedString(content, i + 3, sb, verbatim: true);
+        }
+
+        // Skip nested raw string literals so their quotes/braces don't affect depth.
+        if (c == '"' && i + 1 < content.Length && content[i + 1] == '"'
+            && i + 2 < content.Length && content[i + 2] == '"')
+        {
+            return SkipRawStringLiteral(content, i);
+        }
+
+        // Skip nested verbatim string.
+        if (c == '@' && i + 1 < content.Length && content[i + 1] == '"')
+        {
+            return SkipVerbatimString(content, i);
+        }
+
+        // Skip nested regular string so its braces don't affect depth.
+        if (c == '"')
+        {
+            return SkipRegularString(content, i);
+        }
+
+        // Skip char literal so a '}' or '"' inside it does not affect depth.
+        if (c == '\'')
+        {
+            return SkipCharLiteral(content, i);
+        }
+
+        // Brace runs — dollarCount-wide runs open/close holes; shorter runs are code.
+        if (c == '{')
+        {
+            return AdvanceRawMultiDollarBraceRun(content, i, '{', dollarCount, sb, ref holeDepth, +1);
+        }
+
+        if (c == '}')
+        {
+            return AdvanceRawMultiDollarBraceRun(content, i, '}', dollarCount, sb, ref holeDepth, -1);
+        }
+
+        sb.Append(c);
+        return i + 1;
     }
 
     /// <summary>
