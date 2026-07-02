@@ -3,6 +3,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using Dependably.NuCheck.Models;
+using NuGet.Versioning;
 
 namespace Dependably.NuCheck.Services;
 
@@ -187,36 +188,112 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
         if (!type.Equals("ECOSYSTEM", StringComparison.OrdinalIgnoreCase)
             && !type.Equals("SEMVER", StringComparison.OrdinalIgnoreCase))
         {
-            yield break;
+            return [];
         }
 
         if (!range.TryGetProperty("events", out var events) || events.ValueKind != JsonValueKind.Array)
         {
-            yield break;
+            return [];
         }
 
-        string? lower = null;
-        var open = false;
+        // The OSV evaluation algorithm sorts a range's events by version before pairing
+        // introduced/fixed, because the events array is not guaranteed to be ordered.
+        return PairIntervals(OrderedEvents(events));
+    }
+
+    private enum EventKind
+    {
+        Introduced,
+        Fixed,
+        LastAffected,
+    }
+
+    private readonly record struct RangeEvent(EventKind Kind, string? Version);
+
+    /// <summary>Parse a range's events into a version-sorted list (per the OSV algorithm).</summary>
+    private static List<RangeEvent> OrderedEvents(JsonElement events)
+    {
+        var parsed = new List<RangeEvent>();
         foreach (var ev in events.EnumerateArray())
         {
             if (ev.TryGetProperty("introduced", out var introduced))
             {
-                lower = introduced.GetString();
-                open = true;
+                parsed.Add(new RangeEvent(EventKind.Introduced, introduced.GetString()));
             }
             else if (ev.TryGetProperty("fixed", out var fixedVersion))
             {
-                var fix = fixedVersion.GetString();
-                yield return (Comparator(lower, fix, upperInclusive: false), fix);
-                open = false;
-                lower = null;
+                parsed.Add(new RangeEvent(EventKind.Fixed, fixedVersion.GetString()));
             }
             else if (ev.TryGetProperty("last_affected", out var lastAffected))
             {
-                // last_affected gives an upper bound but is NOT the patched version.
-                yield return (Comparator(lower, lastAffected.GetString(), upperInclusive: true), null);
-                open = false;
-                lower = null;
+                parsed.Add(new RangeEvent(EventKind.LastAffected, lastAffected.GetString()));
+            }
+        }
+
+        parsed.Sort(CompareEvents);
+        return parsed;
+    }
+
+    private static int CompareEvents(RangeEvent left, RangeEvent right)
+    {
+        var byVersion = CompareVersions(left.Version, right.Version);
+
+        // At the same version, order introduced before fixed/last_affected so an interval
+        // that both opens and closes on one version resolves to an empty (non-)range.
+        return byVersion != 0 ? byVersion : ((int)left.Kind).CompareTo((int)right.Kind);
+    }
+
+    private static int CompareVersions(string? left, string? right)
+    {
+        var leftVersion = ParseOrNull(left);
+        var rightVersion = ParseOrNull(right);
+
+        // OSV's "0" sentinel and any unparseable value sort first (the range's start).
+        if (leftVersion is null)
+        {
+            return rightVersion is null ? 0 : -1;
+        }
+
+        return rightVersion is null ? 1 : leftVersion.CompareTo(rightVersion);
+    }
+
+    private static NuGetVersion? ParseOrNull(string? version)
+        => version is not null && version != "0" && NuGetVersion.TryParse(version, out var parsed) ? parsed : null;
+
+    /// <summary>
+    /// Walk the version-sorted events, pairing each <c>introduced</c> with the next
+    /// <c>fixed</c>/<c>last_affected</c>. A redundant <c>introduced</c> that arrives while an
+    /// interval is already open is ignored: within one range the lowest introduced wins until
+    /// a fix closes it (per the OSV timeline), so keeping the earliest lower bound avoids both
+    /// dropping the interval and over-reporting versions past the eventual fix.
+    /// </summary>
+    private static IEnumerable<(string Range, string? Fixed)> PairIntervals(List<RangeEvent> events)
+    {
+        string? lower = null;
+        var open = false;
+        foreach (var ev in events)
+        {
+            switch (ev.Kind)
+            {
+                case EventKind.Introduced:
+                    if (!open)
+                    {
+                        lower = ev.Version;
+                        open = true;
+                    }
+
+                    break;
+                case EventKind.Fixed:
+                    yield return (Comparator(lower, ev.Version, upperInclusive: false), ev.Version);
+                    open = false;
+                    lower = null;
+                    break;
+                case EventKind.LastAffected:
+                    // last_affected gives an upper bound but is NOT the patched version.
+                    yield return (Comparator(lower, ev.Version, upperInclusive: true), null);
+                    open = false;
+                    lower = null;
+                    break;
             }
         }
 

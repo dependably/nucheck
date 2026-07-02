@@ -180,5 +180,53 @@ public class OsvAdvisoryClientTests
         Assert.Equal(2, calls);
     }
 
+    // --- Ticket 29: unsorted / consecutive events -----------------------------------------
+
+    [Fact]
+    public void ParseOsv_sorts_unordered_events_before_pairing()
+    {
+        // Events arrive out of order: [fixed, introduced]. Sorting yields a single bounded
+        // interval [1.0.0, 2.0.0) instead of a stray "< 2.0.0" plus an open ">= 1.0.0".
+        const string body = """
+{"vulns":[{"id":"X","affected":[{"package":{"ecosystem":"NuGet","name":"P"},
+  "ranges":[{"type":"ECOSYSTEM","events":[{"fixed":"2.0.0"},{"introduced":"1.0.0"}]}]}]}]}
+""";
+        var advisory = Assert.Single(OsvAdvisoryClient.ParseOsv(body, "P"));
+        Assert.Equal(">= 1.0.0, < 2.0.0", advisory.VulnerableVersionRange);
+        Assert.Equal("2.0.0", advisory.FixedVersion);
+    }
+
+    [Fact]
+    public void ParseOsv_collapses_consecutive_introduced_into_one_interval()
+    {
+        // Two 'introduced' before a single 'fixed' describe one vulnerable timeline; the
+        // earliest introduced must survive, giving [1.0.0, 2.1.0) rather than dropping 1.0.0.
+        const string body = """
+{"vulns":[{"id":"X","affected":[{"package":{"ecosystem":"NuGet","name":"P"},
+  "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"1.0.0"},{"introduced":"2.0.0"},{"fixed":"2.1.0"}]}]}]}]}
+""";
+        var advisory = Assert.Single(OsvAdvisoryClient.ParseOsv(body, "P"));
+        Assert.Equal(">= 1.0.0, < 2.1.0", advisory.VulnerableVersionRange);
+
+        // 1.5.0 sits between the two introduced events and must be flagged (was a false negative).
+        Assert.True(VulnerabilityMatcher.IsVulnerable(NuGetVersion.Parse("1.5.0"), advisory.VulnerableVersionRange));
+        Assert.False(VulnerabilityMatcher.IsVulnerable(NuGetVersion.Parse("2.1.0"), advisory.VulnerableVersionRange));
+    }
+
+    [Fact]
+    public void ParseOsv_keeps_distinct_fixed_branches_as_separate_intervals()
+    {
+        // A genuinely disjoint pair (fix, then a later reintroduction+fix) stays two intervals,
+        // even when the events are shuffled in the payload.
+        const string body = """
+{"vulns":[{"id":"X","affected":[{"package":{"ecosystem":"NuGet","name":"P"},
+  "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"2.0.0"},{"fixed":"1.5.0"},{"introduced":"1.0.0"},{"fixed":"2.5.0"}]}]}]}]}
+""";
+        var advisories = OsvAdvisoryClient.ParseOsv(body, "P");
+        Assert.Equal(2, advisories.Count);
+        Assert.Equal(">= 1.0.0, < 1.5.0", advisories[0].VulnerableVersionRange);
+        Assert.Equal(">= 2.0.0, < 2.5.0", advisories[1].VulnerableVersionRange);
+    }
+
     private static Task NoDelay(TimeSpan _, CancellationToken __) => Task.CompletedTask;
 }
