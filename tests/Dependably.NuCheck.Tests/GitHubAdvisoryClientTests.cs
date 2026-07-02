@@ -244,6 +244,84 @@ public class GitHubAdvisoryClientTests
         Assert.Equal(TimeSpan.FromSeconds(1), captured); // 2^0 = 1 s for attempt 0
     }
 
+    // #17 — Network-level exceptions bypass retry logic
+
+    [Fact]
+    public async Task Network_exception_on_first_attempt_is_retried_and_succeeds()
+    {
+        // Old code: HttpRequestException from SendAsync propagated immediately past the retry loop.
+        // New code: caught when attempt < _maxRetries and retried with exponential backoff.
+        var calls = 0;
+        var handler = new FakeHttpMessageHandler(req =>
+        {
+            calls++;
+            if (calls == 1)
+            {
+                throw new HttpRequestException("simulated network failure");
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(GraphQlBody, Encoding.UTF8, "application/json"),
+            };
+        });
+        var client = new GitHubAdvisoryClient(new HttpClient(handler), "token", delay: NoDelay);
+
+        var advisories = await client.GetAdvisoriesAsync("Newtonsoft.Json");
+
+        Assert.Equal(2, calls);
+        Assert.Single(advisories);
+    }
+
+    [Fact]
+    public async Task Network_exception_exhausting_retries_rethrows()
+    {
+        // All attempts fail with a network-level exception; must rethrow after retries are exhausted.
+        var calls = 0;
+        // Explicit Func type resolves constructor overload ambiguity: a throw-only lambda matches both
+        // Func<Request,HttpResponseMessage> and Func<Request,(HttpStatusCode,string)>.
+        Func<HttpRequestMessage, HttpResponseMessage> alwaysFail = _ =>
+        {
+            calls++;
+            throw new HttpRequestException("always down");
+        };
+        var handler = new FakeHttpMessageHandler(alwaysFail);
+        var client = new GitHubAdvisoryClient(new HttpClient(handler), "token", maxRetries: 2, delay: NoDelay);
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => client.GetAdvisoriesAsync("X"));
+        Assert.Equal(3, calls); // 1 initial + 2 retries
+    }
+
+    [Fact]
+    public async Task Network_exception_mixed_with_http_transient_failure_retries_both()
+    {
+        // Partial-failure scenario: attempt 1 → network exception, attempt 2 → 503,
+        // attempt 3 → 200. Both transient failure kinds must be retried.
+        var calls = 0;
+        var handler = new FakeHttpMessageHandler(req =>
+        {
+            calls++;
+            return calls switch
+            {
+                1 => throw new HttpRequestException("DNS failure"),
+                2 => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                {
+                    Content = new StringContent("down", Encoding.UTF8, "application/json"),
+                },
+                _ => new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(GraphQlBody, Encoding.UTF8, "application/json"),
+                },
+            };
+        });
+        var client = new GitHubAdvisoryClient(new HttpClient(handler), "token", maxRetries: 3, delay: NoDelay);
+
+        var advisories = await client.GetAdvisoriesAsync("Newtonsoft.Json");
+
+        Assert.Equal(3, calls);
+        Assert.Single(advisories);
+    }
+
     [Fact]
     public async Task Rate_limited_graphql_200_with_errors_throws()
     {

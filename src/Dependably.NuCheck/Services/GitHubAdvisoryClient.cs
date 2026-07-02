@@ -139,17 +139,27 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
         for (var attempt = 0; ; attempt++)
         {
             using var request = createRequest();
-            using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
-            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-
-            if (attempt < _maxRetries && IsTransient(response))
+            try
             {
-                await _delay(RetryDelay(response, attempt), cancellationToken).ConfigureAwait(false);
-                continue;
-            }
+                using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+                var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
-            EnsureSuccess(response.StatusCode, body);
-            return body;
+                if (attempt < _maxRetries && IsTransient(response))
+                {
+                    await _delay(RetryDelay(response, attempt), cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                EnsureSuccess(response.StatusCode, body);
+                return body;
+            }
+            catch (HttpRequestException) when (attempt < _maxRetries)
+            {
+                // Network-level failure (DNS, TCP reset, TLS handshake, timeout) — treat
+                // as transient and retry with exponential backoff. CancellationToken
+                // cancellations are not HttpRequestException so they propagate normally.
+                await _delay(TimeSpan.FromSeconds(Math.Pow(2, attempt)), cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 

@@ -9,6 +9,10 @@ public sealed class FakeHttpMessageHandler : HttpMessageHandler
     private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;
 
     /// <summary>Full control: the factory builds the complete <see cref="HttpResponseMessage"/>.</summary>
+    /// <remarks>
+    /// If the factory throws, <see cref="SendAsync"/> surfaces the exception as a faulted
+    /// <see cref="Task"/> so the awaiter sees it as a network-level failure.
+    /// </remarks>
     public FakeHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> responder)
         => _responder = responder;
 
@@ -36,6 +40,15 @@ public sealed class FakeHttpMessageHandler : HttpMessageHandler
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         LastRequest = request;
-        return Task.FromResult(_responder(request));
+        try
+        {
+            return Task.FromResult(_responder(request));
+        }
+        catch (Exception ex)
+        {
+            // Surface exceptions as a faulted task so that callers which await
+            // HttpClient.SendAsync see them as network-level failures, not synchronous throws.
+            return Task.FromException<HttpResponseMessage>(ex);
+        }
     }
 }
