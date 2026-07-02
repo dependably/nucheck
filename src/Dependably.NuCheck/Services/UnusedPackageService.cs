@@ -504,6 +504,13 @@ public static partial class UnusedPackageService
             {
                 i = SkipBlockComment(content, i);
             }
+            else if (content[i] == '$' && next == '$')
+            {
+                // $$"...", $$"""...""", $$$"""...""", etc. — multi-dollar interpolated string.
+                // Full n-dollar/n-brace hole parsing is complex; fail-safe by emitting the
+                // entire literal content as code so any qualified name in a hole counts as used.
+                i = EmitMultiDollarInterpolatedLiteral(content, i, sb);
+            }
             else if (content[i] == '$' && next == '"' && i + 2 < content.Length && content[i + 2] == '"' && i + 3 < content.Length && content[i + 3] == '"')
             {
                 // $"""...""" — interpolated raw string (≥ 3 quotes required); preserve hole code.
@@ -624,9 +631,12 @@ public static partial class UnusedPackageService
 
     private static int AdvanceInterpolatedOpenBrace(string content, int i, ref int holeDepth)
     {
-        if (i + 1 < content.Length && content[i + 1] == '{')
+        // {{ is a literal-brace escape only in the string's literal-text portion
+        // (holeDepth == 0); inside a hole (holeDepth > 0) consecutive braces are
+        // real code (e.g. a 2D array initialiser) and must each adjust depth.
+        if (holeDepth == 0 && i + 1 < content.Length && content[i + 1] == '{')
         {
-            return i + 2; // {{ is a literal brace in the string — skip
+            return i + 2; // {{ literal-brace escape in string portion — skip
         }
 
         holeDepth++;
@@ -674,6 +684,13 @@ public static partial class UnusedPackageService
         {
             // Nested verbatim string — skip.
             return SkipVerbatimString(content, i);
+        }
+
+        if (c == '\'')
+        {
+            // Char literal — skip it so its content (e.g. '}' or '"') does not affect
+            // brace depth or string-boundary detection inside the hole.
+            return SkipCharLiteral(content, i);
         }
 
         sb.Append(c);
@@ -898,6 +915,135 @@ public static partial class UnusedPackageService
 
         if (i < content.Length && content[i] == '\'')
         {
+            i++;
+        }
+
+        return i;
+    }
+
+    /// <summary>
+    /// Handles a multi-dollar interpolated string (<c>$$"..."</c>, <c>$$"""..."""</c>,
+    /// <c>$$$"""..."""</c>, etc.) starting at <paramref name="start"/> (the first <c>$</c>).
+    /// Full n-dollar/n-brace hole parsing is complex; this method emits the entire literal
+    /// content as code — the fail-safe direction — so any qualified type reference inside a
+    /// hole is still visible to <see cref="QualifiedNamePattern"/>.
+    /// </summary>
+    private static int EmitMultiDollarInterpolatedLiteral(
+        string content, int start, System.Text.StringBuilder sb)
+    {
+        var i = start;
+        while (i < content.Length && content[i] == '$')
+        {
+            i++;
+        }
+
+        var verbatim = i < content.Length && content[i] == '@';
+        if (verbatim)
+        {
+            i++;
+        }
+
+        if (i >= content.Length || content[i] != '"')
+        {
+            // Not followed by a string opener — emit the consumed chars as code and return.
+            for (var j = start; j < i; j++)
+            {
+                sb.Append(content[j]);
+            }
+
+            return i;
+        }
+
+        var quoteCount = CountQuoteRun(content, i);
+        i += quoteCount;
+
+        if (quoteCount >= 3)
+        {
+            return EmitRawMultiDollarContent(content, i, quoteCount, sb);
+        }
+
+        if (quoteCount == 1)
+        {
+            return EmitSingleQuoteMultiDollarContent(content, i, verbatim, sb);
+        }
+
+        // quoteCount == 2: not a valid C# string — advance past the quotes and return.
+        return i;
+    }
+
+    /// <summary>
+    /// Emits the body of a multi-dollar raw string literal (<c>$$"""..."""</c> etc.)
+    /// into <paramref name="sb"/> until the closing <paramref name="quoteCount"/>-wide
+    /// quote run is reached. Called with <paramref name="i"/> pointing past the opening
+    /// delimiter.
+    /// </summary>
+    private static int EmitRawMultiDollarContent(
+        string content, int i, int quoteCount, System.Text.StringBuilder sb)
+    {
+        while (i < content.Length)
+        {
+            if (content[i] != '"')
+            {
+                sb.Append(content[i]);
+                i++;
+                continue;
+            }
+
+            var runStart = i;
+            var runLen = 0;
+            while (i < content.Length && content[i] == '"')
+            {
+                runLen++;
+                i++;
+            }
+
+            if (runLen >= quoteCount)
+            {
+                return i; // reached the closing delimiter
+            }
+
+            // Short quote run in the body — emit the quotes as code.
+            for (var j = runStart; j < runStart + runLen; j++)
+            {
+                sb.Append('"');
+            }
+        }
+
+        return i;
+    }
+
+    /// <summary>
+    /// Emits the body of a single-quoted multi-dollar string (<c>$$"..."</c>, <c>$$@"..."</c>)
+    /// into <paramref name="sb"/> until the closing <c>"</c> is reached. Called with
+    /// <paramref name="i"/> pointing past the opening <c>"</c>.
+    /// </summary>
+    private static int EmitSingleQuoteMultiDollarContent(
+        string content, int i, bool verbatim, System.Text.StringBuilder sb)
+    {
+        while (i < content.Length)
+        {
+            var c = content[i];
+            if (c == '"')
+            {
+                i++;
+                if (verbatim && i < content.Length && content[i] == '"')
+                {
+                    sb.Append('"'); // "" is an escaped quote in verbatim
+                    i++;
+                    continue;
+                }
+
+                break; // closing "
+            }
+
+            if (!verbatim && c == '\\' && i + 1 < content.Length)
+            {
+                sb.Append(content[i + 1]); // emit the char after backslash
+                i += 2;
+                continue;
+            }
+
+            sb.Append(c);
             i++;
         }
 

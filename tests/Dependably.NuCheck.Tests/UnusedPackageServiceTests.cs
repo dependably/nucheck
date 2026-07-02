@@ -1045,4 +1045,162 @@ public class UnusedPackageServiceTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    // --- Review findings: additional over-strip bugs in StripCommentsAndLiterals ----------
+
+    // Finding 1: char literals inside interpolation holes are unhandled.
+    // EmitInterpolatedHoleChar did not route '\'' to SkipCharLiteral, so a char literal
+    // such as '}' or '"' inside a hole desync'd hole depth or invoked SkipRegularString.
+
+    [Fact]
+    public void Disk_char_literal_closing_brace_in_hole_does_not_strip_usage()
+    {
+        // Before the fix: $"{ p.TrimEnd('}') + Foo.Bar.X.Run() }" caused the stripper
+        // to emit the bare ' and then treat the } inside the char literal as the
+        // hole-closing brace, stripping everything after it including Foo.Bar.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.Bar" Version="1.0.0" />
+                    <PackageReference Include="Serilog" Version="3.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // Foo.Bar used ONLY inside a hole that also contains a char literal with '}'.
+            // The stripper must not treat that '}' as the hole-closing brace.
+            // Serilog is genuinely unused — it must still be flagged.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                """public class C { void M(string p) { var s = $"{ p.TrimEnd('}') + Foo.Bar.X.Run() }"; } }""");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            // Foo.Bar IS used (in the hole) — only Serilog should be flagged.
+            var finding = Assert.Single(findings);
+            Assert.Equal("Serilog", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // Finding 2: {{ inside an interpolation hole was misread as a literal-brace escape,
+    // desyncing hole depth. The {{ / }} escape must only be applied at holeDepth == 0.
+
+    [Fact]
+    public void Disk_double_brace_in_hole_code_does_not_strip_usage()
+    {
+        // Before the fix: $"{ new int[,]{{1,2}}[0,0] + Foo.Bar.X.Run() }" caused
+        // AdvanceInterpolatedOpenBrace to skip {{ unconditionally (even at holeDepth > 0),
+        // which closed the hole early and stripped Foo.Bar as literal text.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.Bar" Version="1.0.0" />
+                    <PackageReference Include="Serilog" Version="3.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // Foo.Bar used ONLY in a hole whose code contains a 2D array initialiser
+            // ({{...}}) — the inner {{ are real code braces, not literal-brace escapes.
+            // Serilog is genuinely unused — it must still be flagged.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                """public class C { void M() { var s = $"{ new int[,]{{1,2}}[0,0] + Foo.Bar.X.Run() }"; } }""");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            // Foo.Bar IS used (in the hole) — only Serilog should be flagged.
+            var finding = Assert.Single(findings);
+            Assert.Equal("Serilog", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // Finding 2 (regression guard): {{ at holeDepth == 0 (the literal-text portion) must
+    // still be treated as a literal-brace escape so content inside it is NOT emitted as code.
+
+    [Fact]
+    public void Disk_double_brace_in_literal_portion_does_not_count_as_usage()
+    {
+        // After the finding-2 fix, {{ at holeDepth == 0 must still suppress content.
+        // If the depth guard regressed, {{Foo.Bar.X.Run()}} would be emitted as hole
+        // code and Foo.Bar would wrongly appear used.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.Bar" Version="1.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // The entire content of $"..." is in the literal-text portion ({{...}} escape,
+            // no real interpolation hole), so Foo.Bar must NOT count as used.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                """public class C { void M() { var s = $"{{Foo.Bar.X.Run()}}"; } }""");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            // Foo.Bar is NOT used (only in literal-text escape, not in a hole).
+            var finding = Assert.Single(findings);
+            Assert.Equal("Foo.Bar", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // Finding 3: multi-dollar raw interpolated strings ($$"""...""", $$$"""...""") were not
+    // recognised by the top-level dispatch; the trailing single-$ branch mis-parsed their
+    // holes, stripping qualified names inside.  Fix: detect a $$+ run and emit the entire
+    // literal content as code (fail-safe: over-preserving is harmless, over-stripping is not).
+
+    [Fact]
+    public void Disk_multi_dollar_raw_interpolated_string_hole_usage_is_not_flagged()
+    {
+        // Before the fix: $$"""{ "n": "{{Foo.Bar.X.Run()}}" }""" — the leading $ was
+        // emitted as plain code; the remaining $"""...""" dispatched to SkipInterpolatedRawString
+        // which (before finding-2 fix) treated {{ as a literal-brace escape and discarded
+        // the hole, wrongly flagging Foo.Bar as unused.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.Bar" Version="1.0.0" />
+                    <PackageReference Include="Serilog" Version="3.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // Foo.Bar used ONLY inside the $$"""...""" hole; Serilog is genuinely unused.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                """"public class C { void M() { var j = $$"""{ "n": "{{Foo.Bar.X.Run()}}" }"""; } }"""");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            // Foo.Bar IS used (inside the multi-dollar raw string hole) — only Serilog flagged.
+            var finding = Assert.Single(findings);
+            Assert.Equal("Serilog", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }
