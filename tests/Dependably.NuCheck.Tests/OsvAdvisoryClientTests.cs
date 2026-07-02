@@ -287,6 +287,47 @@ public class OsvAdvisoryClientTests
         Assert.Equal(">= 2.0.0, < 2.5.0", advisories[1].VulnerableVersionRange);
     }
 
+    [Fact]
+    public void ParseOsv_reopens_interval_when_reintroduced_at_the_fixed_boundary()
+    {
+        // osv.dev serves reintroductions as introduced/fixed/introduced, already sorted.
+        // events:[introduced:0, fixed:1.0.0, introduced:1.0.0] means the fix at 1.0.0 was
+        // immediately reintroduced at 1.0.0, so EVERYTHING is vulnerable: < 1.0.0 from the
+        // first interval and >= 1.0.0 from the reopened one. The buggy code sorted the second
+        // introduced ahead of the fixed, treated it as a redundant open, and emitted only
+        // "< 1.0.0" — silently unflagging 1.0.0 and 2.0.0 (a fail-open under-report).
+        const string body = """
+{"vulns":[{"id":"X","affected":[{"package":{"ecosystem":"NuGet","name":"P"},
+  "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"0"},{"fixed":"1.0.0"},{"introduced":"1.0.0"}]}]}]}]}
+""";
+        var advisories = OsvAdvisoryClient.ParseOsv(body, "P");
+        Assert.Equal(2, advisories.Count);
+        Assert.Equal("< 1.0.0", advisories[0].VulnerableVersionRange);
+        Assert.Equal(">= 1.0.0", advisories[1].VulnerableVersionRange);
+
+        // The reintroduced version and everything above it must be flagged.
+        Assert.True(VulnerabilityMatcher.IsVulnerable(NuGetVersion.Parse("1.0.0"), advisories[1].VulnerableVersionRange));
+        Assert.True(VulnerabilityMatcher.IsVulnerable(NuGetVersion.Parse("2.0.0"), advisories[1].VulnerableVersionRange));
+    }
+
+    [Fact]
+    public void ParseOsv_introduced_and_fixed_at_same_version_alone_is_not_vulnerable()
+    {
+        // Guard for the reopen logic: {introduced:1.0.0},{fixed:1.0.0} with no prior interval
+        // is an empty range — the introduced opens the interval that the fixed immediately
+        // closes at the same version, so nothing is affected. This must NOT be misread as a
+        // reintroduction (there is no earlier interval closing at 1.0.0 to reopen).
+        const string body = """
+{"vulns":[{"id":"X","affected":[{"package":{"ecosystem":"NuGet","name":"P"},
+  "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"1.0.0"},{"fixed":"1.0.0"}]}]}]}]}
+""";
+        var advisory = Assert.Single(OsvAdvisoryClient.ParseOsv(body, "P"));
+
+        Assert.False(VulnerabilityMatcher.IsVulnerable(NuGetVersion.Parse("1.0.0"), advisory.VulnerableVersionRange));
+        Assert.False(VulnerabilityMatcher.IsVulnerable(NuGetVersion.Parse("0.9.0"), advisory.VulnerableVersionRange));
+        Assert.False(VulnerabilityMatcher.IsVulnerable(NuGetVersion.Parse("2.0.0"), advisory.VulnerableVersionRange));
+    }
+
     // --- Ticket 39: ValueKind guards in event parsing ------------------------------------
 
     [Fact]

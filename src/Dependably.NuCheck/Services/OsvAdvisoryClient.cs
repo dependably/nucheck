@@ -289,13 +289,18 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
     /// <summary>
     /// Walk the version-sorted events, pairing each <c>introduced</c> with the next
     /// <c>fixed</c>/<c>last_affected</c>. A redundant <c>introduced</c> that arrives while an
-    /// interval is already open is ignored: within one range the lowest introduced wins until
-    /// a fix closes it (per the OSV timeline), so keeping the earliest lower bound avoids both
-    /// dropping the interval and over-reporting versions past the eventual fix.
+    /// interval is already open is normally ignored: within one range the lowest introduced
+    /// wins until a fix closes it (per the OSV timeline), so keeping the earliest lower bound
+    /// avoids both dropping the interval and over-reporting versions past the eventual fix.
+    /// The one exception is a reintroduction whose version equals the <c>fixed</c>/
+    /// <c>last_affected</c> that closes the interval (osv.dev serves this as
+    /// introduced/fixed/introduced): treating it as a mere redundant open would silently unflag
+    /// that version and everything above it, so it REOPENS a fresh interval at the boundary.
     /// </summary>
     private static IEnumerable<(string Range, string? Fixed)> PairIntervals(List<RangeEvent> events)
     {
         string? lower = null;
+        string? reintroduced = null;
         var open = false;
         foreach (var ev in events)
         {
@@ -307,18 +312,24 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
                         lower = ev.Version;
                         open = true;
                     }
+                    else
+                    {
+                        // Remember the highest introduced seen while the interval is open. The
+                        // events are version-sorted, so the closing fixed/last_affected version
+                        // is >= every such introduced; only one that equals that boundary is a
+                        // genuine reintroduction (a lower one is already covered by the interval).
+                        reintroduced = MaxVersion(reintroduced, ev.Version);
+                    }
 
                     break;
                 case EventKind.Fixed:
                     yield return (Comparator(lower, ev.Version, upperInclusive: false), ev.Version);
-                    open = false;
-                    lower = null;
+                    (lower, open, reintroduced) = ReopenAtBoundary(reintroduced, ev.Version);
                     break;
                 case EventKind.LastAffected:
                     // last_affected gives an upper bound but is NOT the patched version.
                     yield return (Comparator(lower, ev.Version, upperInclusive: true), null);
-                    open = false;
-                    lower = null;
+                    (lower, open, reintroduced) = ReopenAtBoundary(reintroduced, ev.Version);
                     break;
             }
         }
@@ -328,6 +339,22 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
             yield return (Comparator(lower, upper: null, upperInclusive: false), null);
         }
     }
+
+    /// <summary>
+    /// After an interval closes at <paramref name="closeVersion"/>, decide whether a
+    /// reintroduction reopens a new interval. A reintroduction whose version equals the closing
+    /// boundary reopens (returns an open interval at that version); anything else leaves the
+    /// range closed. Under-reporting is the unacceptable direction for a scanner, so the tie is
+    /// broken toward reopening.
+    /// </summary>
+    private static (string? Lower, bool Open, string? Reintroduced) ReopenAtBoundary(
+        string? reintroduced, string? closeVersion)
+        => reintroduced is not null && CompareVersions(reintroduced, closeVersion) == 0
+            ? (reintroduced, true, null)
+            : (null, false, null);
+
+    private static string? MaxVersion(string? current, string? candidate)
+        => current is null || CompareVersions(candidate, current) > 0 ? candidate : current;
 
     private static string Comparator(string? lower, string? upper, bool upperInclusive)
     {
