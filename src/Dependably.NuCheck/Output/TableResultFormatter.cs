@@ -7,6 +7,7 @@ namespace Dependably.NuCheck.Output;
 public sealed class TableResultFormatter : IResultFormatter
 {
     private readonly string? _severityFilter;
+    private readonly int _exitCode;
 
     /// <param name="severityFilter">
     /// The active <c>--severity</c> display filter (a normalised ladder word such as
@@ -14,9 +15,16 @@ public sealed class TableResultFormatter : IResultFormatter
     /// "all secure" checkmark is replaced with a message explaining that other severities
     /// may still exist so the checkmark does not contradict a non-zero exit code.
     /// </param>
-    public TableResultFormatter(string? severityFilter = null)
+    /// <param name="exitCode">
+    /// The real process exit code the gate produced. The "all secure" checkmark is only
+    /// printed when this is <c>0</c>, so the table can never claim success beside a
+    /// non-zero exit (e.g. an <c>info</c>-severity policy finding gated by
+    /// <c>--fail-on severity=info</c>).
+    /// </param>
+    public TableResultFormatter(string? severityFilter = null, int exitCode = 0)
     {
         _severityFilter = severityFilter;
+        _exitCode = exitCode;
     }
 
     public string Format(AuditResult result)
@@ -81,9 +89,11 @@ public sealed class TableResultFormatter : IResultFormatter
             return;
         }
 
-        // No filter, but policy errors tripped the gate: suppress the checkmark — the
-        // POLICY FINDINGS block below already covers that failing state.
-        if (result.PolicyErrorCount > 0)
+        // The all-clear checkmark is only honest when the process is exiting 0 and there
+        // are no policy findings to show below. A non-zero exit (e.g. an info-severity
+        // parent-config notice gated by --fail-on severity=info) or any policy finding
+        // must suppress it so the table never contradicts the exit code.
+        if (_exitCode != 0 || result.PolicyFindings.Count > 0)
         {
             return;
         }

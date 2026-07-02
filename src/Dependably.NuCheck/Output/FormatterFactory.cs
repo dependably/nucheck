@@ -30,8 +30,8 @@ public static class FormatterFactory
         format?.Trim().ToLowerInvariant() switch
         {
             "json" => new JsonResultFormatter(toolVersion, target, exitCode),
-            "table" => new TableResultFormatter(severityFilter),
-            "human" or null => new SummaryResultFormatter(severityFilter),
+            "table" => new TableResultFormatter(severityFilter, exitCode ?? 0),
+            "human" or null => new SummaryResultFormatter(severityFilter, exitCode ?? 0),
             _ => throw new ArgumentException(
                 $"Unknown --format '{format}': use {string.Join(", ", ValidFormats)}."),
         };

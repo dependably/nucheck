@@ -402,6 +402,14 @@ public class FormatterTests
         [
             new UnusedPackageFinding("Pkg", "msg with\x0Dnewline"),
         ],
+        UnverifiableAdvisories =
+        [
+            new UnverifiableAdvisoryFinding(
+                "Pkg\x1B[1A",
+                "~>\x1B[2J 1.0.0",
+                "GHSA-\x0Ainjected",
+                "high"),
+        ],
     };
 
     [Fact]
@@ -440,6 +448,84 @@ public class FormatterTests
         Assert.DoesNotContain("", output, StringComparison.Ordinal);
         Assert.False(output.Contains('\r'), "CR must not appear in output");
         Assert.Contains("untrusted", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Table_formatter_strips_control_characters_from_unverifiable_fields()
+    {
+        // #27 × #34 seam: the unverifiable-advisory rendering embeds remote-sourced
+        // PackageId / VulnerableVersionRange / AdvisoryId, which must be sanitized so a
+        // malformed advisory range cannot inject ANSI escapes or a forged row.
+        var output = new TableResultFormatter().Format(InjectionResult());
+
+        Assert.DoesNotContain("\x1B", output, StringComparison.Ordinal);  // ESC stripped
+        Assert.False(output.Contains('\r'), "CR must not appear in output");
+        Assert.Contains("Pkg", output, StringComparison.Ordinal);         // content preserved
+        Assert.Contains("GHSA-", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Summary_formatter_strips_control_characters_from_unverifiable_fields()
+    {
+        var output = new SummaryResultFormatter().Format(InjectionResult());
+
+        Assert.DoesNotContain("\x1B", output, StringComparison.Ordinal);
+        Assert.False(output.Contains('\r'), "CR must not appear in output");
+        Assert.Contains("unverifiable", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Summary_filter_active_with_nothing_hidden_shows_no_match_message()
+    {
+        // Filter active, but the scan was genuinely clean (no advisories to hide): the
+        // qualified "no advisories matching" note is shown rather than the bare checkmark.
+        var output = new SummaryResultFormatter("high").Format(CleanResult());
+
+        Assert.DoesNotContain("All packages are secure", output, StringComparison.Ordinal);
+        Assert.Contains("No advisories matching severity 'high'", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Table_filter_active_with_nothing_hidden_shows_no_match_message()
+    {
+        var output = new TableResultFormatter("high").Format(CleanResult());
+
+        Assert.DoesNotContain("All packages are secure", output, StringComparison.Ordinal);
+        Assert.Contains("No advisories matching severity 'high'", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Summary_suppresses_all_secure_when_exit_code_is_nonzero()
+    {
+        // Cross-MR guard (#33/#47 × #21/#30 × #43): an info-severity parent-config notice
+        // gated by --fail-on severity=info trips the gate (exit 1) but is NOT an
+        // error-severity finding, so PolicyErrorCount is 0. The checkmark must still be
+        // suppressed — it keys on the real exit code, never claiming success beside exit 1.
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities = [],
+            PolicyFindings = [new SourceFinding("../parent/nuget.config", "notice", "unaudited parent config", "info")],
+        };
+
+        var output = new SummaryResultFormatter(severityFilter: null, exitCode: 1).Format(result);
+
+        Assert.DoesNotContain("All packages are secure", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Table_suppresses_all_secure_when_exit_code_is_nonzero()
+    {
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities = [],
+            PolicyFindings = [new SourceFinding("../parent/nuget.config", "notice", "unaudited parent config", "info")],
+        };
+
+        var output = new TableResultFormatter(severityFilter: null, exitCode: 1).Format(result);
+
+        Assert.DoesNotContain("All packages are secure", output, StringComparison.Ordinal);
     }
 
     [Fact]
