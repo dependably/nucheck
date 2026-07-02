@@ -69,12 +69,20 @@ public sealed class AuditResult
     /// policy error trips (<see cref="HasFailures"/>).
     /// </para>
     /// <para>
-    /// With one or more rules, the gate is exactly the union (OR) of the rules — it
-    /// REPLACES the default. <c>severity</c> trips when any finding (vulnerability advisory
-    /// or policy finding) is at-or-above the level on the suite ladder; <c>count</c> trips
-    /// when the vulnerability count exceeds N. This is what lets a user relax the gate
+    /// With one or more rules, the gate is the union (OR) of the rules — it REPLACES the
+    /// default. <c>severity</c> trips when any finding (vulnerability advisory OR policy
+    /// finding) is at-or-above the level on the suite ladder, so it governs policy findings
+    /// symmetrically (e.g. <c>severity=critical</c> can deliberately relax a policy error,
+    /// which maps to <c>high</c>). <c>count</c> trips when the vulnerability count exceeds N;
+    /// it governs vulnerabilities ONLY. This is what lets a user relax the gate
     /// (e.g. <c>severity=high</c> ignores moderate/low vulns for gating, though they still
     /// appear in output).
+    /// </para>
+    /// <para>
+    /// Untrusted-source policy errors are a supply-chain security check and are never
+    /// silently dropped: when NO <c>severity</c> rule is present to deliberately govern them
+    /// (e.g. a <c>count</c>-only gate such as <c>count=0</c>), any policy error still trips.
+    /// Only an explicit <c>severity</c> rule can relax policy-error gating.
     /// </para>
     /// </summary>
     public bool GateTrips(string? failOnSeverity, int? failOnCount)
@@ -89,6 +97,12 @@ public sealed class AuditResult
         if (failOnSeverity is not null)
         {
             trips |= MaxFindingRank() >= Severity.Rank(failOnSeverity);
+        }
+        else
+        {
+            // No severity rule governs policy findings, so a count-only gate would drop them.
+            // Keep untrusted-source policy errors gating — they must never be silently ungated.
+            trips |= PolicyErrorCount > 0;
         }
 
         if (failOnCount is not null)
