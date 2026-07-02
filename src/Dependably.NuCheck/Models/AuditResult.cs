@@ -126,8 +126,10 @@ public sealed class AuditResult
     }
 
     /// <summary>
-    /// Return a copy keeping only advisories of the given severity (case-insensitive).
-    /// A null/blank severity returns this result unchanged.
+    /// Return a copy keeping only advisories whose normalised severity matches the given
+    /// level. Accepts any alias accepted by <see cref="Severity.ParseLevel"/> (e.g.
+    /// "medium" as well as "moderate"). A null/blank or unrecognised severity returns
+    /// this result unchanged so an invalid caller value is always a no-op.
     /// </summary>
     public AuditResult FilterBySeverity(string? severity)
     {
@@ -136,11 +138,20 @@ public sealed class AuditResult
             return this;
         }
 
+        // Normalise the caller-supplied level so that aliases such as "medium" match the
+        // pre-normalised advisory severity ("moderate"). If ParseLevel returns null the
+        // value is unrecognised — return this unchanged rather than silently hiding all findings.
+        var canonical = Severity.ParseLevel(severity);
+        if (canonical is null)
+        {
+            return this;
+        }
+
         var filtered = Vulnerabilities
             .Select(v => v with
             {
                 Advisories = v.Advisories
-                    .Where(a => a.Severity.Equals(severity, StringComparison.OrdinalIgnoreCase))
+                    .Where(a => Severity.Normalize(a.Severity).Equals(canonical, StringComparison.Ordinal))
                     .ToList(),
             })
             .Where(v => v.Advisories.Count > 0)

@@ -172,6 +172,42 @@ public class AuditResultTests
         Assert.True(WithVuln("moderate").GateTrips("high", 0));
     }
 
+    // ---- issue #8: severity alias normalisation ----------------------------------------
+
+    [Fact]
+    public void FilterBySeverity_normalises_medium_alias_to_match_moderate_advisories()
+    {
+        // Advisory severity is pre-normalised to "moderate" by the advisory clients.
+        // Passing "medium" to FilterBySeverity should match those same advisories so that
+        // '--severity medium' does not silently suppress all moderate-severity output.
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities =
+            [
+                new PackageVulnerability("Pkg", "2.0.0",
+                [
+                    new Advisory("Moderate issue", "moderate", ">= 1.0", []),
+                    new Advisory("High issue", "high", ">= 1.0", []),
+                ]),
+            ],
+        };
+
+        var filtered = result.FilterBySeverity("medium");
+
+        var vulnerability = Assert.Single(filtered.Vulnerabilities);
+        var advisory = Assert.Single(vulnerability.Advisories);
+        Assert.Equal("moderate", advisory.Severity);
+    }
+
+    [Fact]
+    public void FilterBySeverity_returns_this_unchanged_for_unrecognised_level()
+    {
+        // An unrecognised level must never silently suppress all findings.
+        var result = Build();
+        Assert.Same(result, result.FilterBySeverity("bogus"));
+    }
+
     [Fact]
     public void FilterBySeverity_preserves_unused_packages()
     {

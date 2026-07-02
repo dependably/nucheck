@@ -9,7 +9,7 @@ public sealed class CliOptions
     private static readonly Dictionary<string, Action<CliOptions, string>> ValueFlags = new(StringComparer.Ordinal)
     {
         ["--format"] = (o, v) => o.Format = v,
-        ["--severity"] = (o, v) => o.Severity = v,
+        ["--severity"] = (o, v) => o.ApplySeverity(v),
         ["--source"] = (o, v) => o.Source = v,
         ["--config"] = (o, v) => o.ConfigPath = v,
         ["--fail-on"] = (o, v) => o.ApplyFailOn(v),
@@ -103,6 +103,24 @@ public sealed class CliOptions
         }
 
         return options;
+    }
+
+    /// <summary>
+    /// Validate and store the <c>--severity</c> display-filter value. Accepts the five
+    /// ladder words plus <c>medium</c> as an alias for <c>moderate</c>; rejects anything
+    /// else as a usage error so a typo like <c>--severity foo</c> does not silently
+    /// suppress all output.
+    /// </summary>
+    private void ApplySeverity(string value)
+    {
+        var level = Models.Severity.ParseLevel(value);
+        if (level is null)
+        {
+            Error ??= $"invalid --severity '{value}': use critical, high, moderate, low, or info";
+            return;
+        }
+
+        Severity = level;
     }
 
     /// <summary>

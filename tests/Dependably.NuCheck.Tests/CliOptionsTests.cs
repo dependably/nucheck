@@ -114,6 +114,39 @@ public class CliOptionsTests
         Assert.Contains("--first-bad", options.Error);
     }
 
+    // ---- issue #8: --severity validation and normalisation --------------------------
+
+    [Theory]
+    [InlineData("critical", "critical")]
+    [InlineData("high", "high")]
+    [InlineData("moderate", "moderate")]
+    [InlineData("medium", "moderate")]  // alias normalised onto the ladder
+    [InlineData("low", "low")]
+    [InlineData("info", "info")]
+    [InlineData("HIGH", "high")]        // case-insensitive
+    public void Parse_severity_normalises_to_ladder_word(string value, string expected)
+    {
+        var options = CliOptions.Parse(["./p.config", "--severity", value]);
+
+        Assert.Null(options.Error);
+        Assert.Equal(expected, options.Severity);
+    }
+
+    [Theory]
+    [InlineData("foo")]
+    [InlineData("bogus")]
+    [InlineData("SEVERE")]
+    public void Parse_severity_rejects_invalid_value(string value)
+    {
+        // A typo like '--severity foo' previously suppressed all output silently; it is
+        // now a usage error so the caller learns the value was not understood.
+        var options = CliOptions.Parse(["./p.config", "--severity", value]);
+
+        Assert.NotNull(options.Error);
+        Assert.Contains("--severity", options.Error);
+        Assert.Contains(value, options.Error);
+    }
+
     [Fact]
     public void Parse_fail_on_defaults_to_null()
     {
