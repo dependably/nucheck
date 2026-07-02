@@ -351,6 +351,26 @@ public class FormatterTests
         Assert.Contains("POLICY FINDINGS", output, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Summary_suppresses_all_secure_when_policy_errors_are_present()
+    {
+        // Mirror of the table-formatter test: when zero vulnerabilities but a policy
+        // error trips the gate (exit 1), the summary formatter must NOT emit the
+        // "All packages are secure" checkmark — the POLICY FINDINGS block below it
+        // already communicates the failure.
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities = [],
+            PolicyFindings = [new SourceFinding("nuget.evil.example", "s", "untrusted")],
+        };
+
+        var output = new SummaryResultFormatter().Format(result);
+
+        Assert.DoesNotContain("All packages are secure", output, StringComparison.Ordinal);
+        Assert.Contains("policy finding", output, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ---- issue #34: control-character / ANSI injection sanitization -----------------
 
     private static AuditResult InjectionResult() => new()

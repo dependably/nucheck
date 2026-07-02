@@ -26,7 +26,7 @@ public sealed class SummaryResultFormatter : IResultFormatter
 
         if (result.VulnerabilityCount == 0)
         {
-            AppendNoVulnerabilities(builder);
+            AppendNoVulnerabilities(builder, result);
         }
         else
         {
@@ -62,15 +62,21 @@ public sealed class SummaryResultFormatter : IResultFormatter
 
     /// <summary>
     /// Emit the appropriate "no advisory" line when the vulnerability count is zero.
-    /// When a severity filter is active, the all-secure message is replaced with a
+    /// When a severity filter is active the all-secure message is replaced with a
     /// qualified note so it cannot contradict a non-zero process exit code caused by
-    /// advisories at other severities.
+    /// advisories at other severities. When policy errors are present the checkmark is
+    /// suppressed entirely — the POLICY FINDINGS block below already covers that state.
     /// </summary>
-    private void AppendNoVulnerabilities(StringBuilder builder)
+    private void AppendNoVulnerabilities(StringBuilder builder, AuditResult result)
     {
         if (_severityFilter is not null)
         {
             builder.AppendLine($"No advisories matching severity '{_severityFilter}' (others may exist — see exit code)");
+            return;
+        }
+
+        if (result.PolicyErrorCount > 0)
+        {
             return;
         }
 
