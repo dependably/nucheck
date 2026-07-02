@@ -26,7 +26,6 @@ private-feed auth is needed to build.
 dotnet build Dependably.NuCheck.slnx -c Release
 dotnet test  Dependably.NuCheck.slnx -c Release
 dotnet format Dependably.NuCheck.slnx --verify-no-changes   # style gate (CI runs this)
-dotnet run --project src/Dependably.NuCheck -- ./examples/packages.config
 ```
 
 Coverage locally:
@@ -44,8 +43,8 @@ dotnet test Dependably.NuCheck.slnx -c Release \
   and the advisory source with `FakeAdvisorySource` — don't hit the network in tests.
 - **Keep functions small**: SonarQube gates cognitive complexity; the parser and
   matcher are deliberately table-/switch-driven to stay simple.
-- **Architecture**: see [docs/API.md](docs/API.md). New manifest formats go in
-  `PackageFileReader`; new advisory sources implement `IAdvisorySource`.
+- **Architecture**: new manifest formats go in `PackageFileReader`; new advisory
+  sources implement `IAdvisorySource`; output formats implement `IResultFormatter`.
 
 ## Pull requests
 

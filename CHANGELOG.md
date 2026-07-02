@@ -72,13 +72,13 @@ All notable changes to `nucheck` are documented here. The format is based on
   trip the exit-code gate), the "all packages are secure" message is replaced with
   "No advisories matching severity '&lt;level&gt;' (others may exist — see exit code)" in both
   the `human` and `table` formats so the display never contradicts a non-zero exit code.
-- **Advisory text is sanitized against control-character injection (#34).** ANSI escape
+- **Advisory text is sanitized against control-character injection.** ANSI escape
   sequences, carriage returns, and other C0/C1 control characters in advisory fields
   (summary, advisory id, CVE, fixed version, source-trust host/message) are replaced with
   spaces before they reach any output formatter, preventing terminal-escape injection from
   a malicious advisory payload.
 - **`human` format suppresses the "all packages are secure" checkmark when policy errors
-  are present (#43).** When vulnerabilities are zero but a source-trust policy error trips
+  are present.** When vulnerabilities are zero but a source-trust policy error trips
   the gate (exit 1), the human (summary) formatter now omits the misleading checkmark,
   matching the existing behaviour of the `table` formatter.
 
@@ -109,7 +109,7 @@ All notable changes to `nucheck` are documented here. The format is based on
   flagged unless an allowlist entry names its **exact** full path. This closes a path where a
   malicious `nuget.config` edit could redirect an "allowlisted local feed" to an
   attacker-controlled remote share.
-- **Non-git checkouts surface unaudited parent `nuget.config` (#47).** When no repository
+- **Non-git checkouts surface unaudited parent `nuget.config`.** When no repository
   boundary (`.git`) can be located, package sources declared in parent directories are out of
   audit scope even though a restore would still honour them; `nucheck` now emits a visible
   `info` finding naming those excluded config files instead of silently failing open.

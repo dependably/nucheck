@@ -13,7 +13,7 @@
 #                     (.github/workflows/ci.yml) then runs there
 #
 # Required CI/CD variables (Settings → CI/CD → Variables), "Protected" + "Masked":
-#   REGISTRY_URL          private NuGet feed BASE host, e.g. https://dependably.northwardlabs.ca
+#   REGISTRY_URL          private NuGet feed BASE host, e.g. https://nuget.example.com
 #                         (the publish job appends /nuget/v3/index.json itself)
 #   REGISTRY_KEY          API key for `dotnet nuget push`
 #   dependencyTrack_url   Dependency-Track base URL
@@ -237,14 +237,14 @@ sbom-publish:
         --form-string "projectVersion=$VERSION" \
         -F "bom=@sbom.json")
       case "$status" in
-        200) echo "✓ SBOM uploaded";;
+        200) echo "SBOM uploaded";;
         *) echo "SBOM upload failed (HTTP $status):" >&2; cat /tmp/bom.out >&2; exit 1;;
       esac
 
 # Push the .nupkg to the private NuGet feed. Manual approval, default branch only,
 # serialized. Bump <Version> in the csproj to release — pushing an existing version
 # fails unless the feed allows overwrite (--skip-duplicate tolerates re-runs).
-# REGISTRY_URL is the feed's BASE host (e.g. https://dependably.northwardlabs.ca);
+# REGISTRY_URL is the feed's BASE host (e.g. https://nuget.example.com);
 # this job appends the v3 service-index path. dotnet nuget push needs the index.json
 # (it reads the PackagePublish resource from it) — given a bare host it would guess the
 # legacy /api/v2/package path and 404 against a v3-only feed.
