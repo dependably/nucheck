@@ -721,4 +721,215 @@ public class UnusedPackageServiceTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    // --- Ticket #46: interpolated strings — code in {holes} must not be stripped ----------
+
+    [Fact]
+    public void Disk_package_used_only_in_interpolation_hole_is_not_flagged()
+    {
+        // Before the fix: $"...{Pkg.X()}..." was treated like a regular string and the
+        // entire content (including the hole) was stripped, so Pkg was wrongly flagged unused.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // The ONLY reference is inside an interpolation hole — must count as usage.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                "public class C { string s = $\"{Newtonsoft.Json.JsonConvert.SerializeObject(this)}\"; }");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            // The package IS used (qualified reference in hole) — must not be flagged.
+            Assert.Empty(findings);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_interpolation_hole_partial_failure_used_vs_unused()
+    {
+        // Mixed: one package used inside an interpolation hole, one genuinely unused.
+        // Only the genuinely unused package should fire.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+                    <PackageReference Include="Serilog" Version="3.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // Newtonsoft.Json referenced in hole; Serilog not referenced at all.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                "public class C { string s = $\"{Newtonsoft.Json.JsonConvert.SerializeObject(this)}\"; }");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            var finding = Assert.Single(findings);
+            Assert.Equal("Serilog", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_raw_string_literal_trailing_code_is_not_stripped()
+    {
+        // Before the fix: the old SkipRegularString called on each individual '"' of the
+        // """...""" delimiter misidentified the raw-string boundary when the content
+        // contained a bare '"'. The extra SkipRegularString call then consumed the trailing
+        // code on the same line, making Foo.Bar invisible and wrongly flagging it as unused.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.Bar" Version="1.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // Raw string literal with a bare " in the content, followed immediately by
+            // code on the same line. The bare " caused the old code to consume the trailing
+            // Foo.Bar.Helper.Run() call as part of the (phantom) string literal.
+            // Outer delimiter is """" (4 quotes) so the inner """ is unambiguous.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                """"public class C { void M() { var r = """a " b"""; Foo.Bar.Helper.Run(r); } }"""");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            // Foo.Bar IS used (qualified reference after the raw string) — must not be flagged.
+            Assert.Empty(findings);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_verbatim_interpolated_string_hole_usage_is_not_flagged()
+    {
+        // @$"..." / $@"..." verbatim interpolated strings must also preserve hole content.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // Package referenced ONLY inside a verbatim-interpolated string hole.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                @"public class C { string s = @$""{Newtonsoft.Json.JsonConvert.SerializeObject(this)}""; }");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            Assert.Empty(findings);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // --- Ticket #24: CPM dev-only packages (PackageVersion) must not be reported ----------
+
+    [Fact]
+    public void Disk_CPM_PackageVersion_with_devonly_PackageReference_is_not_flagged()
+    {
+        // Probe from finding #24: a <PackageVersion> in Directory.Packages.props + a
+        // <PackageReference PrivateAssets="all" ExcludeAssets="compile"> in the .csproj
+        // must NOT be reported as unused — the dev-only csproj entry suppresses the CPM entry.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "Directory.Packages.props"), """
+                <Project>
+                  <ItemGroup>
+                    <PackageVersion Include="Some.BuildTool" Version="2.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Some.BuildTool"
+                      PrivateAssets="all" ExcludeAssets="compile" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            File.WriteAllText(Path.Combine(dir, "Class.cs"), "public class C { }");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            // Some.BuildTool is dev-only — must not be flagged as unused.
+            Assert.Empty(findings);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_CPM_devonly_partial_failure_suppressed_vs_genuinely_unused()
+    {
+        // Mixed CPM batch: one PackageVersion whose csproj PackageReference is dev-only
+        // (suppressed), one PackageVersion with no csproj entry at all (genuinely unused).
+        // Only the genuinely unused one should fire.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "Directory.Packages.props"), """
+                <Project>
+                  <ItemGroup>
+                    <PackageVersion Include="Some.BuildTool" Version="2.0.0" />
+                    <PackageVersion Include="Orphaned.Pkg" Version="1.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Some.BuildTool" PrivateAssets="all" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            File.WriteAllText(Path.Combine(dir, "Class.cs"), "public class C { }");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            // Some.BuildTool is dev-only → suppressed. Orphaned.Pkg is genuinely unused → flagged.
+            var finding = Assert.Single(findings);
+            Assert.Equal("Orphaned.Pkg", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }

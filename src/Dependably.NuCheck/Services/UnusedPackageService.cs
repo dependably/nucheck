@@ -18,7 +18,7 @@ namespace Dependably.NuCheck.Services;
 ///   <item>references marked as not flowing to consumers via MSBuild asset metadata —
 ///     <c>PrivateAssets="all"</c> (attribute or child element), or
 ///     <c>IncludeAssets</c>/<c>ExcludeAssets</c> indicating analyzers/build-only assets
-///     with the runtime/compile assets excluded; and</item>
+///     with the compile assets excluded; and</item>
 ///   <item>a small built-in allowlist of common build/analyzer/source-generator package
 ///     ids (see <see cref="IsKnownBuildOrAnalyzerId"/>).</item>
 /// </list>
@@ -157,18 +157,22 @@ public static partial class UnusedPackageService
 
     private static IReadOnlyList<string> ReadDirectPackageIds(string scanDirectory)
     {
-        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
         var files = Directory
             .EnumerateFiles(scanDirectory, "*.csproj", SearchOption.AllDirectories)
             .Concat(Directory.EnumerateFiles(
-                scanDirectory, "Directory.Packages.props", SearchOption.AllDirectories));
+                scanDirectory, "Directory.Packages.props", SearchOption.AllDirectories))
+            .ToList();
 
+        // Pre-collect IDs that carry dev-only markers on any <PackageReference> so that
+        // a central <PackageVersion> entry for the same id can be suppressed (#24).
+        var devOnlyIds = CollectDevOnlyPackageReferenceIds(files);
+
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files)
         {
             try
             {
-                foreach (var id in ParsePackageReferences(file))
+                foreach (var id in ParsePackageReferences(file, devOnlyIds))
                 {
                     ids.Add(id);
                 }
@@ -182,7 +186,56 @@ public static partial class UnusedPackageService
         return [.. ids];
     }
 
-    private static IEnumerable<string> ParsePackageReferences(string filePath)
+    /// <summary>
+    /// Returns the set of package ids for which at least one <c>&lt;PackageReference&gt;</c>
+    /// element anywhere in <paramref name="files"/> carries dev-only asset metadata
+    /// (see <see cref="IsDevBuildOnlyReference"/>). Used to propagate suppression from a
+    /// <c>&lt;PackageReference&gt;</c> in a <c>.csproj</c> to the matching
+    /// <c>&lt;PackageVersion&gt;</c> entry in <c>Directory.Packages.props</c>.
+    /// </summary>
+    private static HashSet<string> CollectDevOnlyPackageReferenceIds(IReadOnlyList<string> files)
+    {
+        var devOnly = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in files)
+        {
+            try
+            {
+                AddDevOnlyIdsFromDoc(XDocument.Load(file), devOnly);
+            }
+            catch
+            {
+                // Malformed file — skip silently.
+            }
+        }
+
+        return devOnly;
+    }
+
+    private static void AddDevOnlyIdsFromDoc(XDocument doc, HashSet<string> devOnly)
+    {
+        foreach (var element in doc.Descendants())
+        {
+            if (!element.Name.LocalName.Equals("PackageReference", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!IsDevBuildOnlyReference(element))
+            {
+                continue;
+            }
+
+            var include = element.Attribute("Include")?.Value
+                ?? element.Attribute("Update")?.Value;
+            if (!string.IsNullOrWhiteSpace(include))
+            {
+                devOnly.Add(include);
+            }
+        }
+    }
+
+    private static IEnumerable<string> ParsePackageReferences(
+        string filePath, HashSet<string>? devOnlyIds = null)
     {
         XDocument doc;
         try
@@ -218,6 +271,15 @@ public static partial class UnusedPackageService
                 continue;
             }
 
+            // CPM: if any <PackageReference> in the project tree carries dev-only metadata
+            // for this id, the central <PackageVersion> entry must also be suppressed (#24).
+            if (isCpmProps
+                && element.Name.LocalName.Equals("PackageVersion", StringComparison.OrdinalIgnoreCase)
+                && devOnlyIds?.Contains(include) == true)
+            {
+                continue;
+            }
+
             yield return include;
         }
     }
@@ -247,7 +309,7 @@ public static partial class UnusedPackageService
     /// Recognised markers (attribute or child element form):
     /// <list type="bullet">
     ///   <item><c>PrivateAssets="all"</c> — the explicit "does not flow to consumers" flag;</item>
-    ///   <item><c>ExcludeAssets</c> excluding <c>runtime</c> (and/or <c>compile</c>); and</item>
+    ///   <item><c>ExcludeAssets</c> excluding <c>compile</c> (or <c>all</c>); and</item>
     ///   <item><c>IncludeAssets</c> limited to build/analyzer assets (<c>analyzers</c>/<c>build</c>/…)
     ///     with neither <c>runtime</c> nor <c>compile</c> (the namespace-bearing assets) included.</item>
     /// </list>
@@ -420,9 +482,12 @@ public static partial class UnusedPackageService
     /// <summary>
     /// Returns a copy of <paramref name="content"/> with <c>//</c> line comments,
     /// <c>/* */</c> block comments, double-quoted string literals, verbatim (<c>@"</c>)
-    /// string literals, and single-quoted character literals replaced by empty space, so
-    /// dotted identifiers that appear only in those contexts are invisible to
-    /// <see cref="QualifiedNamePattern"/>.
+    /// string literals, raw string literals (<c>"""..."""</c>), and single-quoted character
+    /// literals replaced by empty space, so that dotted identifiers that appear only in those
+    /// contexts are invisible to <see cref="QualifiedNamePattern"/>.
+    /// Interpolated strings (<c>$"..."</c>, <c>$@"..."</c>, <c>@$"..."</c>) are handled
+    /// specially: the literal text portions are stripped but code inside interpolation holes
+    /// <c>{...}</c> is preserved so that qualified type references there count as usage.
     /// </summary>
     private static string StripCommentsAndLiterals(string content)
     {
@@ -439,9 +504,34 @@ public static partial class UnusedPackageService
             {
                 i = SkipBlockComment(content, i);
             }
+            else if (content[i] == '$' && next == '"' && i + 2 < content.Length && content[i + 2] == '"')
+            {
+                // $"""...""" — interpolated raw string; skip whole literal conservatively.
+                i = SkipRawStringLiteral(content, i + 1);
+            }
+            else if (content[i] == '$' && next == '@' && i + 2 < content.Length && content[i + 2] == '"')
+            {
+                // $@"..." — verbatim interpolated string; preserve code in {holes}.
+                i = SkipInterpolatedString(content, i + 3, sb, verbatim: true);
+            }
+            else if (content[i] == '$' && next == '"')
+            {
+                // $"..." — regular interpolated string; preserve code in {holes}.
+                i = SkipInterpolatedString(content, i + 2, sb, verbatim: false);
+            }
+            else if (content[i] == '@' && next == '$' && i + 2 < content.Length && content[i + 2] == '"')
+            {
+                // @$"..." — verbatim interpolated string (@ first); preserve code in {holes}.
+                i = SkipInterpolatedString(content, i + 3, sb, verbatim: true);
+            }
             else if (content[i] == '@' && next == '"')
             {
                 i = SkipVerbatimString(content, i);
+            }
+            else if (content[i] == '"' && next == '"' && i + 2 < content.Length && content[i + 2] == '"')
+            {
+                // """...""" — raw string literal (C# 11).
+                i = SkipRawStringLiteral(content, i);
             }
             else if (content[i] == '"')
             {
@@ -459,6 +549,164 @@ public static partial class UnusedPackageService
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Skips an interpolated string literal, emitting the content of each interpolation
+    /// hole <c>{...}</c> into <paramref name="sb"/> so that qualified type references
+    /// inside holes remain visible to <see cref="QualifiedNamePattern"/>.
+    /// The literal (non-hole) text portions are not emitted.
+    /// </summary>
+    /// <param name="content">Full file content.</param>
+    /// <param name="afterOpenQuote">Position immediately after the opening <c>"</c>.</param>
+    /// <param name="sb">Builder receiving processed output.</param>
+    /// <param name="verbatim">
+    /// <see langword="true"/> for <c>$@"..."</c>/<c>@$"..."</c> (no backslash escapes;
+    /// <c>""</c> is the quote escape); <see langword="false"/> for <c>$"..."</c>.
+    /// </param>
+    private static int SkipInterpolatedString(
+        string content, int afterOpenQuote, System.Text.StringBuilder sb, bool verbatim)
+    {
+        var i = afterOpenQuote;
+        var holeDepth = 0;
+        while (i < content.Length)
+        {
+            var c = content[i];
+            if (c == '"' && holeDepth == 0)
+            {
+                if (verbatim && i + 1 < content.Length && content[i + 1] == '"')
+                {
+                    i += 2; // "" is an escaped quote in verbatim — skip, keep scanning
+                    continue;
+                }
+
+                return i + 1; // closing quote
+            }
+
+            i = AdvanceInterpolated(content, i, c, sb, verbatim, ref holeDepth);
+        }
+
+        return i;
+    }
+
+    /// <summary>
+    /// Advances one character inside an interpolated string, handling brace-depth tracking
+    /// and emitting hole content. Extracted from <see cref="SkipInterpolatedString"/> to
+    /// keep the containing method's cognitive complexity below the gate threshold.
+    /// </summary>
+    private static int AdvanceInterpolated(
+        string content, int i, char c,
+        System.Text.StringBuilder sb, bool verbatim, ref int holeDepth)
+    {
+        if (c == '{')
+        {
+            return AdvanceInterpolatedOpenBrace(content, i, ref holeDepth);
+        }
+
+        if (c == '}')
+        {
+            return AdvanceInterpolatedCloseBrace(content, i, ref holeDepth);
+        }
+
+        if (holeDepth > 0)
+        {
+            return EmitInterpolatedHoleChar(content, i, c, sb);
+        }
+
+        // Literal text portion — skip. For non-verbatim strings handle backslash escapes.
+        if (!verbatim && c == '\\' && i + 1 < content.Length)
+        {
+            return i + 2;
+        }
+
+        return i + 1;
+    }
+
+    private static int AdvanceInterpolatedOpenBrace(string content, int i, ref int holeDepth)
+    {
+        if (i + 1 < content.Length && content[i + 1] == '{')
+        {
+            return i + 2; // {{ is a literal brace in the string — skip
+        }
+
+        holeDepth++;
+        return i + 1;
+    }
+
+    private static int AdvanceInterpolatedCloseBrace(string content, int i, ref int holeDepth)
+    {
+        if (holeDepth > 0)
+        {
+            holeDepth--;
+            return i + 1;
+        }
+
+        // }} is a literal brace in the string literal portion — skip.
+        return i + (i + 1 < content.Length && content[i + 1] == '}' ? 2 : 1);
+    }
+
+    /// <summary>
+    /// Emits a character while inside an interpolation hole, or skips a nested string
+    /// literal to maintain correct brace-depth accounting.
+    /// </summary>
+    private static int EmitInterpolatedHoleChar(string content, int i, char c, System.Text.StringBuilder sb)
+    {
+        if (c == '"')
+        {
+            // Nested regular string — skip so its content does not affect brace accounting.
+            return SkipRegularString(content, i);
+        }
+
+        if (c == '@' && i + 1 < content.Length && content[i + 1] == '"')
+        {
+            // Nested verbatim string — skip.
+            return SkipVerbatimString(content, i);
+        }
+
+        sb.Append(c);
+        return i + 1;
+    }
+
+    /// <summary>
+    /// Skips a raw string literal (<c>"""..."""</c>, <c>""""...""""</c>, etc.) introduced
+    /// in C# 11. The opening delimiter is 3 or more consecutive <c>"</c> characters; the
+    /// closing delimiter must have at least as many. Returns the position immediately after
+    /// the closing delimiter so that code on the same line is not consumed.
+    /// </summary>
+    private static int SkipRawStringLiteral(string content, int start)
+    {
+        // Count the opening delimiter length (≥ 3 quotes).
+        var i = start;
+        var quoteCount = 0;
+        while (i < content.Length && content[i] == '"')
+        {
+            quoteCount++;
+            i++;
+        }
+
+        // Scan for a run of closing quotes that is at least as long as the opening run.
+        while (i < content.Length)
+        {
+            if (content[i] != '"')
+            {
+                i++;
+                continue;
+            }
+
+            var closing = 0;
+            while (i < content.Length && content[i] == '"')
+            {
+                closing++;
+                i++;
+            }
+
+            if (closing >= quoteCount)
+            {
+                return i;
+            }
+        }
+
+        return i;
     }
 
     private static int SkipLineComment(string content, int i)
