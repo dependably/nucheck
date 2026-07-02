@@ -36,7 +36,7 @@ public sealed class CliOptions
 
     /// <summary>
     /// Explicit path to a <c>.dependably-check</c> config file. When null, the file is
-    /// discovered by walking up from the current directory.
+    /// discovered by walking up from the audited file's directory.
     /// </summary>
     public string? ConfigPath { get; private set; }
 
