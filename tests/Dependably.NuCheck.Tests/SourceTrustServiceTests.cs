@@ -305,6 +305,52 @@ public class SourceTrustServiceTests : IDisposable
         Assert.Empty(SourceTrustService.Check(dir, []));
     }
 
+    // --- Ticket #25: allowedHosts entries must be trimmed before trust-set insertion ------
+
+    [Fact]
+    public void Allowlisted_host_with_leading_whitespace_produces_no_finding()
+    {
+        // A config value " company.nuget.example" (leading space from a YAML parser) must
+        // be treated the same as "company.nuget.example". Before the fix it was added as-is,
+        // never matching uri.Host, causing a false-positive finding.
+        var sources = new[]
+        {
+            new PackageSource("https://company.nuget.example/v3/index.json", "corp"),
+        };
+
+        Assert.Empty(SourceTrustService.Check(sources, [" company.nuget.example"]));
+    }
+
+    [Fact]
+    public void Allowlisted_host_with_trailing_whitespace_produces_no_finding()
+    {
+        var sources = new[]
+        {
+            new PackageSource("https://company.nuget.example/v3/index.json", "corp"),
+        };
+
+        Assert.Empty(SourceTrustService.Check(sources, ["company.nuget.example "]));
+    }
+
+    [Fact]
+    public void Allowlisted_hosts_mixed_padded_match_and_genuinely_untrusted_partial_failure()
+    {
+        // Batch: the padded allowlisted host must match (no false positive); the genuinely
+        // untrusted host must still fire. Only the untrusted source should produce a finding.
+        var sources = new[]
+        {
+            new PackageSource("https://corp.nuget.example/v3/index.json", "corp"),
+            new PackageSource("https://evil.nuget.example/v3/index.json", "evil"),
+        };
+
+        // "corp" is allowlisted with surrounding whitespace; "evil" is not allowlisted.
+        var findings = SourceTrustService.Check(sources, ["  corp.nuget.example  "]);
+
+        var finding = Assert.Single(findings);
+        Assert.Equal("evil.nuget.example", finding.Host);
+        Assert.Equal("evil", finding.Source);
+    }
+
     public void Dispose()
     {
         GC.SuppressFinalize(this);

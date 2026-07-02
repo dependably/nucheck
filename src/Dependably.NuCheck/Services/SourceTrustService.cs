@@ -174,9 +174,10 @@ public static class SourceTrustService
         var trusted = new HashSet<string>(PublicHosts, StringComparer.OrdinalIgnoreCase);
         foreach (var host in allowedHosts)
         {
-            if (!string.IsNullOrWhiteSpace(host))
+            var trimmed = host.Trim();
+            if (!string.IsNullOrEmpty(trimmed))
             {
-                trusted.Add(host);
+                trusted.Add(trimmed);
             }
         }
 
