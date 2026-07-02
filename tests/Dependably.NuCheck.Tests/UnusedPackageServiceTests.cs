@@ -1285,4 +1285,87 @@ public class UnusedPackageServiceTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    // --- Remaining over-strip: EmitRawMultiDollarContent lacked hole tracking (#46) ------------
+
+    // The scanner terminated $$"""...""" at the FIRST quote run of length >= quoteCount regardless
+    // of whether that run was inside an interpolation hole.  A nested raw string literal
+    // ("""q""") inside the hole looks like the closing delimiter and caused the scanner to exit
+    // early, treating the real usage (Foo.Bar.X.Run()) as post-literal code-then-string and
+    // over-stripping it.  Fix: EmitRawMultiDollarContent now tracks brace-run hole depth (a run
+    // of dollarCount '{' enters a hole; a run of dollarCount '}' exits) and only matches the
+    // closing delimiter at hole depth 0.
+
+    [Fact]
+    public void Disk_raw_multi_dollar_nested_raw_string_in_hole_usage_is_not_flagged()
+    {
+        // Before the fix: $$"""{{ """q""" + Foo.Bar.X.Run() }}""" — the nested """q"""
+        // inside the {{ }} hole looked like the closing delimiter, so EmitRawMultiDollarContent
+        // exited there and Foo.Bar.X.Run() was never scanned as code. Foo.Bar was wrongly
+        // flagged unused.  Serilog is genuinely unused and must still be flagged (partial-failure
+        // scenario: one used, one unused — only the unused one must appear in findings).
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.Bar" Version="1.0.0" />
+                    <PackageReference Include="Serilog" Version="3.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // Foo.Bar used ONLY inside the $$"""...""" hole that also contains a nested raw
+            // string literal """q"""; Serilog is genuinely unused.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                """""public class C { static void M() { var s = $$"""{{ """q""" + Foo.Bar.X.Run() }}"""; } }""""");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            // Foo.Bar IS used (in the hole) — only Serilog should be flagged.
+            var finding = Assert.Single(findings);
+            Assert.Equal("Serilog", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_raw_multi_dollar_nested_raw_string_in_outer_hole_usage_is_not_flagged()
+    {
+        // Variant: the $$"""...""" literal is itself nested inside an outer $"{ ... }" hole.
+        // Before the fix: the nested """q""" inside the inner $$"""...""" hole closed the
+        // inner literal early, stripping Foo.Bar.X.Run() from the inner hole, so Foo.Bar was
+        // wrongly flagged unused.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Foo.Bar" Version="1.0.0" />
+                    <PackageReference Include="Serilog" Version="3.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // Foo.Bar used ONLY inside $$"""{{ """q""" + Foo.Bar.X.Run() }}""" which is
+            // itself inside a $"{ ... }" hole; Serilog is genuinely unused.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                """""public class C { static void M() { var s = $"{ $$"""{{ """q""" + Foo.Bar.X.Run() }}""" }"; } }""""");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            // Foo.Bar IS used (in the nested hole) — only Serilog should be flagged.
+            var finding = Assert.Single(findings);
+            Assert.Equal("Serilog", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }

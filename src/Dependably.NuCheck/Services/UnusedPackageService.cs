@@ -817,6 +817,21 @@ public static partial class UnusedPackageService
     }
 
     /// <summary>
+    /// Returns the number of consecutive <paramref name="ch"/> characters starting at
+    /// <paramref name="start"/>.
+    /// </summary>
+    private static int CountCharRun(string content, int start, char ch)
+    {
+        var count = 0;
+        while (start + count < content.Length && content[start + count] == ch)
+        {
+            count++;
+        }
+
+        return count;
+    }
+
+    /// <summary>
     /// Skips a raw string literal (<c>"""..."""</c>, <c>""""...""""</c>, etc.) introduced
     /// in C# 11. The opening delimiter is 3 or more consecutive <c>"</c> characters; the
     /// closing delimiter must have at least as many. Returns the position immediately after
@@ -951,9 +966,10 @@ public static partial class UnusedPackageService
     /// <summary>
     /// Handles a multi-dollar interpolated string (<c>$$"..."</c>, <c>$$"""..."""</c>,
     /// <c>$$$"""..."""</c>, etc.) starting at <paramref name="start"/> (the first <c>$</c>).
-    /// Full n-dollar/n-brace hole parsing is complex; this method emits the entire literal
-    /// content as code — the fail-safe direction — so any qualified type reference inside a
-    /// hole is still visible to <see cref="QualifiedNamePattern"/>.
+    /// For raw (triple-quoted) forms, hole tracking is delegated to
+    /// <see cref="EmitRawMultiDollarContent"/> which is hole-aware and only closes the literal
+    /// at brace depth 0. For single-quoted forms the entire content is emitted as code
+    /// (fail-safe: over-preserving is harmless, over-stripping is the bug).
     /// </summary>
     private static int EmitMultiDollarInterpolatedLiteral(
         string content, int start, System.Text.StringBuilder sb)
@@ -964,6 +980,7 @@ public static partial class UnusedPackageService
             i++;
         }
 
+        var dollarCount = i - start;
         var verbatim = i < content.Length && content[i] == '@';
         if (verbatim)
         {
@@ -986,7 +1003,7 @@ public static partial class UnusedPackageService
 
         if (quoteCount >= 3)
         {
-            return EmitRawMultiDollarContent(content, i, quoteCount, sb);
+            return EmitRawMultiDollarContent(content, i, quoteCount, dollarCount, sb);
         }
 
         if (quoteCount == 1)
@@ -1000,40 +1017,89 @@ public static partial class UnusedPackageService
 
     /// <summary>
     /// Emits the body of a multi-dollar raw string literal (<c>$$"""..."""</c> etc.)
-    /// into <paramref name="sb"/> until the closing <paramref name="quoteCount"/>-wide
-    /// quote run is reached. Called with <paramref name="i"/> pointing past the opening
-    /// delimiter.
+    /// into <paramref name="sb"/>, tracking interpolation hole depth so that a quote run
+    /// inside a hole does not prematurely close the literal. Only a quote run of length
+    /// &gt;= <paramref name="quoteCount"/> at hole depth 0 closes the literal.
+    /// Called with <paramref name="i"/> pointing past the opening delimiter.
     /// </summary>
     private static int EmitRawMultiDollarContent(
-        string content, int i, int quoteCount, System.Text.StringBuilder sb)
+        string content, int i, int quoteCount, int dollarCount, System.Text.StringBuilder sb)
     {
+        var holeDepth = 0;
         while (i < content.Length)
         {
-            if (content[i] != '"')
+            var c = content[i];
+            if (c == '"')
             {
-                sb.Append(content[i]);
+                i = EmitRawMultiDollarQuoteRun(content, i, quoteCount, holeDepth, sb, out var closed);
+                if (closed) return i;
+            }
+            else if (c == '{')
+            {
+                i = AdvanceRawMultiDollarBraceRun(content, i, '{', dollarCount, sb, ref holeDepth, +1);
+            }
+            else if (c == '}' && holeDepth > 0)
+            {
+                i = AdvanceRawMultiDollarBraceRun(content, i, '}', dollarCount, sb, ref holeDepth, -1);
+            }
+            else
+            {
+                sb.Append(c);
                 i++;
-                continue;
             }
+        }
 
-            var runStart = i;
-            var runLen = 0;
-            while (i < content.Length && content[i] == '"')
-            {
-                runLen++;
-                i++;
-            }
+        return i;
+    }
 
-            if (runLen >= quoteCount)
-            {
-                return i; // reached the closing delimiter
-            }
+    /// <summary>
+    /// Processes a run of <c>"</c> characters inside a multi-dollar raw string body.
+    /// At hole depth 0, a run of length &gt;= <paramref name="quoteCount"/> closes the
+    /// literal (<paramref name="closed"/> is set to <see langword="true"/>).
+    /// At hole depth &gt; 0 the run is emitted as code — never terminates the outer literal.
+    /// </summary>
+    private static int EmitRawMultiDollarQuoteRun(
+        string content, int i, int quoteCount, int holeDepth,
+        System.Text.StringBuilder sb, out bool closed)
+    {
+        var runLen = CountQuoteRun(content, i);
+        i += runLen;
+        if (holeDepth == 0 && runLen >= quoteCount)
+        {
+            closed = true;
+            return i;
+        }
 
-            // Short quote run in the body — emit the quotes as code.
-            for (var j = runStart; j < runStart + runLen; j++)
-            {
-                sb.Append('"');
-            }
+        // Inside a hole or short run — emit the quotes as code.
+        closed = false;
+        for (var j = 0; j < runLen; j++)
+        {
+            sb.Append('"');
+        }
+
+        return i;
+    }
+
+    /// <summary>
+    /// Advances past a run of <paramref name="brace"/> characters in the body of a
+    /// multi-dollar raw string, emitting all of them as code and adjusting
+    /// <paramref name="holeDepth"/> by <paramref name="depthDelta"/> when the run meets or
+    /// exceeds <paramref name="dollarCount"/>.
+    /// </summary>
+    private static int AdvanceRawMultiDollarBraceRun(
+        string content, int i, char brace, int dollarCount,
+        System.Text.StringBuilder sb, ref int holeDepth, int depthDelta)
+    {
+        var runLen = CountCharRun(content, i, brace);
+        for (var j = 0; j < runLen; j++)
+        {
+            sb.Append(brace);
+        }
+
+        i += runLen;
+        if (runLen >= dollarCount)
+        {
+            holeDepth += depthDelta;
         }
 
         return i;
