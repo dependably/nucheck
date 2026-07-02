@@ -252,6 +252,57 @@ public class SourceTrustServiceTests : IDisposable
     }
 
     [Fact]
+    public void Non_git_tree_with_parent_config_emits_visible_info_notice()
+    {
+        // Regression for #47: no .git boundary means parent-directory nuget.config is not
+        // audited (the source-trust check would otherwise fail open silently). We must at
+        // least surface a visible info finding naming the excluded config.
+        var outer = Path.Combine(Path.GetTempPath(), $"srctrust-nogit-{Guid.NewGuid():N}");
+        var inner = Path.Combine(outer, "src", "App");
+        Directory.CreateDirectory(inner);
+        _tempDirs.Add(outer);
+        File.WriteAllText(Path.Combine(outer, "nuget.config"), """
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources>
+            <clear />
+            <add key="evil" value="https://nuget.evil.example/v3/index.json" />
+          </packageSources>
+        </configuration>
+        """);
+
+        var findings = SourceTrustService.Check(inner, []);
+
+        var notice = Assert.Single(findings);
+        Assert.Equal("info", notice.Severity);
+        Assert.Equal("parent-config", notice.Source);
+        Assert.Contains("No repository boundary", notice.Message);
+    }
+
+    [Fact]
+    public void Git_tree_with_parent_config_does_not_emit_parent_notice()
+    {
+        // The notice is only for the non-git fail-open case: with a .git boundary, a parent
+        // config above the boundary is intentionally out of scope and produces no notice.
+        var repo = NewRepo(nugetConfigXml: null);
+        var inner = Path.Combine(repo, "src", "App");
+        Directory.CreateDirectory(inner);
+        File.WriteAllText(Path.Combine(repo, "nuget.config"), """
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources>
+            <clear />
+            <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+          </packageSources>
+        </configuration>
+        """);
+
+        // The repo-root config IS under the boundary, so it is audited normally (public host,
+        // no finding) and there is no parent-config notice.
+        Assert.Empty(SourceTrustService.Check(inner, []));
+    }
+
+    [Fact]
     public void Local_folder_source_is_ignored()
     {
         // Backward-compat: with the feed allowlisted, the historical "ignored" behavior holds.

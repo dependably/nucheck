@@ -32,6 +32,12 @@ public static class SourceTrustService
     /// feed whose path is not in <paramref name="allowedLocalFeeds"/>. Sources contributed
     /// solely by the host machine's user/global NuGet config are not audited, so a repo that
     /// declares no <c>nuget.config</c> produces no findings (its implicit default is nuget.org).
+    /// <para>
+    /// When no repository boundary (<c>.git</c>) can be located, the manifest directory is
+    /// treated as the boundary and configs in parent directories are excluded; an <c>info</c>
+    /// finding is emitted in that case if any such parent config exists, because a restore
+    /// from a non-git checkout would still honour those unaudited sources.
+    /// </para>
     /// </summary>
     public static IReadOnlyList<SourceFinding> Check(
         string directory,
@@ -39,14 +45,14 @@ public static class SourceTrustService
         IReadOnlyList<string>? allowedLocalFeeds = null)
     {
         var settings = Settings.LoadDefaultSettings(directory);
-        var repoRoot = FindRepoRoot(directory);
+        var boundaryFound = TryFindRepoRoot(directory, out var repoRoot);
 
         // Origin config paths of the package sources actually declared inside the repo
         // tree. LoadDefaultSettings honours NuGet's <clear/> / enabled / disabled merge
         // semantics; we then keep only the items whose declaring file lives under the
         // repo root, discarding anything inherited from the user/global machine config.
-        var repoSourceNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var packageSources = settings.GetSection("packageSources");
+        var repoSourceNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (packageSources is not null)
         {
             repoSourceNames.UnionWith(packageSources.Items.OfType<SourceItem>()
@@ -58,7 +64,18 @@ public static class SourceTrustService
             .LoadPackageSources()
             .Where(source => repoSourceNames.Contains(source.Name));
 
-        return Check(sources, allowedHosts, allowedLocalFeeds ?? []);
+        var findings = new List<SourceFinding>(Check(sources, allowedHosts, allowedLocalFeeds ?? []));
+
+        if (!boundaryFound && packageSources is not null)
+        {
+            var notice = ParentConfigNotice(directory, packageSources);
+            if (notice is not null)
+            {
+                findings.Add(notice);
+            }
+        }
+
+        return findings;
     }
 
     /// <summary>
@@ -209,11 +226,12 @@ public static class SourceTrustService
 
     /// <summary>
     /// Resolves the repository boundary for <paramref name="startDirectory"/>: the nearest
-    /// ancestor (inclusive) containing a <c>.git</c> file or directory. When none is found,
-    /// the start directory itself is the boundary, so a non-repo path audits only its own
-    /// declared config.
+    /// ancestor (inclusive) containing a <c>.git</c> file or directory. Returns true when
+    /// such a boundary was found; <paramref name="root"/> is that directory, or the start
+    /// directory itself when no boundary exists (so a non-repo path audits only its own
+    /// declared config).
     /// </summary>
-    private static string FindRepoRoot(string startDirectory)
+    private static bool TryFindRepoRoot(string startDirectory, out string root)
     {
         var directory = new DirectoryInfo(Path.GetFullPath(startDirectory));
 
@@ -222,13 +240,70 @@ public static class SourceTrustService
             var gitPath = Path.Combine(directory.FullName, ".git");
             if (Directory.Exists(gitPath) || File.Exists(gitPath))
             {
-                return directory.FullName;
+                root = directory.FullName;
+                return true;
             }
 
             directory = directory.Parent;
         }
 
-        return Path.GetFullPath(startDirectory);
+        root = Path.GetFullPath(startDirectory);
+        return false;
+    }
+
+    /// <summary>
+    /// When no repository boundary was found, package sources declared in directories ABOVE
+    /// the manifest directory were excluded from the audit even though a restore from a
+    /// non-git checkout would still honour them. Returns a visible <c>info</c> finding naming
+    /// those excluded config files, or null when there are none.
+    /// </summary>
+    private static SourceFinding? ParentConfigNotice(string startDirectory, SettingSection packageSources)
+    {
+        var manifestDir = Path.GetFullPath(startDirectory);
+
+        var excluded = packageSources.Items.OfType<SourceItem>()
+            .Where(item => IsStrictAncestorConfig(item.ConfigPath, manifestDir))
+            .Select(item => Path.GetFullPath(item.ConfigPath!))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+
+        if (excluded.Count == 0)
+        {
+            return null;
+        }
+
+        return new SourceFinding(
+            "(unaudited)",
+            "parent-config",
+            $"No repository boundary (.git) was found above '{manifestDir}', so NuGet config "
+                + $"declared in parent directories was NOT audited even though a restore would honour it: "
+                + $"{string.Join(", ", excluded)}. Verify these feeds, or run the audit from the repository root.",
+            Severity.Info);
+    }
+
+    /// <summary>
+    /// True when <paramref name="configPath"/> is a config file located in a STRICT ancestor
+    /// directory of <paramref name="manifestDir"/> (i.e. above the manifest, not in it).
+    /// </summary>
+    private static bool IsStrictAncestorConfig(string? configPath, string manifestDir)
+    {
+        if (string.IsNullOrEmpty(configPath))
+        {
+            return false;
+        }
+
+        var configDir = Path.GetDirectoryName(Path.GetFullPath(configPath));
+        if (string.IsNullOrEmpty(configDir))
+        {
+            return false;
+        }
+
+        var relative = Path.GetRelativePath(configDir, manifestDir);
+        return relative != "."
+            && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            && relative != ".."
+            && !Path.IsPathRooted(relative);
     }
 
     /// <summary>
