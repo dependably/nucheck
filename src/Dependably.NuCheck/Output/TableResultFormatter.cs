@@ -150,7 +150,11 @@ public sealed class TableResultFormatter : IResultFormatter
         builder.AppendLine("POLICY FINDINGS");
         foreach (var finding in result.PolicyFindings)
         {
-            builder.AppendLine($"   [{Severity.Normalize(finding.Severity)}] {TextSanitizer.Sanitize(finding.Source)} -> {TextSanitizer.Sanitize(finding.Host)}: {TextSanitizer.Sanitize(finding.Message)}");
+            var level = Severity.Normalize(finding.Severity);
+            var source = TextSanitizer.Sanitize(finding.Source);
+            var host = TextSanitizer.Sanitize(finding.Host);
+            var message = TextSanitizer.Sanitize(finding.Message);
+            builder.AppendLine($"   [{level}] {source} -> {host}: {message}");
         }
     }
 

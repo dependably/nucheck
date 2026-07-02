@@ -78,6 +78,25 @@ public static class SourceTrustService
         return findings;
     }
 
+    /// <summary>
+    /// Core logic over an already-loaded source list, testable without touching disk.
+    /// Every source given here is assumed to be repo-declared (the disk overload filters
+    /// user/global sources out first).
+    /// </summary>
+    public static IReadOnlyList<SourceFinding> Check(
+        IEnumerable<PackageSource> sources,
+        IReadOnlyList<string> allowedHosts) => Check(sources, allowedHosts, []);
+
+    /// <summary>
+    /// Core logic over an already-loaded source list, with an explicit allowlist of trusted
+    /// local folder feeds. Testable without touching disk.
+    /// </summary>
+    public static IReadOnlyList<SourceFinding> Check(
+        IEnumerable<PackageSource> sources,
+        IReadOnlyList<string> allowedHosts,
+        IReadOnlyList<string> allowedLocalFeeds) =>
+        CheckCore(sources, allowedHosts, allowedLocalFeeds, repoRoot: null);
+
     // -- Discovery: which repo-declared sources a restore would honour (ticket 32/45) --------
 
     /// <summary>
@@ -90,7 +109,7 @@ public static class SourceTrustService
     /// enabled / disabled merge semantics are preserved per subtree; results are
     /// de-duplicated by (name, source url).
     /// </summary>
-    private static IReadOnlyList<PackageSource> CollectRepoDeclaredSources(string scanDirectory, string repoRoot)
+    private static List<PackageSource> CollectRepoDeclaredSources(string scanDirectory, string repoRoot)
     {
         var byIdentity = new Dictionary<(string Name, string Source), PackageSource>();
 
@@ -197,7 +216,9 @@ public static class SourceTrustService
     private static bool IsExcludedPath(string root, string candidate)
     {
         var relative = Path.GetRelativePath(root, candidate);
-        return relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+        // Split on BOTH separators via an explicit array: `Split(char, char)` would bind the
+        // second char to the `int count` overload (splitting on one separator only).
+        return relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar])
             .Any(segment => segment is "bin" or "obj" or ".git");
     }
 
@@ -230,31 +251,12 @@ public static class SourceTrustService
     // -- Evaluation: per-source trust verdict (tickets 25/31/33/35) --------------------------
 
     /// <summary>
-    /// Core logic over an already-loaded source list, testable without touching disk.
-    /// Every source given here is assumed to be repo-declared (the disk overload filters
-    /// user/global sources out first).
-    /// </summary>
-    public static IReadOnlyList<SourceFinding> Check(
-        IEnumerable<PackageSource> sources,
-        IReadOnlyList<string> allowedHosts) => Check(sources, allowedHosts, []);
-
-    /// <summary>
-    /// Core logic over an already-loaded source list, with an explicit allowlist of trusted
-    /// local folder feeds. Testable without touching disk.
-    /// </summary>
-    public static IReadOnlyList<SourceFinding> Check(
-        IEnumerable<PackageSource> sources,
-        IReadOnlyList<string> allowedHosts,
-        IReadOnlyList<string> allowedLocalFeeds) =>
-        CheckCore(sources, allowedHosts, allowedLocalFeeds, repoRoot: null);
-
-    /// <summary>
     /// Core loop shared by the disk and in-memory overloads. <paramref name="repoRoot"/> is
     /// the resolved repository boundary (or null when unknown, e.g. the in-memory overloads
     /// used by tests); it anchors <c>./</c>-prefixed allowlist entries to a single approved
     /// location instead of a loose trailing-segment match.
     /// </summary>
-    private static IReadOnlyList<SourceFinding> CheckCore(
+    private static List<SourceFinding> CheckCore(
         IEnumerable<PackageSource> sources,
         IReadOnlyList<string> allowedHosts,
         IReadOnlyList<string> allowedLocalFeeds,

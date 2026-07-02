@@ -29,3 +29,25 @@ dotnet_diagnostic.OP005.severity = none
 # xUnit [Fact]/[Theory] methods are invoked by the test runner and have no
 # caller to supply a CancellationToken.
 dotnet_diagnostic.OP006.severity = none
+
+# ---------------------------------------------------------------------------
+# CVSS v3.1 base-score formula (src/Dependably.NuCheck/Services/OsvAdvisoryClient.cs)
+# ---------------------------------------------------------------------------
+[src/Dependably.NuCheck/Services/OsvAdvisoryClient.cs]
+# The numeric literals in the base-score math are the published CVSS v3.1
+# specification coefficients (impact/exploitability weights, the scope-changed
+# factor, the "roundup" scale). Naming each one adds ceremony without clarity
+# against the spec, so S109 (magic number) is silenced for this file only.
+dotnet_diagnostic.S109.severity = none
+
+# ---------------------------------------------------------------------------
+# C# source tokenizer (src/Dependably.NuCheck/Services/UnusedPackageService.cs)
+# ---------------------------------------------------------------------------
+[src/Dependably.NuCheck/Services/UnusedPackageService.cs]
+# The small integer literals are character look-ahead offsets used to recognise
+# every C# string-literal form ($"" / @"" / """ / $$""" …); their meaning is
+# evident in context and naming them would obscure the scanner. S3776 fires on
+# the strip loop, whose branchiness is inherent to lexing all those forms —
+# splitting the dispatch would scatter the logic, not simplify it.
+dotnet_diagnostic.S109.severity = none
+dotnet_diagnostic.S3776.severity = none
