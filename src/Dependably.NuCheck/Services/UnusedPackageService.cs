@@ -164,7 +164,7 @@ public static partial class UnusedPackageService
             .ToList();
 
         // Pre-collect IDs that carry dev-only markers on any <PackageReference> so that
-        // a central <PackageVersion> entry for the same id can be suppressed (#24).
+        // a central <PackageVersion> entry for the same id can be suppressed.
         var devOnlyIds = CollectDevOnlyPackageReferenceIds(files);
 
         var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -272,7 +272,7 @@ public static partial class UnusedPackageService
             }
 
             // CPM: if any <PackageReference> in the project tree carries dev-only metadata
-            // for this id, the central <PackageVersion> entry must also be suppressed (#24).
+            // for this id, the central <PackageVersion> entry must also be suppressed.
             if (isCpmProps
                 && element.Name.LocalName.Equals("PackageVersion", StringComparison.OrdinalIgnoreCase)
                 && devOnlyIds?.Contains(include) == true)

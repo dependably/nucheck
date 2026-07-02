@@ -236,7 +236,8 @@ Options:
 Policy checks:
   In addition to vulnerabilities, nucheck flags any configured NuGet package
   source whose host is not public (api.nuget.org / nuget.org) and not allowlisted
-  in .dependably-check (common.allowedRegistryHosts ∪ nuget.allowedRegistryHosts).
+  in .dependably-check (the union of the common.allowedRegistryHosts and
+  nuget.allowedRegistryHosts lists).
   An untrusted source is an error and exits non-zero.
 
   Local folder feeds (relative paths or file:// URIs) declared inside the repo

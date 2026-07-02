@@ -4,29 +4,29 @@
 # `git config core.hooksPath .githooks`).
 # Gates a commit on `dotnet format` (hard gate) and runs the tests (advisory).
 
-echo "🔍 Running pre-commit checks..."
+echo "Running pre-commit checks..."
 
 if ! command -v dotnet &> /dev/null; then
-  echo "❌ dotnet SDK is not installed"
+  echo "Error: dotnet SDK is not installed."
   exit 1
 fi
 
 # 1. Formatting — hard gate
-echo "📝 Verifying formatting (dotnet format)..."
+echo "Verifying formatting (dotnet format)..."
 dotnet format Dependably.NuCheck.slnx --verify-no-changes
 if [ $? -ne 0 ]; then
-  echo "❌ Formatting issues. Run 'dotnet format Dependably.NuCheck.slnx' before committing."
+  echo "Formatting issues found. Run 'dotnet format Dependably.NuCheck.slnx' before committing."
   exit 1
 fi
 
 # 2. Test suite — advisory only (never blocks)
-echo "⚡ Running tests..."
+echo "Running tests..."
 dotnet test Dependably.NuCheck.slnx -c Release 2>/dev/null
 if [ $? -ne 0 ]; then
-  echo "⚠️  Some tests failed. Review the output above."
-  echo "💡 Run 'dotnet test Dependably.NuCheck.slnx' for the full suite."
+  echo "Warning: some tests failed. Review the output above."
+  echo "Run 'dotnet test Dependably.NuCheck.slnx' for the full suite."
   # Don't exit 1 here — allow commit with warning
 fi
 
-echo "✅ Pre-commit checks completed!"
+echo "Pre-commit checks complete."
 exit 0

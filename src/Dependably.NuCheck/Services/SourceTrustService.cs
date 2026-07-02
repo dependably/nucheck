@@ -97,7 +97,7 @@ public static class SourceTrustService
         IReadOnlyList<string> allowedLocalFeeds) =>
         CheckCore(sources, allowedHosts, allowedLocalFeeds, repoRoot: null);
 
-    // -- Discovery: which repo-declared sources a restore would honour (ticket 32/45) --------
+    // -- Discovery: which repo-declared sources a restore would honour ----------------------
 
     /// <summary>
     /// Gathers every package source declared by a <c>nuget.config</c> that lives inside the
@@ -248,7 +248,7 @@ public static class SourceTrustService
         return keys;
     }
 
-    // -- Evaluation: per-source trust verdict (tickets 25/31/33/35) --------------------------
+    // -- Evaluation: per-source trust verdict ------------------------------------------------
 
     /// <summary>
     /// Core loop shared by the disk and in-memory overloads. <paramref name="repoRoot"/> is
@@ -313,7 +313,7 @@ public static class SourceTrustService
         {
             // A remote network share is trusted only by an explicitly allowlisted host or an
             // EXACT allowlist entry. A bare local-path entry must never satisfy it (closes the
-            // #33 escalation bypass); an allowlisted host is the #35 opt-in for a trusted share.
+            // escalation bypass); an allowlisted host is the opt-in for a trusted share.
             var trusted = trustedHosts.Contains(fileHost)
                 || IsExactlyAllowlisted(source.Source, allowedLocalFeeds);
             return trusted ? null : RemoteFileFeedFinding(source, fileHost);
@@ -396,7 +396,7 @@ public static class SourceTrustService
         var trusted = new HashSet<string>(baseline, StringComparer.OrdinalIgnoreCase);
         foreach (var value in extra)
         {
-            // Trim before insertion (ticket 25): a config value padded with whitespace (e.g.
+            // Trim before insertion: a config value padded with whitespace (e.g.
             // from a YAML parser) must still match uri.Host, which is never padded.
             var trimmed = value.Trim();
             if (!string.IsNullOrEmpty(trimmed))
@@ -533,7 +533,7 @@ public static class SourceTrustService
             .Where(segment => segment != ".")
             .ToArray();
 
-    // -- Repository boundary & the non-git fail-open notice (ticket 47) ----------------------
+    // -- Repository boundary & the non-git fail-open notice ----------------------------------
 
     /// <summary>
     /// Resolves the repository boundary for <paramref name="startDirectory"/>: the nearest

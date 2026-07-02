@@ -1,373 +1,104 @@
 # nucheck
 
-A native **.NET global tool** that audits NuGet dependencies for known
-vulnerabilities — like `npm audit`, but for the .NET ecosystem.
+Audit your .NET NuGet dependencies for known vulnerabilities — like `npm audit`, for .NET.
 
-`nucheck` reads your installed packages (`packages.config`, `packages.lock.json`,
-or a `.csproj` / `Directory.Packages.props` using `<PackageReference>` / Central Package
-Management), queries the [GitHub Advisory Database](https://github.com/advisories)
-for the **NuGet** ecosystem, and reports any package whose installed version falls
-within a known vulnerable range.
+`nucheck` reads your installed packages (`packages.config`, `packages.lock.json`, or a
+`.csproj` / `Directory.Packages.props`), checks them against the
+[GitHub Advisory Database](https://github.com/advisories) (or [OSV.dev](https://osv.dev)),
+and reports any package whose installed version has a known vulnerability. It uses the real
+`NuGet.Versioning` comparer, so NuGet's 4-part versions (`1.8.3.1`) and interval ranges
+(`[1.0,2.0)`) are matched correctly.
 
-Unlike a JavaScript port, it uses the real **`NuGet.Versioning`** comparer, so it
-correctly handles NuGet's 4-part versions (e.g. `1.8.3.1`) and interval ranges
-(e.g. `[1.0,2.0)`) that npm's `semver` cannot represent.
+## Install
 
-## Features
-
-- **Native .NET** — installs and runs as a `dotnet tool`, no Node required.
-- **Correct version matching** via `NuGet.Versioning` (4-part versions, intervals).
-- **Authoritative data** from the GitHub Advisory Database (GraphQL by default, REST via `--rest`).
-- **Manifest support**: `packages.config` (XML), `packages.lock.json`, and `<Project>`-rooted
-  `.csproj` / `.props` carrying `<PackageReference>` / `<PackageVersion>` (Central Package
-  Management, including `Directory.Packages.props`). The `.csproj` / `.props` reader is a
-  static parse — no MSBuild evaluation (properties, `Condition`s, imports, SDK-implicit
-  packages are not expanded) — and version ranges / floating versions are audited at their
-  declared **lower bound**, not the version a restore would resolve. For exact resolved
-  versions, point the tool at a `packages.lock.json`. Because conditions are not evaluated,
-  a package id declared at more than one version (e.g. per-`TargetFramework` `Condition`s, or
-  a file-local `<PackageVersion>` alongside a central one) has **every distinct declared
-  version audited** — a deliberate fail-safe so a vulnerable pin is never masked by a sibling,
-  at the cost of occasionally flagging a version a given build would not actually restore.
-- **Output formats**: `human` (default), `table`, `json`. `--format json` emits the shared
-  Dependably finding schema v1 envelope (see [JSON output](#json-output)) so any suite tool's
-  JSON parses the same way.
-- **Severity filtering**: `--severity critical|high|moderate|low|info` — a DISPLAY filter that
-  narrows what is printed. It is distinct from the CI gate (`--fail-on`) and never changes
-  the exit code.
-- **Unified CI gate**: `--fail-on <key>=<value>` (repeatable) — the one suite-wide gate
-  mechanism. `severity=<level>` fails only on findings at-or-above a level (relax/raise the
-  gate); `count=<N>` fails when the vulnerability count exceeds N. See
-  [CI gate](#ci-gate--fail-on).
-- **Source-trust policy**: flags any repo-declared NuGet package source whose host is not
-  public (`api.nuget.org` / `nuget.org`) and not allowlisted in `.dependably-check`, **and
-  any repo-declared local folder feed** (relative path or `file://` URI) not listed in
-  `allowedLocalFeeds`. Local feeds are fail-closed on purpose — a committed folder feed can
-  smuggle tampered `.nupkg` files past a restore.
-- **Unused-package check (advisory)**: heuristically detects direct `<PackageReference>`
-  packages whose namespace does not appear in `.cs` source files. Never exits non-zero.
-  Dev/build/analyzer-only references (`PrivateAssets="all"`, analyzer/build-only
-  `Include`/`ExcludeAssets`, and a built-in allowlist of common analyzer/source-generator
-  packages) are excluded by default. Further suppressible per-package via
-  `ignoreUnusedPackages` in `.dependably-check`.
-- **Shared config**: reads the repo-root `.dependably-check` (JSON), discovered by walking
-  up the directory tree, or pointed at explicitly with `--config`.
-- **Actionable advisories**: each finding carries its discrete advisory id (GHSA), CVE
-  (where available), and the **fixed version** to upgrade to — surfaced in `table` and
-  `json`, with the fix mentioned in `human`. Populated from both GitHub and OSV.
-- **CI-friendly exit codes** (Dependably suite convention): `0` clean · `1` vulnerability
-  or policy finding (block) · `2` usage error (bad/unknown flag, missing manifest argument)
-  or operational error (unreadable/unsupported manifest, scan failure, internal exception).
-  `--help` and `--version` exit `0`.
-
-## Requirements
-
-- .NET SDK 8.0 or later to install and run the tool (it is packaged for both `net8.0`
-  and `net10.0`, and `dotnet tool install` picks the runtime you have).
-- An advisory source:
-  - **`--source github`** (default): a GitHub personal access token in the `GITHUB_TOKEN`
-    environment variable (the GitHub Advisory API requires authentication). Create one at
-    <https://github.com/settings/tokens> — no scopes are needed for public advisory data.
-  - **`--source osv`**: queries the public [OSV.dev](https://osv.dev) database — **no token required**.
-
-## Installation
-
-**Once published to nuget.org**, install `Dependably.NuCheck` as a global tool
-straight from the public feed:
+Requires the .NET SDK 8.0 or later.
 
 ```bash
 dotnet tool install --global Dependably.NuCheck
 ```
 
-**From source (works today)** — build the package locally and install it from a local
-feed:
-
-```bash
-dotnet pack src/Dependably.NuCheck/Dependably.NuCheck.csproj -c Release -o artifacts
-dotnet tool install --global --add-source ./artifacts Dependably.NuCheck
-```
-
-Then the `nucheck` command is on your PATH:
-
-```bash
-export GITHUB_TOKEN=your_token
-nucheck ./packages.config
-```
-
-> ### Heads-up: source-trust policy fails the build on private feeds by default
->
-> `nucheck` audits the NuGet package sources configured for the audited project and,
-> **by default, FAILS (exits non-zero) on any source whose host is not public**
-> (`api.nuget.org` / `nuget.org`) and not allowlisted. If your project restores from a
-> private, company, GitHub Packages, or Azure Artifacts feed, permit it **before** you
-> run by adding its host to `allowedRegistryHosts` in a `.dependably-check` file at your
-> repo root:
->
-> ```json
-> {
->   "common": { "allowedRegistryHosts": ["nuget.mycompany.com"] }
-> }
-> ```
->
-> This is intentional, on-by-default behavior — see
-> [Source-trust policy & `.dependably-check`](#source-trust-policy--dependably-check)
-> for the full rules.
+This puts the `nucheck` command on your PATH.
 
 ## Usage
+
+```bash
+export GITHUB_TOKEN=your_token        # or use --source osv (no token needed)
+nucheck ./packages.config
+```
 
 ```
 nucheck <path-to-packages-file> [options]
 
-Arguments:
-  <path-to-packages-file>    Path to packages.config, packages.lock.json, or a
-                             .csproj / Directory.Packages.props (PackageReference /
-                             Central Package Management). .csproj / .props are parsed
-                             statically (no MSBuild evaluation); version ranges &
-                             floating versions are audited at their declared LOWER
-                             BOUND. For exact resolved versions, use a packages.lock.json.
-
-Options:
-  --source <name>            Advisory source: github (default), osv
-  --format <type>            Output format: human, table, json (default: human)
-  --severity <level>         Filter by severity: critical, high, moderate, low, info
-  --config <path>            Path to a .dependably-check config file (otherwise discovered)
-  --fail-on <key>=<value>    CI gate (repeatable): severity=<level> or count=<N>
-  --rest                     Use the GitHub REST API instead of GraphQL (github source)
-  --verbose, -v              Write progress to stderr
-  --help, -h                 Show help
-  --version                  Print the tool version and exit
-
-Environment:
-  GITHUB_TOKEN               GitHub personal access token (required for the github source)
+  --source <name>       Advisory source: github (default), osv
+  --format <type>       Output: human (default), table, json
+  --severity <level>    Show only: critical, high, moderate, low, info
+  --fail-on <k>=<v>     CI gate: severity=<level> or count=<N> (repeatable)
+  --config <path>       Path to a .dependably-check config file
+  --rest                Use the GitHub REST API instead of GraphQL
+  --verbose, -v         Write progress to stderr
+  --help, -h            Show full help
+  --version             Print the version
 ```
 
-### Source-trust policy & `.dependably-check`
+The GitHub source needs a token in `GITHUB_TOKEN` (create one at
+<https://github.com/settings/tokens> — no scopes required); `--source osv` needs none.
 
-Beyond known vulnerabilities, `nucheck` audits the **NuGet package sources declared
-within the repository** — the `nuget.config` files from the audited path up to and
-including the repo root. The host machine's user/global NuGet configuration is
-intentionally **out of scope** so the verdict is reproducible and machine-independent
-(the same repo passes or fails identically on every machine and in CI, and auditing a
-stranger's repo never flags your personal feeds). A repo that declares no `nuget.config`
-makes no untrusted-source claim and produces no findings. Every enabled `http(s)` source
-whose host is neither a built-in public host (`api.nuget.org`, `nuget.org`) nor
-explicitly allowlisted is reported as a **policy error**, and the process exits
-non-zero. Disabled sources are ignored.
+Point `nucheck` at a `packages.lock.json` for exact resolved versions. A `.csproj` /
+`.props` is parsed statically (no MSBuild evaluation) and audited at each dependency's
+declared lower bound.
 
-**Local folder feeds are fail-closed.** Every enabled repo-declared local folder feed —
-a relative path, an absolute path, or a `file://` URI — is likewise reported as a policy
-error unless its path is listed in `allowedLocalFeeds`. A committed folder feed is a
-supply-chain smuggling vector: it can serve tampered `.nupkg` files that a restore honours
-without ever touching a registry. (This is a **breaking change to the default gate**: repos
-that declare a local feed now fail CI until the feed is allowlisted — see the CHANGELOG.)
+## Exit codes
 
-Allowlist private/internal registries and trusted local feeds in a repo-root
-`.dependably-check` file (JSON), shared across the Dependably checker tools. This tool
-reads the union of `common` and `nuget` values for both `allowedRegistryHosts` (bare
-hostnames) and `allowedLocalFeeds` (feed paths):
+| Code | Meaning |
+| ---- | ------- |
+| `0`  | Clean — no findings (also `--help` / `--version`). |
+| `1`  | A vulnerability or policy finding — block the build. |
+| `2`  | Usage error (bad flag, missing/unreadable manifest) or scan failure. |
+
+By default, **any** vulnerability or untrusted package source fails the build. Change the
+gate with `--fail-on` — e.g. `--fail-on severity=high` (ignore moderate/low) or
+`--fail-on count=0`. `--severity` only filters what is printed; it never changes the exit
+code.
+
+## Extra checks
+
+Beyond vulnerabilities, `nucheck` also reports:
+
+- **Untrusted package sources** — any NuGet source declared in your repo whose host isn't
+  public (`nuget.org`), plus any local folder feed, unless allowlisted. This **fails the
+  build by default**: if you restore from a private, company, or Azure Artifacts feed,
+  allowlist it first (see below).
+- **Possibly-unused packages** — direct `<PackageReference>`s whose namespace never appears
+  in your `.cs` files. Advisory only; never fails the build.
+
+Configure both in a `.dependably-check` JSON file at your repo root:
 
 ```json
 {
   "common": {
     "allowedRegistryHosts": ["nuget.internal.example.com"],
-    "allowedLocalFeeds": ["./local-packages"]
-  },
-  "nuget": {
-    "allowedRegistryHosts": [],
-    "allowedLocalFeeds": ["file:///opt/mirror"]
+    "allowedLocalFeeds": ["./local-packages"],
+    "ignoreUnusedPackages": ["StyleCop.Analyzers"]
   }
 }
 ```
 
-An `allowedLocalFeeds` entry matches by trailing path segment (so `local-packages` trusts
-a resolved `<repo>/local-packages`), with two safeguards against allowlist bypass:
+Run `nucheck --help` for the complete policy rules and the JSON output schema.
 
-- **Anchor to the repo root** by prefixing the entry with `./` (or `../`). `./local-packages`
-  grants **only** `<repo>/local-packages`, not a same-named `local-packages` folder sitting
-  elsewhere in the tree. Bare-name entries keep the looser trailing-segment match.
-- **Remote-host `file://` and UNC feeds are never trusted by a local-path entry.** A
-  `file://server/share/...` URI or a UNC path (`\\server\share\...`) points at a *network*
-  share, not a local folder, so a bare entry like `local-packages` cannot satisfy it; such a
-  feed is trusted only by an **exact** allowlist entry naming its full path.
+## JSON output
 
-The file is discovered by walking up from the current directory (stopping at the repo
-root, i.e. a directory containing `.git`), or pointed at explicitly with `--config`.
+`--format json` writes one object to stdout following the shared Dependably finding schema
+(`tool`, `toolVersion`, `schemaVersion`, `target`, `summary`, `findings`), so every tool in
+the suite parses the same way.
 
-### Unused-package check
-
-`nucheck` also heuristically scans for `<PackageReference>` entries in `*.csproj`
-files (and `Directory.Packages.props`) under the audited file's directory that do not
-appear to be referenced in any `.cs` source file. This surfaces potentially dead
-dependencies that can be removed to reduce attack surface and build times.
-
-**This check is advisory only — it never causes the process to exit non-zero.** The
-heuristic has real false-positive risk: build-tool, analyzer, MSBuild-task, and
-`PrivateAssets` packages have no runtime namespace, and packages whose NuGet id differs
-from their namespace root will also be flagged erroneously.
-
-To keep the signal trustworthy, references that are *expected* to have no runtime
-namespace are excluded by default and never reported:
-
-- references marked as not flowing to consumers via MSBuild asset metadata —
-  `PrivateAssets="all"` (attribute or child element), `ExcludeAssets` dropping
-  `runtime`/`compile`, or `IncludeAssets` limited to analyzer/build assets; and
-- a small built-in allowlist of build/analyzer/source-generator packages that authors
-  often add without `PrivateAssets`: ids ending in `.Analyzers` / `.SourceGenerators`,
-  `StyleCop.Analyzers`, `Microsoft.CodeAnalysis.Analyzers`,
-  `Microsoft.CodeAnalysis.NetAnalyzers`, `Microsoft.NET.Test.Sdk`, `coverlet.collector`,
-  `coverlet.msbuild`, `Nullable`, `PolySharp`, `GitVersion.MsBuild`, and
-  `Microsoft.SourceLink.*`.
-
-Suppress remaining false positives per-package via `ignoreUnusedPackages` in
-`.dependably-check` (union of `common` and `nuget` sections):
-
-```json
-{
-  "common": { "ignoreUnusedPackages": ["StyleCop.Analyzers", "SonarAnalyzer.CSharp"] },
-  "nuget":  { "ignoreUnusedPackages": ["Microsoft.CodeAnalysis.Analyzers"] }
-}
-```
-
-### Examples
-
-```bash
-# Default human-readable output
-nucheck ./packages.config
-
-# OSV.dev source — no GITHUB_TOKEN needed
-nucheck ./packages.lock.json --source osv
-
-# JSON output (for piping into other tools / CI)
-nucheck ./packages.lock.json --format json
-
-# Only high-severity findings, table layout
-nucheck ./packages.config --format table --severity high
-```
-
-### JSON output
-
-`--format json` writes **one** JSON object to stdout (progress/errors go to stderr),
-following the shared **Dependably finding schema v1** so every tool in the suite parses
-the same way. The six core keys — `tool`, `toolVersion`, `schemaVersion`, `target`,
-`summary`, `findings` — are uniform; tool-specific data lives under each finding's `extra`.
-
-```json
-{
-  "tool": "nucheck",
-  "toolVersion": "2.0.0",
-  "schemaVersion": "1.0",
-  "target": "packages.config",
-  "summary": {
-    "scanned": 1,
-    "findings": 1,
-    "bySeverity": { "critical": 0, "high": 1, "moderate": 0, "low": 0, "info": 0 },
-    "exitCode": 1
-  },
-  "findings": [
-    {
-      "severity": "high",
-      "ruleId": "GHSA-5crp-9r3c-p9vr",
-      "category": "vulnerability",
-      "message": "GHSA-5crp-9r3c-p9vr: Improper Handling of Exceptional Conditions in Newtonsoft.Json",
-      "location": null,
-      "remediation": "upgrade to 13.0.1",
-      "extra": {
-        "package": "Newtonsoft.Json",
-        "installedVersion": "11.0.2",
-        "fixedVersion": "13.0.1",
-        "advisoryId": "GHSA-5crp-9r3c-p9vr",
-        "cve": "CVE-2024-21907",
-        "vulnerableRange": "< 13.0.1",
-        "references": ["https://osv.dev/vulnerability/GHSA-5crp-9r3c-p9vr"]
-      }
-    }
-  ]
-}
-```
-
-Notes:
-
-- `summary.scanned` = number of packages audited; `summary.findings` always equals
-  `findings.length` (the JSON list is never truncated); `summary.exitCode` equals the real
-  process exit code (`0`/`1`/`2`).
-- `severity` is always one of the suite ladder strings `critical | high | moderate | low | info`.
-  nuget mapping: `critical/high/moderate/low` kept, `medium`→`moderate`, `unknown`→`info`.
-  These same words are used in the `human` and `table` outputs.
-- Finding `category` is one of: `vulnerability` (an advisory), `policy` (an untrusted package
-  source — `extra` carries `host`/`source`), `unused` (a heuristic unused-package finding,
-  always `info`), or `unverifiable-range` (an advisory whose vulnerable-version range could
-  not be parsed and so could not be evaluated — always `info`, advisory only; `extra` carries
-  `package`, `vulnerableRange`, `advisoryId`, `advisorySeverity`). For a vulnerability,
-  `ruleId` is the GHSA id when available (else the CVE); `location` is `null` because package
-  findings are not file-scoped.
-
-### CI gate (`--fail-on`)
-
-`--fail-on <key>=<value>` is the single, suite-wide CI gate. It is **repeatable**, and the
-process exits `1` if **any** rule trips:
-
-| Rule | Trips when |
-| ---- | ---------- |
-| `severity=<critical\|high\|moderate\|low\|info>` | a finding's severity is **at-or-above** the level on the suite ladder. A relaxed level (e.g. `severity=high`) ignores moderate/low vulnerabilities **for gating** — they still appear in the output. A policy finding (untrusted source) carries `error` severity, which maps to `high`. |
-| `count=<N>` | the total **vulnerability** count exceeds `N` (e.g. `count=0` fails on any vulnerability). |
-
-With **no** `--fail-on`, the default holds: **any** vulnerability or policy error fails the
-build (exit `1`). Supplying `--fail-on` **replaces** that default with the union of the
-rules you give.
-
-`--fail-on` is the gate; `--severity` is only a display filter. They are independent — a
-`--severity` filter narrows what is printed but never changes the exit code, and the JSON
-`summary.exitCode` always equals the real process exit code.
-
-```bash
-# Only fail the build on high/critical vulnerabilities (ignore moderate/low for gating)
-nucheck ./packages.lock.json --fail-on severity=high
-
-# Tolerate up to 3 known vulnerabilities before failing
-nucheck ./packages.lock.json --fail-on count=3
-
-# Combine: fail on any critical, OR on more than 5 findings total
-nucheck ./packages.lock.json --fail-on severity=critical --fail-on count=5
-```
-
-Exit codes wire straight into a CI gate:
-
-| Code | Meaning |
-| ---- | ------- |
-| `0`  | Clean — no gating findings (also `--help` / `--version`). |
-| `1`  | A gating finding (a vulnerability or policy error by default, or whatever `--fail-on` selects) — block the build. |
-| `2`  | Usage error (bad/unknown flag, bad `--fail-on` value, missing manifest argument) or operational error (unreadable/unsupported manifest, scan failure, internal exception). |
-
-## Building from source
+## Build from source
 
 ```bash
 git clone https://github.com/dependably/nucheck.git
 cd nucheck
 dotnet build Dependably.NuCheck.slnx -c Release
-dotnet test  Dependably.NuCheck.slnx -c Release        # run the xUnit suite
-dotnet run --project src/Dependably.NuCheck -- ./examples/packages.config
+dotnet test  Dependably.NuCheck.slnx -c Release
 ```
-
-Pack the tool locally:
-
-```bash
-dotnet pack src/Dependably.NuCheck/Dependably.NuCheck.csproj -c Release -o artifacts
-dotnet tool install --global --add-source ./artifacts Dependably.NuCheck
-```
-
-## Project layout
-
-```
-src/Dependably.NuCheck/        # the tool
-  Program.cs           # CLI entry point + orchestration
-  Cli/CliOptions.cs    # argument parsing
-  Services/            # PackageFileReader, GitHubAdvisoryClient, VulnerabilityMatcher, AuditService
-  Output/              # human / table / json formatters
-  Models/              # PackageRef, Advisory, AuditResult, Severity (the suite ladder)
-tests/Dependably.NuCheck.Tests # xUnit tests (fakes for HttpClient + advisory source)
-```
-
-See [docs/API.md](docs/API.md) for the internal architecture and the key types.
 
 ## License
 
