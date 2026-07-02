@@ -31,30 +31,118 @@ public static class SourceTrustService
     /// </summary>
     public static IReadOnlyList<SourceFinding> Check(string directory, IReadOnlyList<string> allowedHosts)
     {
-        var settings = Settings.LoadDefaultSettings(directory);
         var repoRoot = FindRepoRoot(directory);
+        return Check(CollectRepoDeclaredSources(directory, repoRoot), allowedHosts);
+    }
 
-        // Names of the package sources actually declared inside the repo tree, discarding
-        // anything inherited from the user/global machine config.
+    /// <summary>
+    /// Gathers every package source declared by a <c>nuget.config</c> that lives inside the
+    /// repo tree — the config walked up from <paramref name="scanDirectory"/> <b>and</b> any
+    /// config found in a subdirectory of the scan root (e.g. <c>src/nuget.config</c> or a
+    /// config beside a nested <c>.sln</c>), which govern real restores in their subtree yet
+    /// are never seen by an upward-only walk. Each subtree is loaded via
+    /// <see cref="Settings.LoadDefaultSettings(string)"/> so NuGet's <c>&lt;clear/&gt;</c> /
+    /// enabled / disabled merge semantics are preserved per subtree; results are
+    /// de-duplicated by (name, source url).
+    /// </summary>
+    private static IReadOnlyList<PackageSource> CollectRepoDeclaredSources(string scanDirectory, string repoRoot)
+    {
+        var byIdentity = new Dictionary<(string Name, string Source), PackageSource>();
+
+        foreach (var settingsDirectory in SettingsDirectories(scanDirectory))
+        {
+            AddUnderRootSources(Settings.LoadDefaultSettings(settingsDirectory), repoRoot, byIdentity);
+        }
+
+        return byIdentity.Values.ToList();
+    }
+
+    /// <summary>
+    /// The directories whose <c>nuget.config</c> hierarchies must be audited: the scan
+    /// directory itself (upward walk) plus every subdirectory under it that declares its own
+    /// <c>nuget.config</c>, skipping <c>bin</c>/<c>obj</c>/<c>.git</c> build and VCS folders.
+    /// </summary>
+    private static IEnumerable<string> SettingsDirectories(string scanDirectory)
+    {
+        var root = Path.GetFullPath(scanDirectory);
+        yield return root;
+
+        foreach (var configDirectory in FindSubtreeConfigDirectories(root))
+        {
+            yield return configDirectory;
+        }
+    }
+
+    private static IEnumerable<string> FindSubtreeConfigDirectories(string root)
+    {
+        if (!Directory.Exists(root))
+        {
+            yield break;
+        }
+
+        var options = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            MatchCasing = MatchCasing.CaseInsensitive,
+            IgnoreInaccessible = true,
+        };
+
+        foreach (var configFile in Directory.EnumerateFiles(root, "nuget.config", options))
+        {
+            var configDirectory = Path.GetDirectoryName(configFile);
+            if (configDirectory is not null
+                && !PathEquals(configDirectory, root)
+                && !IsExcludedPath(root, configDirectory))
+            {
+                yield return configDirectory;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Adds to <paramref name="acc"/> the package sources from <paramref name="settings"/>
+    /// whose declaring config lives under <paramref name="repoRoot"/>, with their enabled
+    /// state resolved solely from repo-declared <c>&lt;disabledPackageSources&gt;</c> — the
+    /// merged <see cref="PackageSource.IsEnabled"/> flag is deliberately ignored so an
+    /// auditor's machine-local <c>disabledPackageSources</c> cannot suppress a finding.
+    /// </summary>
+    private static void AddUnderRootSources(
+        ISettings settings,
+        string repoRoot,
+        Dictionary<(string Name, string Source), PackageSource> acc)
+    {
         var repoSourceNames = UnderRootKeys(settings, "packageSources", repoRoot);
+        if (repoSourceNames.Count == 0)
+        {
+            return;
+        }
 
-        // Enabled/disabled is resolved solely from repo-declared <disabledPackageSources>:
-        // the merged PackageSource.IsEnabled flag also reflects the auditor's machine-local
-        // disabledPackageSources, which would let a local disable suppress a repo-declared
-        // untrusted source on one machine yet flag it in CI (non-reproducible verdict).
         var repoDisabledNames = UnderRootKeys(settings, "disabledPackageSources", repoRoot);
 
-        var sources = new PackageSourceProvider(settings)
-            .LoadPackageSources()
-            .Where(source => repoSourceNames.Contains(source.Name))
-            .Select(source =>
+        foreach (var source in new PackageSourceProvider(settings).LoadPackageSources())
+        {
+            if (!repoSourceNames.Contains(source.Name))
             {
-                source.IsEnabled = !repoDisabledNames.Contains(source.Name);
-                return source;
-            });
+                continue;
+            }
 
-        return Check(sources, allowedHosts);
+            source.IsEnabled = !repoDisabledNames.Contains(source.Name);
+            acc[(source.Name, source.Source)] = source;
+        }
     }
+
+    private static bool IsExcludedPath(string root, string candidate)
+    {
+        var relative = Path.GetRelativePath(root, candidate);
+        return relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .Any(segment => segment is "bin" or "obj" or ".git");
+    }
+
+    private static bool PathEquals(string a, string b) =>
+        string.Equals(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(a)),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(b)),
+            StringComparison.Ordinal);
 
     /// <summary>
     /// Keys of the items in section <paramref name="sectionName"/> whose declaring config

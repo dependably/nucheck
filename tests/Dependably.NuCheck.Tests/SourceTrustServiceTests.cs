@@ -158,6 +158,54 @@ public class SourceTrustServiceTests : IDisposable
         Assert.Empty(SourceTrustService.Check(sources, []));
     }
 
+    // --- Ticket 32: nuget.config in a subdirectory of the scan root ---------------------
+
+    [Fact]
+    public void Nuget_config_in_subdirectory_declaring_untrusted_host_produces_one_finding()
+    {
+        // The repo keeps its source declaration in a child dir (common: src/nuget.config).
+        // An upward-only walk from the repo root never loads it, so the untrusted feed used
+        // for real restores in that subtree audits clean. It must be discovered.
+        var dir = NewRepo(nugetConfigXml: null);
+        var srcDir = Path.Combine(dir, "src");
+        Directory.CreateDirectory(srcDir);
+        File.WriteAllText(Path.Combine(srcDir, "nuget.config"), """
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources>
+            <clear />
+            <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+            <add key="acme" value="https://nuget.pkg.github.com/acme/index.json" />
+          </packageSources>
+        </configuration>
+        """);
+
+        var finding = Assert.Single(SourceTrustService.Check(dir, []));
+        Assert.Equal("nuget.pkg.github.com", finding.Host);
+        Assert.Equal("acme", finding.Source);
+    }
+
+    [Fact]
+    public void Nuget_config_under_bin_or_obj_is_not_discovered()
+    {
+        // Build output copies of nuget.config must not be scanned (avoids duplicate/spurious
+        // findings and matches how NuGet itself ignores bin/obj).
+        var dir = NewRepo(nugetConfigXml: null);
+        var objDir = Path.Combine(dir, "src", "obj");
+        Directory.CreateDirectory(objDir);
+        File.WriteAllText(Path.Combine(objDir, "nuget.config"), """
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources>
+            <clear />
+            <add key="acme" value="https://nuget.pkg.github.com/acme/index.json" />
+          </packageSources>
+        </configuration>
+        """);
+
+        Assert.Empty(SourceTrustService.Check(dir, []));
+    }
+
     // --- Ticket 35: UNC / file:// network-share feeds -----------------------------------
 
     [Fact]
