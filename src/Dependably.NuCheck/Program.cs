@@ -208,7 +208,7 @@ Arguments:
 Options:
   --source <name>            Advisory source: github (default), osv
   --format <type>            Output format: human, table, json (default: human)
-  --severity <level>         Filter by severity: critical, high, moderate, low
+  --severity <level>         Filter by severity: critical, high, moderate, low, info
   --config <path>            Path to a .dependably-check config file. When omitted, the
                              file is discovered by walking up from the audited file's directory.
   --fail-on <key>=<value>    CI gate (repeatable). Without it, ANY vulnerability or policy

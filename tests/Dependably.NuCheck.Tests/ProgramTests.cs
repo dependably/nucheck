@@ -147,6 +147,42 @@ public class ProgramTests : IDisposable
     }
 
     [Fact]
+    public void Severity_filter_high_moderate_only_summary_shows_hidden_count_not_all_secure()
+    {
+        // Regression (#1): when --severity high hides ALL advisories (e.g. only moderate
+        // findings) but GateTrips still fires on the unfiltered result, the summary formatter
+        // must NOT print "all secure" — that contradicts exit 1.  It must instead report how
+        // many advisories were hidden by the display filter.
+        var path = WritePackagesConfig("Moderate.Pkg", "1.5.0");
+        var source = Source(
+            ("Moderate.Pkg", new Advisory("Meh", "moderate", ">= 1.0.0, < 2.0.0", ["u"])));
+
+        // Default format is "human" (SummaryResultFormatter).
+        var (exit, output, _) = Run([path, "--severity", "high"], _ => source);
+
+        Assert.Equal(1, exit);
+        Assert.DoesNotContain("All packages are secure", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("hidden by --severity high", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("1 advisory(ies)", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Severity_filter_high_moderate_only_table_shows_hidden_count_not_all_secure()
+    {
+        // Same scenario via --format table (TableResultFormatter).
+        var path = WritePackagesConfig("Moderate.Pkg", "1.5.0");
+        var source = Source(
+            ("Moderate.Pkg", new Advisory("Meh", "moderate", ">= 1.0.0, < 2.0.0", ["u"])));
+
+        var (exit, output, _) = Run([path, "--severity", "high", "--format", "table"], _ => source);
+
+        Assert.Equal(1, exit);
+        Assert.DoesNotContain("All packages are secure", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("hidden by --severity high", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("1 advisory(ies)", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Severity_filter_high_mixed_critical_and_moderate_shows_only_critical()
     {
         // Mixed partial-failure scenario: one critical advisory and one moderate advisory on

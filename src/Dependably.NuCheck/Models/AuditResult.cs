@@ -45,6 +45,21 @@ public sealed class AuditResult
     public int VulnerabilityCount => Vulnerabilities.Sum(v => v.Advisories.Count);
 
     /// <summary>
+    /// Count of advisories hidden by a --severity display filter. Zero when no filter is
+    /// active or when all advisories pass the filter. Populated by
+    /// <see cref="FilterBySeverity"/>; used by formatters so they do not print "all secure"
+    /// when the filtered display shows zero advisories but hidden findings exist.
+    /// </summary>
+    public int HiddenAdvisoryCount { get; init; }
+
+    /// <summary>
+    /// The normalised severity level from --severity, or null when no filter is active.
+    /// Populated by <see cref="FilterBySeverity"/>; used by formatters to name the filter
+    /// level in the "hidden by --severity" note.
+    /// </summary>
+    public string? DisplaySeverityFilter { get; init; }
+
+    /// <summary>
     /// Number of distinct vulnerable packages. This differs from
     /// <see cref="VulnerabilityCount"/> (which counts advisories): one package can carry
     /// several advisories. Every formatter reports BOTH so no headline contradicts another.
@@ -169,12 +184,15 @@ public sealed class AuditResult
             .Where(v => v.Advisories.Count > 0)
             .ToList();
 
+        var filteredAdvisoryCount = filtered.Sum(v => v.Advisories.Count);
         return new AuditResult
         {
             TotalPackages = TotalPackages,
             Vulnerabilities = filtered,
             PolicyFindings = PolicyFindings,
             UnusedPackages = UnusedPackages,
+            HiddenAdvisoryCount = VulnerabilityCount - filteredAdvisoryCount,
+            DisplaySeverityFilter = Severity.Normalize(severity),
         };
     }
 }
