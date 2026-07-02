@@ -76,31 +76,45 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
     /// <summary>Parse an OSV <c>/v1/query</c> response into advisories for the given package.</summary>
     public static IReadOnlyList<Advisory> ParseOsv(string body, string packageId)
     {
-        using var document = JsonDocument.Parse(body);
-        if (!document.RootElement.TryGetProperty("vulns", out var vulns) || vulns.ValueKind != JsonValueKind.Array)
+        JsonDocument document;
+        try
         {
-            return [];
+            document = JsonDocument.Parse(body);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                $"Failed to parse OSV response for '{packageId}': {ex.Message}. " +
+                $"Body (first 200 chars): {body[..Math.Min(200, body.Length)]}", ex);
         }
 
-        var advisories = new List<Advisory>();
-        foreach (var vuln in vulns.EnumerateArray())
+        using (document)
         {
-            var id = GetString(vuln, "id");
-            var severity = SeverityFor(vuln);
-            var summary = BuildSummary(id, vuln);
-            var references = ExtractReferences(id, vuln);
-            var advisoryId = ExtractAdvisoryId(id, vuln);
-            var cve = ExtractCve(vuln);
-
-            // Each affected interval carries its own "fixed" event, so the patched
-            // version is tracked alongside the comparator it belongs to.
-            foreach (var (range, fixedVersion) in AffectedRanges(vuln, packageId))
+            if (!document.RootElement.TryGetProperty("vulns", out var vulns) || vulns.ValueKind != JsonValueKind.Array)
             {
-                advisories.Add(new Advisory(summary, severity, range, references, advisoryId, cve, fixedVersion));
+                return [];
             }
-        }
 
-        return advisories;
+            var advisories = new List<Advisory>();
+            foreach (var vuln in vulns.EnumerateArray())
+            {
+                var id = GetString(vuln, "id");
+                var severity = SeverityFor(vuln);
+                var summary = BuildSummary(id, vuln);
+                var references = ExtractReferences(id, vuln);
+                var advisoryId = ExtractAdvisoryId(id, vuln);
+                var cve = ExtractCve(vuln);
+
+                // Each affected interval carries its own "fixed" event, so the patched
+                // version is tracked alongside the comparator it belongs to.
+                foreach (var (range, fixedVersion) in AffectedRanges(vuln, packageId))
+                {
+                    advisories.Add(new Advisory(summary, severity, range, references, advisoryId, cve, fixedVersion));
+                }
+            }
+
+            return advisories;
+        }
     }
 
     /// <summary>

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using NuGet.Versioning;
 using Dependably.NuCheck.Services;
 using Dependably.NuCheck.Tests.Fakes;
@@ -284,6 +285,33 @@ public class OsvAdvisoryClientTests
         Assert.Equal(2, advisories.Count);
         Assert.Equal(">= 1.0.0, < 1.5.0", advisories[0].VulnerableVersionRange);
         Assert.Equal(">= 2.0.0, < 2.5.0", advisories[1].VulnerableVersionRange);
+    }
+
+    // --- Ticket 6: guard ParseOsv against malformed JSON bodies --------------------------
+
+    [Fact]
+    public void ParseOsv_throws_informative_exception_for_malformed_json()
+    {
+        // Old code: raw JsonException propagates with no package context.
+        // New code: wrapped as InvalidOperationException naming the package + body snippet.
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            OsvAdvisoryClient.ParseOsv("<html>not json</html>", "My.Pkg"));
+        Assert.Contains("My.Pkg", ex.Message);
+        Assert.IsAssignableFrom<JsonException>(ex.InnerException);
+    }
+
+    [Fact]
+    public async Task GetAdvisoriesAsync_wraps_malformed_json_as_InvalidOperationException()
+    {
+        // A 200 OK with an HTML body (e.g. from an intercepting proxy) must not surface
+        // a raw JsonException — it should be wrapped so the caller gets useful context.
+        var client = new OsvAdvisoryClient(
+            new HttpClient(new FakeHttpMessageHandler(HttpStatusCode.OK, "<html>proxy error</html>")));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.GetAdvisoriesAsync("My.Pkg"));
+        Assert.Contains("My.Pkg", ex.Message);
+        Assert.IsAssignableFrom<JsonException>(ex.InnerException);
     }
 
     private static Task NoDelay(TimeSpan _, CancellationToken __) => Task.CompletedTask;
