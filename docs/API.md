@@ -96,7 +96,11 @@ object with the six uniform core keys `tool` / `toolVersion` / `schemaVersion` (
   advisory data under `extra` (`package`, `installedVersion`, `fixedVersion`, `advisoryId`,
   `cve`, `vulnerableRange`, `references`);
 - untrusted sources → `category: "policy"` (`extra.host` / `extra.source`);
-- heuristic unused packages → `category: "unused"`, always `info`.
+- heuristic unused packages → `category: "unused"`, always `info`;
+- unverifiable ranges → `category: "unverifiable-range"`, always `info`, never fails the gate.
+  `extra` carries `package`, `vulnerableRange`, `advisoryId`, and `advisorySeverity` (the
+  advisory's own declared severity — may be `high` or `critical` even though the finding
+  itself is `info`). Investigate manually: the installed version could not be confirmed safe.
 
 ## Testing
 

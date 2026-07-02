@@ -146,8 +146,10 @@ public class SourceTrustServiceTests : IDisposable
     }
 
     [Fact]
-    public void Local_folder_source_is_ignored()
+    public void Local_folder_source_not_allowlisted_produces_one_finding()
     {
+        // Regression for #33: a repo-declared local folder feed is a supply-chain smuggling
+        // vector, so it must be flagged (fail-closed), not silently skipped.
         var localPath = Path.Combine(Path.GetTempPath(), "local-feed");
         var sources = new[]
         {
@@ -155,7 +157,250 @@ public class SourceTrustServiceTests : IDisposable
             new PackageSource("https://api.nuget.org/v3/index.json", "nuget.org"),
         };
 
-        Assert.Empty(SourceTrustService.Check(sources, []));
+        var finding = Assert.Single(SourceTrustService.Check(sources, []));
+        Assert.Equal("local", finding.Source);
+        Assert.Equal("error", finding.Severity);
+        Assert.Contains("local folder feed", finding.Message);
+    }
+
+    [Fact]
+    public void File_uri_source_not_allowlisted_produces_one_finding()
+    {
+        // Regression for #33: file:// feeds are local feeds too and must be flagged.
+        var sources = new[]
+        {
+            new PackageSource("file:///opt/evil-feed", "evil"),
+            new PackageSource("https://api.nuget.org/v3/index.json", "nuget.org"),
+        };
+
+        var finding = Assert.Single(SourceTrustService.Check(sources, []));
+        Assert.Equal("evil", finding.Source);
+        Assert.Equal("error", finding.Severity);
+    }
+
+    [Fact]
+    public void Allowlisted_local_folder_source_is_ignored()
+    {
+        // #33: an explicitly trusted local feed (matched by trailing path segment) passes.
+        var localPath = Path.Combine(Path.GetTempPath(), "local-feed");
+        var sources = new[]
+        {
+            new PackageSource(localPath, "local"),
+        };
+
+        Assert.Empty(SourceTrustService.Check(sources, [], ["local-feed"]));
+    }
+
+    [Fact]
+    public void Allowlisted_file_uri_source_is_ignored()
+    {
+        var sources = new[]
+        {
+            new PackageSource("file:///opt/mirror", "mirror"),
+        };
+
+        Assert.Empty(SourceTrustService.Check(sources, [], ["file:///opt/mirror"]));
+    }
+
+    [Fact]
+    public void Allowlist_does_not_match_a_different_similarly_named_feed()
+    {
+        // Guard against over-matching: "feed" must not allow "/tmp/myfeed".
+        var sources = new[]
+        {
+            new PackageSource("/tmp/myfeed", "local"),
+        };
+
+        Assert.Single(SourceTrustService.Check(sources, [], ["feed"]));
+    }
+
+    [Fact]
+    public void Repo_nuget_config_declaring_relative_local_feed_produces_one_finding()
+    {
+        // End-to-end for #33: a committed nuget.config pointing at a relative local folder.
+        var dir = NewRepo("""
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources>
+            <clear />
+            <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+            <add key="localfeed" value="./feeds" />
+          </packageSources>
+        </configuration>
+        """);
+
+        var finding = Assert.Single(SourceTrustService.Check(dir, []));
+        Assert.Equal("localfeed", finding.Source);
+        Assert.Equal("error", finding.Severity);
+    }
+
+    [Fact]
+    public void Repo_nuget_config_declaring_allowlisted_relative_local_feed_produces_no_findings()
+    {
+        var dir = NewRepo("""
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources>
+            <clear />
+            <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+            <add key="localfeed" value="./feeds" />
+          </packageSources>
+        </configuration>
+        """);
+
+        Assert.Empty(SourceTrustService.Check(dir, [], ["feeds"]));
+    }
+
+    [Fact]
+    public void Non_git_tree_with_parent_config_emits_visible_info_notice()
+    {
+        // Regression for #47: no .git boundary means parent-directory nuget.config is not
+        // audited (the source-trust check would otherwise fail open silently). We must at
+        // least surface a visible info finding naming the excluded config.
+        var outer = Path.Combine(Path.GetTempPath(), $"srctrust-nogit-{Guid.NewGuid():N}");
+        var inner = Path.Combine(outer, "src", "App");
+        Directory.CreateDirectory(inner);
+        _tempDirs.Add(outer);
+        File.WriteAllText(Path.Combine(outer, "nuget.config"), """
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources>
+            <clear />
+            <add key="evil" value="https://nuget.evil.example/v3/index.json" />
+          </packageSources>
+        </configuration>
+        """);
+
+        var findings = SourceTrustService.Check(inner, []);
+
+        var notice = Assert.Single(findings);
+        Assert.Equal("info", notice.Severity);
+        Assert.Equal("parent-config", notice.Source);
+        Assert.Contains("No repository boundary", notice.Message);
+    }
+
+    [Fact]
+    public void Git_tree_with_parent_config_does_not_emit_parent_notice()
+    {
+        // The notice is only for the non-git fail-open case: with a .git boundary, a parent
+        // config above the boundary is intentionally out of scope and produces no notice.
+        var repo = NewRepo(nugetConfigXml: null);
+        var inner = Path.Combine(repo, "src", "App");
+        Directory.CreateDirectory(inner);
+        File.WriteAllText(Path.Combine(repo, "nuget.config"), """
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources>
+            <clear />
+            <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+          </packageSources>
+        </configuration>
+        """);
+
+        // The repo-root config IS under the boundary, so it is audited normally (public host,
+        // no finding) and there is no parent-config notice.
+        Assert.Empty(SourceTrustService.Check(inner, []));
+    }
+
+    [Fact]
+    public void Local_folder_source_is_ignored()
+    {
+        // Backward-compat: with the feed allowlisted, the historical "ignored" behavior holds.
+        var localPath = Path.Combine(Path.GetTempPath(), "local-feed");
+        var sources = new[]
+        {
+            new PackageSource(localPath, "local"),
+            new PackageSource("https://api.nuget.org/v3/index.json", "nuget.org"),
+        };
+
+        Assert.Empty(SourceTrustService.Check(sources, [], ["local-feed"]));
+    }
+
+    [Fact]
+    public void Allowlist_local_path_entry_does_not_match_remote_host_file_uri()
+    {
+        // Regression for the #33 allowlist bypass: a file:// URI whose HOST names a remote
+        // machine is a network share, not a local folder. A plain local-path allowlist entry
+        // ("feeds") must NOT trust it, even though the trailing path segment happens to match.
+        var sources = new[]
+        {
+            new PackageSource("file://server/share/feeds", "evil"),
+        };
+
+        var finding = Assert.Single(SourceTrustService.Check(sources, [], ["feeds"]));
+        Assert.Equal("evil", finding.Source);
+        Assert.Equal("server", finding.Host);
+        Assert.Equal("error", finding.Severity);
+    }
+
+    [Fact]
+    public void Allowlist_local_path_entry_does_not_match_unc_path()
+    {
+        // Regression for the #33 allowlist bypass: a UNC path (\\server\share\feeds) points at
+        // a remote share. A bare local-path allowlist entry ("feeds") must NOT trust it.
+        var sources = new[]
+        {
+            new PackageSource(@"\\server\share\feeds", "evil"),
+        };
+
+        var finding = Assert.Single(SourceTrustService.Check(sources, [], ["feeds"]));
+        Assert.Equal("evil", finding.Source);
+        Assert.Equal("server", finding.Host);
+        Assert.Equal("error", finding.Severity);
+    }
+
+    [Fact]
+    public void Exact_allowlist_entry_permits_remote_host_file_uri()
+    {
+        // The escape hatch: a remote-host file feed is trusted only by an EXACT allowlist
+        // match (separator/trailing-slash normalised), never by a trailing-segment match.
+        var sources = new[]
+        {
+            new PackageSource("file://server/share/feeds", "mirror"),
+        };
+
+        Assert.Empty(SourceTrustService.Check(sources, [], ["file://server/share/feeds"]));
+    }
+
+    [Fact]
+    public void Anchored_relative_allowlist_entry_does_not_match_same_named_feed_elsewhere()
+    {
+        // Regression for the #33 unanchored-entry bypass: "./local-packages" must resolve
+        // against the repo root and grant ONLY <repo>/local-packages, not a same-named feed
+        // sitting elsewhere in the tree (here <repo>/evil/local-packages).
+        var dir = NewRepo("""
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources>
+            <clear />
+            <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+            <add key="localfeed" value="./evil/local-packages" />
+          </packageSources>
+        </configuration>
+        """);
+
+        var finding = Assert.Single(SourceTrustService.Check(dir, [], ["./local-packages"]));
+        Assert.Equal("localfeed", finding.Source);
+        Assert.Equal("error", finding.Severity);
+    }
+
+    [Fact]
+    public void Anchored_relative_allowlist_entry_matches_approved_location()
+    {
+        // The approved location DOES pass: "./local-packages" resolved against the repo root
+        // equals the feed's resolved absolute path.
+        var dir = NewRepo("""
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources>
+            <clear />
+            <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+            <add key="localfeed" value="./local-packages" />
+          </packageSources>
+        </configuration>
+        """);
+
+        Assert.Empty(SourceTrustService.Check(dir, [], ["./local-packages"]));
     }
 
     // --- Ticket 32: nuget.config in a subdirectory of the scan root ---------------------

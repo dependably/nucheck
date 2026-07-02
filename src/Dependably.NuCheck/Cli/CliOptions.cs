@@ -8,8 +8,8 @@ public sealed class CliOptions
 {
     private static readonly Dictionary<string, Action<CliOptions, string>> ValueFlags = new(StringComparer.Ordinal)
     {
-        ["--format"] = (o, v) => o.Format = v,
-        ["--severity"] = (o, v) => o.Severity = v,
+        ["--format"] = (o, v) => o.ApplyFormat(v),
+        ["--severity"] = (o, v) => o.ApplySeverity(v),
         ["--source"] = (o, v) => o.Source = v,
         ["--config"] = (o, v) => o.ConfigPath = v,
         ["--fail-on"] = (o, v) => o.ApplyFailOn(v),
@@ -36,7 +36,7 @@ public sealed class CliOptions
 
     /// <summary>
     /// Explicit path to a <c>.dependably-check</c> config file. When null, the file is
-    /// discovered by walking up from the current directory.
+    /// discovered by walking up from the audited file's directory.
     /// </summary>
     public string? ConfigPath { get; private set; }
 
@@ -66,7 +66,7 @@ public sealed class CliOptions
     /// <summary>
     /// A usage error produced while parsing (e.g. an unknown option), or null when the
     /// arguments parsed cleanly. The first error wins. <see cref="Program"/> routes a
-    /// non-null value through the usage-error path (message to stderr, help, exit 1).
+    /// non-null value through the usage-error path (message to stderr, help, exit 2).
     /// </summary>
     public string? Error { get; private set; }
 
@@ -85,6 +85,10 @@ public sealed class CliOptions
                 {
                     setValue(options, queue.Dequeue());
                 }
+                else
+                {
+                    options.Error ??= $"option '{arg}' requires a value";
+                }
             }
             else if (BoolFlags.TryGetValue(arg, out var setBool))
             {
@@ -100,9 +104,50 @@ public sealed class CliOptions
             {
                 options.FilePath = arg;
             }
+            else
+            {
+                options.Error ??= $"unexpected argument: '{arg}'";
+            }
         }
 
         return options;
+    }
+
+    /// <summary>
+    /// Validate and store the <c>--format</c> value. Accepts the three recognised
+    /// tokens (<c>human</c>, <c>table</c>, <c>json</c>) case-insensitively after
+    /// trimming; rejects anything else as a usage error so a typo like
+    /// <c>--format jsonl</c> does not silently produce human-readable prose and
+    /// break a downstream JSON parser that expected the schema-v1 envelope.
+    /// </summary>
+    private void ApplyFormat(string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant();
+        if (!Output.FormatterFactory.ValidFormats.Contains(normalized))
+        {
+            Error ??= $"invalid --format '{value}': use {string.Join(", ", Output.FormatterFactory.ValidFormats)}";
+            return;
+        }
+
+        Format = normalized;
+    }
+
+    /// <summary>
+    /// Validate and store the <c>--severity</c> display-filter value. Accepts the five
+    /// ladder words plus <c>medium</c> as an alias for <c>moderate</c>; rejects anything
+    /// else as a usage error so a typo like <c>--severity foo</c> does not silently
+    /// suppress all output.
+    /// </summary>
+    private void ApplySeverity(string value)
+    {
+        var level = Models.Severity.ParseLevel(value);
+        if (level is null)
+        {
+            Error ??= $"invalid --severity '{value}': use critical, high, moderate, low, or info";
+            return;
+        }
+
+        Severity = level;
     }
 
     /// <summary>

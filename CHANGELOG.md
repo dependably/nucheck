@@ -6,6 +6,38 @@ All notable changes to `nucheck` are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **The "✓ All packages are secure" line can no longer print beside a non-zero exit.** The
+  `human` and `table` formatters now decide the all-clear checkmark from the real process
+  exit code (and the presence of any policy finding), not just from the error-severity policy
+  count. Previously an `info`-severity policy finding gated by `--fail-on severity=info` (such
+  as the non-git parent-config notice) exited 1 while the output still claimed success.
+
+### Security
+
+- **Repo-declared local folder feeds are now fail-closed (BREAKING default-gate change).**
+  The source-trust check previously ignored local folder feeds; it now reports every enabled
+  repo-declared local feed — a relative path, an absolute path, or a `file://` URI — as a
+  policy **error** unless its path is listed in the new `allowedLocalFeeds` allowlist
+  (`common` ∪ `nuget` sections of `.dependably-check`). A committed folder feed can serve
+  tampered `.nupkg` files that a restore honours without touching any registry, so trusting
+  it must be an explicit, reviewed decision. Repos that declare a local feed will now fail CI
+  until the feed is allowlisted.
+- **Hardened `allowedLocalFeeds` against two allowlist bypasses.** (1) Entries prefixed with
+  `./` (or `../`) are anchored to the repo root and matched by canonical absolute path, so
+  `./local-packages` grants only `<repo>/local-packages` and never a same-named feed elsewhere
+  in the tree (bare-name entries keep the looser trailing-segment match). (2) A remote-host
+  `file://server/share/...` URI or a UNC path (`\\server\share\...`) is a network share, not a
+  local folder, and can no longer be satisfied by a plain local-path entry: such a feed is
+  flagged unless an allowlist entry names its **exact** full path. This closes a path where a
+  malicious `nuget.config` edit could redirect an "allowlisted local feed" to an
+  attacker-controlled remote share.
+- **Non-git checkouts surface unaudited parent `nuget.config` (#47).** When no repository
+  boundary (`.git`) can be located, package sources declared in parent directories are out of
+  audit scope even though a restore would still honour them; `nucheck` now emits a visible
+  `info` finding naming those excluded config files instead of silently failing open.
+
 ### Changed
 
 - **Renamed to `Dependably.NuCheck` (command `nucheck`).** The NuGet package id changes
@@ -26,7 +58,26 @@ All notable changes to `nucheck` are documented here. The format is based on
   severities map onto it (`medium`→`moderate`, `unknown`→`info`; the policy word `error`→`high`).
   The `human` and `table` outputs print the ladder words too.
 - **`--format` token renamed `summary` → `human`** (the default). `table` and `json` are
-  unchanged. Any unrecognised token still falls back to the human formatter.
+  unchanged. **Breaking:** an unrecognised `--format` token is now a usage error (exit 2);
+  previously it silently fell back to the human formatter. Scripts relying on the silent
+  fallback must be updated to pass a valid token (`human`, `table`, or `json`).
+- **Breaking:** an unrecognised `--severity` token is now a usage error (exit 2); previously
+  it may have silently passed through. Valid levels are `critical`, `high`, `moderate`,
+  `low`, `info`.
+- **`--severity` filter emits a qualified message when no advisories match.** When zero
+  advisories match the active `--severity` filter (but other-severity advisories may still
+  trip the exit-code gate), the "all packages are secure" message is replaced with
+  "No advisories matching severity '&lt;level&gt;' (others may exist — see exit code)" in both
+  the `human` and `table` formats so the display never contradicts a non-zero exit code.
+- **Advisory text is sanitized against control-character injection (#34).** ANSI escape
+  sequences, carriage returns, and other C0/C1 control characters in advisory fields
+  (summary, advisory id, CVE, fixed version, source-trust host/message) are replaced with
+  spaces before they reach any output formatter, preventing terminal-escape injection from
+  a malicious advisory payload.
+- **`human` format suppresses the "all packages are secure" checkmark when policy errors
+  are present (#43).** When vulnerabilities are zero but a source-trust policy error trips
+  the gate (exit 1), the human (summary) formatter now omits the misleading checkmark,
+  matching the existing behaviour of the `table` formatter.
 
 ### Added
 
