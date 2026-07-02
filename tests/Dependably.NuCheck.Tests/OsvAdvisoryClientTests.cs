@@ -470,7 +470,7 @@ public class OsvAdvisoryClientTests
         var ex = Assert.Throws<InvalidOperationException>(() =>
             OsvAdvisoryClient.ParseOsv("<html>not json</html>", "My.Pkg"));
         Assert.Contains("My.Pkg", ex.Message);
-        Assert.IsAssignableFrom<JsonException>(ex.InnerException);
+        Assert.IsType<JsonException>(ex.InnerException, exactMatch: false);
     }
 
     [Fact]
@@ -484,7 +484,7 @@ public class OsvAdvisoryClientTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             client.GetAdvisoriesAsync("My.Pkg"));
         Assert.Contains("My.Pkg", ex.Message);
-        Assert.IsAssignableFrom<JsonException>(ex.InnerException);
+        Assert.IsType<JsonException>(ex.InnerException, exactMatch: false);
     }
 
     private static Task NoDelay(TimeSpan _, CancellationToken __) => Task.CompletedTask;

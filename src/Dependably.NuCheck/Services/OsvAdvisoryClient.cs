@@ -509,7 +509,8 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
         }
 
         var scopeChanged = s.Equals("C", StringComparison.OrdinalIgnoreCase);
-        score = CvssV3BaseScore(av, ac, pr, ui, c, i, a, scopeChanged);
+        var iss = 1 - ((1 - ImpactWeight(c)) * (1 - ImpactWeight(i)) * (1 - ImpactWeight(a)));
+        score = CvssV3BaseScore(av, ac, pr, ui, iss, scopeChanged);
         return true;
     }
 
@@ -529,9 +530,8 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
     }
 
     private static double CvssV3BaseScore(
-        string av, string ac, string pr, string ui, string c, string i, string a, bool scopeChanged)
+        string av, string ac, string pr, string ui, double iss, bool scopeChanged)
     {
-        var iss = 1 - ((1 - ImpactWeight(c)) * (1 - ImpactWeight(i)) * (1 - ImpactWeight(a)));
         var impact = scopeChanged
             ? (7.52 * (iss - 0.029)) - (3.25 * Math.Pow(iss - 0.02, 15))
             : 6.42 * iss;
