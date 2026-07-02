@@ -323,6 +323,168 @@ public class PackageFileReaderTests : IDisposable
         Assert.Equal("3.1.0", package.Version.ToString());
     }
 
+    // ---- #13 / #50 (consolidated): lock-file multi-target deduplication ---------
+
+    [Fact]
+    public void Read_deduplicates_same_package_version_across_lock_file_targets()
+    {
+        // Same id + same resolved version in net6.0 and net8.0 → exactly 1 PackageRef.
+        var path = WriteTemp(".json", """
+{
+  "version": 1,
+  "dependencies": {
+    "net6.0": {
+      "Newtonsoft.Json": { "type": "Direct", "requested": "[13.0.1, )", "resolved": "13.0.1", "contentHash": "abc" }
+    },
+    "net8.0": {
+      "Newtonsoft.Json": { "type": "Direct", "requested": "[13.0.1, )", "resolved": "13.0.1", "contentHash": "abc" }
+    }
+  }
+}
+""");
+
+        var packages = PackageFileReader.Read(path);
+
+        Assert.Single(packages);
+        Assert.Equal("Newtonsoft.Json", packages[0].Id);
+        Assert.Equal("13.0.1", packages[0].Version.ToString());
+    }
+
+    [Fact]
+    public void Read_retains_both_entries_when_resolved_versions_differ_across_targets()
+    {
+        // Same id but different resolved versions across targets → 2 PackageRefs (both auditable).
+        var path = WriteTemp(".json", """
+{
+  "version": 1,
+  "dependencies": {
+    "net6.0": {
+      "Serilog": { "type": "Direct", "requested": "[3.0.0, )", "resolved": "3.0.0", "contentHash": "x1" }
+    },
+    "net8.0": {
+      "Serilog": { "type": "Direct", "requested": "[4.0.0, )", "resolved": "4.0.0", "contentHash": "x2" }
+    }
+  }
+}
+""");
+
+        var packages = PackageFileReader.Read(path);
+
+        Assert.Equal(2, packages.Count);
+        Assert.Contains(packages, p => p.Id == "Serilog" && p.Version.ToString() == "3.0.0");
+        Assert.Contains(packages, p => p.Id == "Serilog" && p.Version.ToString() == "4.0.0");
+    }
+
+    // ---- #49 × #26: duplicate-id with a range + an exact version audits BOTH -----
+    // Pre-#26 these collapsed to the exact version (range's lower bound dropped). #26
+    // deliberately audits every DISTINCT resolved version so a vulnerable lower bound is
+    // never masked by an exact pin — the range "[1.0.0,)" and the exact "1.2.3" resolve to
+    // different versions (1.0.0 vs 1.2.3), so both are now audited. (An exact and a range
+    // that resolve to the SAME version still collapse — see
+    // Read_collapses_exact_and_range_that_resolve_to_the_same_version.)
+
+    [Fact]
+    public void Read_audits_both_range_lower_bound_and_exact_when_range_declared_first()
+    {
+        var path = WriteTemp(".csproj", """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="X" Version="[1.0.0,)" />
+    <PackageReference Include="x" Version="1.2.3" />
+  </ItemGroup>
+</Project>
+""");
+
+        var packages = PackageFileReader.Read(path);
+
+        Assert.Equal(2, packages.Count);
+        Assert.Contains(packages, p => p.Version.ToString() == "1.0.0");
+        Assert.Contains(packages, p => p.Version.ToString() == "1.2.3");
+    }
+
+    [Fact]
+    public void Read_audits_both_range_lower_bound_and_exact_when_exact_declared_first()
+    {
+        var path = WriteTemp(".csproj", """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="X" Version="1.2.3" />
+    <PackageReference Include="x" Version="[1.0.0,)" />
+  </ItemGroup>
+</Project>
+""");
+
+        var packages = PackageFileReader.Read(path);
+
+        Assert.Equal(2, packages.Count);
+        Assert.Contains(packages, p => p.Version.ToString() == "1.0.0");
+        Assert.Contains(packages, p => p.Version.ToString() == "1.2.3");
+    }
+
+    // ---- #51 × #26: file-local <PackageVersion> is UNIONED with Directory.Packages.props -----
+
+    [Fact]
+    public void Read_audits_both_file_local_and_central_package_version()
+    {
+        // Directory.Packages.props declares X at 1.0.0; the csproj declares a file-local
+        // <PackageVersion Include="X" Version="2.0.0" /> plus a versionless
+        // <PackageReference Include="X" />. Pre-#26 the file-local declaration OVERRODE the
+        // central one (single 2.0.0). #26 does not evaluate MSBuild override precedence, so
+        // it audits BOTH declared versions — a vulnerable central pin (1.0.0) must not be
+        // silently masked by a file-local override. Auditing the superset is fail-safe.
+        var dir = NewTempDir();
+        File.WriteAllText(Path.Combine(dir, "Directory.Packages.props"), """
+<Project>
+  <ItemGroup>
+    <PackageVersion Include="X" Version="1.0.0" />
+  </ItemGroup>
+</Project>
+""");
+        var csproj = Path.Combine(dir, "app.csproj");
+        File.WriteAllText(csproj, """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageVersion Include="X" Version="2.0.0" />
+    <PackageReference Include="X" />
+  </ItemGroup>
+</Project>
+""");
+
+        var packages = PackageFileReader.Read(csproj);
+
+        Assert.Equal(2, packages.Count);
+        Assert.Contains(packages, p => p.Id == "X" && p.Version.ToString() == "1.0.0");
+        Assert.Contains(packages, p => p.Id == "X" && p.Version.ToString() == "2.0.0");
+    }
+
+    [Fact]
+    public void Read_explicit_version_attribute_beats_central_package_version()
+    {
+        // Directory.Packages.props declares X at 1.0.0.
+        // The csproj PackageReference has an explicit Version="3.0.0" attribute (VersionOverride style).
+        // The explicit attribute must win → resolved version is 3.0.0.
+        var dir = NewTempDir();
+        File.WriteAllText(Path.Combine(dir, "Directory.Packages.props"), """
+<Project>
+  <ItemGroup>
+    <PackageVersion Include="X" Version="1.0.0" />
+  </ItemGroup>
+</Project>
+""");
+        var csproj = Path.Combine(dir, "app.csproj");
+        File.WriteAllText(csproj, """
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="X" Version="3.0.0" />
+  </ItemGroup>
+</Project>
+""");
+
+        var package = Assert.Single(PackageFileReader.Read(csproj));
+        Assert.Equal("X", package.Id);
+        Assert.Equal("3.0.0", package.Version.ToString());
+    }
+
     [Fact]
     public void Read_audits_every_distinct_version_of_a_duplicated_packagereference()
     {
