@@ -6,6 +6,27 @@ All notable changes to `nucheck` are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **First run works without a token.** When `GITHUB_TOKEN` is unset and no `--source` is
+  given, `nucheck` now falls back to OSV.dev automatically with a one-line stderr notice
+  instead of exiting `2`. The hard error is reserved for an explicit `--source github` with
+  no token. (moonlitlabs/nucheck#57)
+- **Cleaner unused-package output.** Each possibly-unused finding is reduced to the package
+  id (`• AWSSDK.S3 — not referenced in any .cs file`); the heuristic disclaimer and the
+  `ignoreUnusedPackages` hint are printed once as a section footer instead of on every line.
+  The caveat now names the real false-positive classes (namespace ≠ package ID,
+  dependency-injection extension methods, transitive/native runtime assets).
+  (moonlitlabs/nucheck#57)
+
+### Fixed
+
+- **Fewer unused-package false positives.** Native/runtime-asset packages that carry no
+  managed namespace are now suppressed automatically: ids following the NuGet `runtime.*` /
+  `*.runtime.*` convention and the `SQLitePCLRaw.lib.*` native bundles. A full
+  assembly/namespace resolution from the nupkg (to also catch namespace-differs-from-id and
+  DI-extension-method usage) remains deferred. (moonlitlabs/nucheck#57)
+
 ## [2.0.0] - 2026-07-02
 
 ### Added

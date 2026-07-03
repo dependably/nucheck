@@ -383,6 +383,95 @@ public class UnusedPackageServiceTests
         }
     }
 
+    // --- #57: native/runtime-asset packages have no managed namespace — never flag them -----
+
+    [Fact]
+    public void Disk_SQLitePCLRaw_lib_native_asset_is_not_flagged()
+    {
+        // SQLitePCLRaw.lib.e_sqlite3 ships a native binary with no managed namespace, so it
+        // never appears in a `using` directive. Before #57 it was a guaranteed false positive.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.6" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            File.WriteAllText(Path.Combine(dir, "Class.cs"), "public class C { }");
+
+            var findings = UnusedPackageService.Check(dir, []);
+            Assert.Empty(findings);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_runtime_convention_native_asset_is_not_flagged()
+    {
+        // NuGet runtime packages (id starting with "runtime." or containing ".runtime.")
+        // carry platform binaries with no managed namespace.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="runtime.linux-x64.runtime.native.System.IO.Ports" Version="7.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            File.WriteAllText(Path.Combine(dir, "Class.cs"), "public class C { }");
+
+            var findings = UnusedPackageService.Check(dir, []);
+            Assert.Empty(findings);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_runtime_asset_partial_failure_suppressed_vs_genuinely_unused()
+    {
+        // Mixed batch: a native runtime-asset package (suppressed), a used package, and a
+        // genuinely-unused runtime package. Only the genuinely-unused non-asset package fires.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.6" />
+                    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+                    <PackageReference Include="Serilog" Version="3.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // Only Newtonsoft.Json is used; SQLitePCLRaw.lib.* is a native asset (suppressed);
+            // Serilog is genuinely unused.
+            File.WriteAllText(Path.Combine(dir, "Class.cs"), "using Newtonsoft.Json;");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            var finding = Assert.Single(findings);
+            Assert.Equal("Serilog", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     // --- Ticket #9: ExcludeAssets="runtime" must not suppress compile-available packages ---
 
     [Fact]

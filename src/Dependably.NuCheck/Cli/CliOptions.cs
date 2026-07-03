@@ -10,7 +10,7 @@ public sealed class CliOptions
     {
         ["--format"] = (o, v) => o.ApplyFormat(v),
         ["--severity"] = (o, v) => o.ApplySeverity(v),
-        ["--source"] = (o, v) => o.Source = v,
+        ["--source"] = (o, v) => o.ApplySource(v),
         ["--config"] = (o, v) => o.ConfigPath = v,
         ["--fail-on"] = (o, v) => o.ApplyFailOn(v),
     };
@@ -33,6 +33,13 @@ public sealed class CliOptions
 
     /// <summary>Advisory source: "github" (default, needs GITHUB_TOKEN) or "osv" (no token).</summary>
     public string Source { get; private set; } = "github";
+
+    /// <summary>
+    /// True when <c>--source</c> was passed explicitly on the command line. Distinguishes the
+    /// default "github" source from an explicit <c>--source github</c>: only the explicit form
+    /// hard-fails when <c>GITHUB_TOKEN</c> is unset; the default silently falls back to OSV.
+    /// </summary>
+    public bool SourceSpecified { get; private set; }
 
     /// <summary>
     /// Explicit path to a <c>.dependably-check</c> config file. When null, the file is
@@ -111,6 +118,18 @@ public sealed class CliOptions
         }
 
         return options;
+    }
+
+    /// <summary>
+    /// Store the <c>--source</c> value and record that it was set explicitly. The value is
+    /// validated later in <c>CreateSource</c> (github / osv); recording the explicit flag here
+    /// lets the default "github" source fall back to OSV when no <c>GITHUB_TOKEN</c> is present,
+    /// while an explicit <c>--source github</c> still hard-fails without a token.
+    /// </summary>
+    private void ApplySource(string value)
+    {
+        Source = value;
+        SourceSpecified = true;
     }
 
     /// <summary>

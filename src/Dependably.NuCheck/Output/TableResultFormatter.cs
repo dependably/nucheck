@@ -1,5 +1,6 @@
 using System.Text;
 using Dependably.NuCheck.Models;
+using Dependably.NuCheck.Services;
 
 namespace Dependably.NuCheck.Output;
 
@@ -167,10 +168,15 @@ public sealed class TableResultFormatter : IResultFormatter
 
         builder.AppendLine("-------------------");
         builder.AppendLine("POSSIBLY UNUSED PACKAGES (HEURISTIC — ADVISORY ONLY)");
+
+        // Only the variable datum per line (the package id); the heuristic caveat is a single
+        // footer below rather than a per-line repetition.
         foreach (var finding in result.UnusedPackages)
         {
-            builder.AppendLine($"   {TextSanitizer.Sanitize(finding.Id)}: {TextSanitizer.Sanitize(finding.Message)}");
+            builder.AppendLine($"   {TextSanitizer.Sanitize(finding.Id)} — not referenced in any .cs file");
         }
+
+        builder.AppendLine($"   {TextSanitizer.Sanitize(UnusedPackageService.HeuristicCaveat)}");
     }
 
     private static void AppendUnverifiableAdvisories(StringBuilder builder, AuditResult result)

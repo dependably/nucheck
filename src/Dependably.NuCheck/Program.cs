@@ -178,11 +178,24 @@ public static class Program
         }
     }
 
-    private static GitHubAdvisoryClient? CreateGitHubSource(CliOptions options)
+    private static IAdvisorySource? CreateGitHubSource(CliOptions options)
     {
         var token = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
         if (string.IsNullOrWhiteSpace(token))
         {
+            // No token AND the user did not ask for GitHub explicitly (the "github" source is
+            // just the default): fall back to the zero-credential OSV.dev source with a one-line
+            // stderr notice so a first run works out of the box instead of hard-failing.
+            if (!options.SourceSpecified)
+            {
+                Console.Error.WriteLine(
+                    "Notice: GITHUB_TOKEN is not set; falling back to OSV.dev (no token required). "
+                    + "Pass '--source github' to require the GitHub Advisory Database.");
+                return new OsvAdvisoryClient(new HttpClient());
+            }
+
+            // Explicit '--source github' with no token: this is a usage error, not a silent
+            // downgrade — the user asked specifically for the GitHub Advisory Database.
             Console.Error.WriteLine("Error: GITHUB_TOKEN environment variable is not set.");
             Console.Error.WriteLine("Create a token at https://github.com/settings/tokens and export GITHUB_TOKEN,");
             Console.Error.WriteLine("or use '--source osv' to query OSV.dev without a token.");
@@ -256,9 +269,13 @@ Policy checks:
 Unused-package check (advisory only, never exits non-zero):
   nucheck heuristically detects packages declared as direct <PackageReference>
   in *.csproj files under the scan root (the audited file's directory) whose
-  namespace does not appear in any .cs source file. Build-tool, analyzer, MSBuild-
-  task, and PrivateAssets packages commonly trigger false positives. Suppress
-  individual packages via ignoreUnusedPackages in .dependably-check:
+  namespace does not appear in any .cs source file. This is a heuristic and false
+  positives are common: a package's namespace often differs from its package ID,
+  packages consumed only via dependency-injection extension methods, and transitive
+  or native runtime assets legitimately show no direct namespace usage. Build-tool,
+  analyzer, MSBuild-task, PrivateAssets, and *.runtime.* / native-asset packages are
+  suppressed automatically; suppress anything else via ignoreUnusedPackages in
+  .dependably-check:
 
     {
       "common": { "ignoreUnusedPackages": ["StyleCop.Analyzers"] },
@@ -266,7 +283,9 @@ Unused-package check (advisory only, never exits non-zero):
     }
 
 Environment Variables:
-  GITHUB_TOKEN               GitHub personal access token (required for the github source)
+  GITHUB_TOKEN               GitHub personal access token for the github source. When unset
+                             and no --source is given, nucheck falls back to OSV.dev (which
+                             needs no token) with a one-line stderr notice.
 
 Examples:
   nucheck ./packages.config

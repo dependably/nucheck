@@ -42,6 +42,9 @@ nucheck <path-to-packages-file> [options]
 
 The GitHub source needs a token in `GITHUB_TOKEN` (create one at
 <https://github.com/settings/tokens> — no scopes required); `--source osv` needs none.
+On a first run with no `GITHUB_TOKEN` set and no `--source` given, `nucheck` falls back
+to OSV.dev automatically (printing a one-line notice to stderr) so it works out of the box;
+pass `--source github` to require the GitHub Advisory Database and fail if the token is missing.
 
 Point `nucheck` at a `packages.lock.json` for exact resolved versions. A `.csproj` /
 `.props` is parsed statically (no MSBuild evaluation) and audited at each dependency's

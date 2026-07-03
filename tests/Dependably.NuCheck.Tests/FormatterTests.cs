@@ -262,6 +262,50 @@ public class FormatterTests
         Assert.Contains("advisory only", output, StringComparison.OrdinalIgnoreCase);
     }
 
+    private static AuditResult MultipleUnusedResult() => new()
+    {
+        TotalPackages = 5,
+        Vulnerabilities = [],
+        PolicyFindings = [],
+        UnusedPackages =
+        [
+            new UnusedPackageFinding("AWSSDK.S3", "Package 'AWSSDK.S3' does not appear to be referenced in any .cs source file (heuristic)."),
+            new UnusedPackageFinding("Serilog", "Package 'Serilog' does not appear to be referenced in any .cs source file (heuristic)."),
+            new UnusedPackageFinding("BouncyCastle.Cryptography", "Package 'BouncyCastle.Cryptography' does not appear to be referenced in any .cs source file (heuristic)."),
+        ],
+    };
+
+    [Fact]
+    public void Summary_formatter_prints_heuristic_caveat_once_as_footer()
+    {
+        // #57: the suppression caveat must appear exactly ONCE (a section footer), not on
+        // every finding line, and each line must carry the variable datum (the package id).
+        var output = new SummaryResultFormatter().Format(MultipleUnusedResult());
+
+        var occurrences = output.Split("ignoreUnusedPackages").Length - 1;
+        Assert.Equal(1, occurrences);
+
+        // Every package id is still listed.
+        Assert.Contains("AWSSDK.S3", output);
+        Assert.Contains("Serilog", output);
+        Assert.Contains("BouncyCastle.Cryptography", output);
+
+        // Per-line variable form, not the old repeated long sentence.
+        Assert.Contains("AWSSDK.S3 — not referenced in any .cs file", output);
+        // The updated caveat names the real false-positive classes.
+        Assert.Contains("dependency-injection extension methods", output);
+    }
+
+    [Fact]
+    public void Table_formatter_prints_heuristic_caveat_once_as_footer()
+    {
+        var output = new TableResultFormatter().Format(MultipleUnusedResult());
+
+        var occurrences = output.Split("ignoreUnusedPackages").Length - 1;
+        Assert.Equal(1, occurrences);
+        Assert.Contains("AWSSDK.S3", output);
+    }
+
     [Fact]
     public void Json_renders_unused_package_as_info_finding()
     {
