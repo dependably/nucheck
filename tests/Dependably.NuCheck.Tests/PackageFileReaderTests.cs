@@ -705,7 +705,7 @@ public class PackageFileReaderTests : IDisposable
 
     private string WriteTemp(string extension, string content)
     {
-        var path = Path.Combine(Path.GetTempPath(), $"nugetcheck-{Guid.NewGuid():N}{extension}");
+        var path = Path.Combine(Path.GetTempPath(), $"nucheck-{Guid.NewGuid():N}{extension}");
         File.WriteAllText(path, content);
         _tempFiles.Add(path);
         return path;
@@ -713,7 +713,7 @@ public class PackageFileReaderTests : IDisposable
 
     private string NewTempDir()
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"nugetcheck-{Guid.NewGuid():N}");
+        var dir = Path.Combine(Path.GetTempPath(), $"nucheck-{Guid.NewGuid():N}");
         Directory.CreateDirectory(dir);
         _tempDirs.Add(dir);
         return dir;
