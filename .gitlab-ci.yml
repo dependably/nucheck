@@ -1,16 +1,16 @@
 # CI/CD pipeline for nucheck (.NET global tool)
 #
-# Flow:  test  →  pack  →  sbom  →  sbom-publish  →  publish (manual, default branch only)
-#                                                 ↘  mirror-to-github (manual, default branch only)
+# Flow:  test  →  pack  →  sbom  →  sbom-publish  →  publish (auto on v* tag; manual on main)
+#                                                 ↘  mirror-to-github (auto on v* tag; manual on main)
 #
 #   test            build + xUnit tests w/ coverage, format check, secret + SAST + Sonar scans
 #   pack            `dotnet pack` the .nupkg tool, kept as a job artifact
 #   sbom            generate a CycloneDX SBOM (every pipeline), kept as an artifact
 #   sbom-publish    upload the SBOM to Dependency-Track on the default branch
-#   publish         manual gate that pushes the .nupkg to the private NuGet feed
-#   mirror-to-github  manual gate (default branch only) that pushes main + tags to the
-#                     public GitHub mirror once all core jobs pass; GitHub Actions CI
-#                     (.github/workflows/ci.yml) then runs there
+#   publish         pushes the .nupkg to the private NuGet feed — auto on a v* tag, manual on main
+#   mirror-to-github  pushes main + tags to the public GitHub mirror — auto on a v* tag, manual
+#                     on main — once all core jobs pass; GitHub Actions CI then runs there
+#                     (.github/workflows/ci.yml), which is what publishes to nuget.org
 #
 # Required CI/CD variables (Settings → CI/CD → Variables), "Protected" + "Masked":
 #   REGISTRY_URL          private NuGet feed BASE host, e.g. https://nuget.example.com
@@ -241,9 +241,10 @@ sbom-publish:
         *) echo "SBOM upload failed (HTTP $status):" >&2; cat /tmp/bom.out >&2; exit 1;;
       esac
 
-# Push the .nupkg to the private NuGet feed. Manual approval, default branch only,
-# serialized. Bump <Version> in the csproj to release — pushing an existing version
-# fails unless the feed allows overwrite (--skip-duplicate tolerates re-runs).
+# Push the .nupkg to the private NuGet feed. Runs automatically at the end of a v* tag
+# pipeline (a tag is a release); on the default branch it stays a manual gate. Serialized.
+# Bump <Version> in the csproj to release — pushing an existing version fails unless the
+# feed allows overwrite (--skip-duplicate tolerates re-runs).
 # REGISTRY_URL is the feed's BASE host (e.g. https://nuget.example.com);
 # this job appends the v3 service-index path. dotnet nuget push needs the index.json
 # (it reads the PackagePublish resource from it) — given a bare host it would guess the
@@ -255,6 +256,11 @@ publish:
     - pack
   resource_group: publish
   rules:
+    # A v* tag is a release: publish automatically at the end of the tag pipeline.
+    - if: '$CI_COMMIT_TAG =~ /^v/'
+      when: on_success
+      allow_failure: false
+    # On the default branch, keep it a manual gate (publish without tagging if ever needed).
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
       when: manual
       allow_failure: false
@@ -264,14 +270,28 @@ publish:
         echo "ERROR: REGISTRY_URL and REGISTRY_KEY must be set as CI/CD variables." >&2
         exit 1
       fi
+    - |
+      # On a tag pipeline, the tag MUST equal the packed <Version>, or we would publish a
+      # mismatched version to the feed. (No-op on default-branch manual runs — CI_COMMIT_TAG
+      # is empty there.) Mirrors the tag<->version guard in the GitHub release job.
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        VER="$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' src/Dependably.NuCheck/Dependably.NuCheck.csproj | head -1)"
+        if [ "${CI_COMMIT_TAG#v}" != "$VER" ]; then
+          echo "ERROR: tag $CI_COMMIT_TAG does not match csproj <Version> $VER; refusing to publish." >&2
+          exit 1
+        fi
+      fi
     - PKG=$(ls artifacts/*.nupkg)
     # Build the v3 service index from the base host (tolerate a trailing slash).
     - FEED="${REGISTRY_URL%/}/nuget/v3/index.json"
     - echo "Publishing $PKG to $FEED"
     - dotnet nuget push "$PKG" --source "$FEED" --api-key "$REGISTRY_KEY" --skip-duplicate
 
-# Mirror the default branch (+ tags) to the public GitHub repo. Manual gate,
-# default branch only. `needs:` lists the deterministic gating jobs so this can
+# Mirror the default branch (+ tags) to the public GitHub repo. Runs automatically at the
+# end of a v* tag pipeline — carrying the tag to GitHub fires the GitHub Actions release
+# job (pack -> SLSA provenance -> nuget.org -> GitHub Release) — and stays a manual gate on
+# the default branch (to sync docs/CI between releases). `needs:` lists the deterministic
+# gating jobs so this can
 # only run after they pass (the advisory allow_failure scans — snyk-code,
 # sonarqube-check — and the side-effecting sbom-publish are intentionally not
 # blockers). It runs independently of the `publish` manual gate.
@@ -292,6 +312,12 @@ mirror-to-github:
     - job: pack
     - job: sbom
   rules:
+    # A v* tag is a release: mirror main + the tag to GitHub automatically, which fires the
+    # GitHub Actions release job (pack -> provenance -> nuget.org publish -> GitHub Release).
+    - if: '$CI_COMMIT_TAG =~ /^v/'
+      when: on_success
+      allow_failure: false
+    # On the default branch, keep it a manual gate (sync docs/CI to GitHub between releases).
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
       when: manual
       allow_failure: false
