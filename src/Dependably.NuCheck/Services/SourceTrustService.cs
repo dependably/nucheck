@@ -217,8 +217,11 @@ public static class SourceTrustService
     {
         var relative = Path.GetRelativePath(root, candidate);
         // Split on BOTH separators via an explicit array: `Split(char, char)` would bind the
-        // second char to the `int count` overload (splitting on one separator only).
-        return relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar])
+        // second char to the `int count` overload (splitting on one separator only). Pass
+        // StringSplitOptions.None so the call binds to the non-`params` Split(char[], options)
+        // overload, avoiding the ambiguous `params` resolution (S3220).
+        var separators = new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar };
+        return relative.Split(separators, StringSplitOptions.None)
             .Any(segment => segment is "bin" or "obj" or ".git");
     }
 

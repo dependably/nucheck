@@ -63,17 +63,43 @@ public class ProgramTests : IDisposable
     }
 
     [Fact]
-    public void Missing_token_exits_two()
+    public void Explicit_github_source_without_token_exits_two()
     {
         var original = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
         Environment.SetEnvironmentVariable("GITHUB_TOKEN", null);
         try
         {
-            // No factory -> Program tries to build the real GitHub source and stops on the
-            // missing token. A missing-credential operational error is exit 2, not 1.
-            var (exit, _, error) = Run(["whatever.config"], null);
+            // An EXPLICIT '--source github' with no token is a usage error, not a silent
+            // downgrade — the user asked specifically for the GitHub Advisory Database. exit 2.
+            var (exit, _, error) = Run(["--source", "github", "whatever.config"], null);
             Assert.Equal(2, exit);
             Assert.Contains("GITHUB_TOKEN", error);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GITHUB_TOKEN", original);
+        }
+    }
+
+    [Fact]
+    public void Missing_token_without_explicit_source_falls_back_to_osv_with_notice()
+    {
+        // Regression for #57: the default (implicit github) source with no GITHUB_TOKEN must
+        // NOT hard-fail. It falls back to OSV.dev with a one-line stderr notice so a first run
+        // works out of the box. Using a nonexistent manifest keeps the test off the network:
+        // the OSV client is constructed but the file read fails before any HTTP call, so we
+        // assert on the notice (and the ABSENCE of the old hard token error) rather than exit.
+        var original = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+        Environment.SetEnvironmentVariable("GITHUB_TOKEN", null);
+        try
+        {
+            var (_, _, error) = Run(["whatever.config"], null);
+
+            // New behaviour: a fallback notice mentioning OSV is printed to stderr...
+            Assert.Contains("OSV", error, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("falling back", error, StringComparison.OrdinalIgnoreCase);
+            // ...and the old hard "GITHUB_TOKEN ... is not set" error is NOT emitted.
+            Assert.DoesNotContain("GITHUB_TOKEN environment variable is not set", error);
         }
         finally
         {

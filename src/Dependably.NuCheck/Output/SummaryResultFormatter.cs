@@ -1,5 +1,6 @@
 using System.Text;
 using Dependably.NuCheck.Models;
+using Dependably.NuCheck.Services;
 
 namespace Dependably.NuCheck.Output;
 
@@ -124,17 +125,25 @@ public sealed class SummaryResultFormatter : IResultFormatter
 
     private static void AppendUnusedPackages(StringBuilder builder, AuditResult result)
     {
-        if (result.UnusedPackages.Count == 0)
+        var count = result.UnusedPackages.Count;
+        if (count == 0)
         {
             return;
         }
 
         builder.AppendLine();
-        builder.AppendLine($"ℹ Possibly unused packages (heuristic) — {result.UnusedPackages.Count} finding(s):");
+        builder.AppendLine($"ℹ Possibly unused packages (heuristic) — {count} {(count == 1 ? "finding" : "findings")}:");
+
+        // Each line carries only the variable datum (the package id); the repeated heuristic
+        // caveat is printed ONCE below as a section footer instead of on every line.
         foreach (var finding in result.UnusedPackages)
         {
-            builder.AppendLine($"  • {TextSanitizer.Sanitize(finding.Message)}");
+            builder.AppendLine($"  • {TextSanitizer.Sanitize(finding.Id)} — not referenced in any .cs file");
         }
+
+        builder.AppendLine();
+        builder.AppendLine($"  {TextSanitizer.Sanitize(UnusedPackageService.HeuristicCaveat)}");
+        builder.AppendLine("  Advisory only — does not affect the exit code.");
     }
 
     private static void AppendUnverifiableAdvisories(StringBuilder builder, AuditResult result)

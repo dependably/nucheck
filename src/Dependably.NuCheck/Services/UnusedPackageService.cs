@@ -34,6 +34,19 @@ public static partial class UnusedPackageService
     private const int RegexTimeoutMs = 1000;
 
     /// <summary>
+    /// The heuristic disclaimer shown ONCE as a section footer by the human/table formatters,
+    /// rather than repeated on every finding line. Names the real classes of false positive so
+    /// a reader can judge each finding: the namespace often differs from the package ID, packages
+    /// used only via dependency-injection extension methods surface no <c>using</c>, and transitive
+    /// or native runtime assets carry no managed namespace at all.
+    /// </summary>
+    public const string HeuristicCaveat =
+        "Heuristic — false positives are common: a package's namespace often differs from its "
+        + "package ID, packages consumed only via dependency-injection extension methods, and "
+        + "transitive or native runtime assets show no direct namespace usage. Suppress individual "
+        + "packages via ignoreUnusedPackages in .dependably-check.";
+
+    /// <summary>
     /// Matches <c>using</c> (and <c>global using</c> / <c>using static</c>) directives.
     /// Capture group 1 is the namespace identifier.
     /// </summary>
@@ -125,11 +138,12 @@ public static partial class UnusedPackageService
 
             if (!IsUsed(id, namespaceUsages))
             {
+                // Per-finding message carries only the variable data — the package id and the
+                // one-line reason. The (repeated) heuristic caveat is emitted ONCE as a section
+                // footer by the formatters (see <see cref="HeuristicCaveat"/>), not per line.
                 findings.Add(new UnusedPackageFinding(
                     id,
-                    $"Package '{id}' does not appear to be referenced in any .cs source file (heuristic). "
-                    + "Build-tool, analyzer, and MSBuild-task packages are common false positives; "
-                    + "suppress via ignoreUnusedPackages in .dependably-check."));
+                    $"Package '{id}' does not appear to be referenced in any .cs source file (heuristic)."));
             }
         }
 
@@ -264,9 +278,12 @@ public static partial class UnusedPackageService
                 continue;
             }
 
-            // Skip dev/build/analyzer-only references — these are EXPECTED to have no
-            // runtime namespace, so flagging them as "unused" is a false positive.
-            if (IsDevBuildOnlyReference(element) || IsKnownBuildOrAnalyzerId(include))
+            // Skip dev/build/analyzer-only references and native/runtime-asset packages —
+            // these are EXPECTED to have no managed namespace in source, so flagging them as
+            // "unused" is a false positive.
+            if (IsDevBuildOnlyReference(element)
+                || IsKnownBuildOrAnalyzerId(include)
+                || IsRuntimeAssetId(include))
             {
                 continue;
             }
@@ -425,6 +442,28 @@ public static partial class UnusedPackageService
         }
 
         return KnownBuildOrAnalyzerSuffixes.Any(suffix => id.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Returns true for native/runtime-asset packages that ship platform binaries with no
+    /// managed namespace, so they never appear in a <c>using</c> directive and flagging them
+    /// as "unused" is always a false positive. Recognised, case-insensitively:
+    /// <list type="bullet">
+    ///   <item>ids in the NuGet runtime-package convention — starting with <c>runtime.</c>
+    ///     (e.g. <c>runtime.linux-x64.runtime.native.System.IO.Ports</c>) or containing a
+    ///     <c>.runtime.</c> segment; and</item>
+    ///   <item>the SQLitePCLRaw native-library bundles <c>SQLitePCLRaw.lib.*</c>
+    ///     (e.g. <c>SQLitePCLRaw.lib.e_sqlite3</c>).</item>
+    /// </list>
+    /// A full assembly/namespace resolution from the nupkg (which would also catch cases where
+    /// the namespace merely differs from the id, e.g. <c>BCrypt.Net-Next</c> → <c>BCrypt.Net</c>)
+    /// is out of scope here; this is the safe, contained subset with zero managed surface.
+    /// </summary>
+    private static bool IsRuntimeAssetId(string id)
+    {
+        return id.StartsWith("runtime.", StringComparison.OrdinalIgnoreCase)
+            || id.Contains(".runtime.", StringComparison.OrdinalIgnoreCase)
+            || id.StartsWith("SQLitePCLRaw.lib.", StringComparison.OrdinalIgnoreCase);
     }
 
     private static HashSet<string> CollectNamespaceUsages(string scanDirectory)
