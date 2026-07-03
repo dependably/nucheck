@@ -91,15 +91,6 @@ Run `nucheck --help` for the complete policy rules and the JSON output schema.
 (`tool`, `toolVersion`, `schemaVersion`, `target`, `summary`, `findings`), so every tool in
 the suite parses the same way.
 
-## Build from source
-
-```bash
-git clone https://github.com/dependably/nucheck.git
-cd nucheck
-dotnet build Dependably.NuCheck.slnx -c Release
-dotnet test  Dependably.NuCheck.slnx -c Release
-```
-
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).

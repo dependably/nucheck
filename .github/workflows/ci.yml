@@ -9,8 +9,10 @@
 #   secret-scan   TruffleHog verified-secret scan (same pinned digest as GitLab)
 #   format        `dotnet format --verify-no-changes`
 #   build-test    restore (locked) + build + xUnit tests with coverage
+#   sbom          production-only CycloneDX 1.6 SBOM, uploaded as a build artifact
 #   release       (tags v* only) pack the .nupkg, emit SLSA build provenance
-#                 (keyless OIDC/sigstore), then publish it — SLSA Build L2.
+#                 (keyless OIDC/sigstore), then publish it — SLSA Build L2. Also
+#                 signs + attaches the production SBOM to the GitHub Release.
 name: CI
 
 on:
@@ -101,6 +103,26 @@ jobs:
           path: coverage/**/coverage.opencover.xml
           if-no-files-found: ignore
 
+  # Production-dependency CycloneDX 1.6 SBOM, uploaded as a build artifact on every
+  # run (push / PR / tag). `--exclude-dev` drops test/analyzer/dev packages, so the
+  # SBOM reflects exactly what ships in the .nupkg. On a `v*` tag the release job below
+  # downloads this same sbom.json, signs it, and attaches it to the GitHub Release. The
+  # CycloneDX .NET tool is version-pinned so the SBOM output stays reproducible.
+  sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+      - run: dotnet tool install --global CycloneDX --version 6.2.0
+      - run: dotnet CycloneDX src/Dependably.NuCheck/Dependably.NuCheck.csproj -o . -fn sbom.json -F json -spv 1.6 --exclude-dev
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sbom
+          path: sbom.json
+          retention-days: 7
+
   # Release the .nupkg with signed SLSA build provenance — runs only on a `v*`
   # tag, and only after the gating jobs pass. The attestation is generated with
   # GitHub's keyless OIDC/sigstore flow (no stored signing key), covers the exact
@@ -108,7 +130,7 @@ jobs:
   #   gh attestation verify <file>.nupkg -R dependably/nucheck
   # This is what raises the released artifact from SLSA Build L0 to L2.
   release:
-    needs: [secret-scan, format, build-test]
+    needs: [secret-scan, format, build-test, sbom]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -179,3 +201,24 @@ jobs:
           gh release create "$GITHUB_REF_NAME" artifacts/*.nupkg \
             --title "$GITHUB_REF_NAME" --generate-notes \
           || gh release upload "$GITHUB_REF_NAME" artifacts/*.nupkg --clobber
+      # Production-dependency SBOM: pull the exact bytes the `sbom` job produced, sign
+      # them with the same keyless OIDC/sigstore flow, and attach the SBOM plus its
+      # sigstore bundle to the Release so consumers can verify what shipped:
+      #   gh attestation verify sbom.json -R dependably/nucheck
+      - name: Download SBOM
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sbom
+          path: .
+      - name: Attest SBOM
+        id: attest_sbom
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: sbom.json
+      - name: Attach signed SBOM to the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          cp "${{ steps.attest_sbom.outputs.bundle-path }}" sbom.json.sigstore.json
+          gh release upload "$GITHUB_REF_NAME" sbom.json sbom.json.sigstore.json --clobber
