@@ -118,43 +118,9 @@ public static class DependablyExceptions
                 $"exception for rule \"{rule}\" is missing a non-empty \"reason\"", "EXCEPTION_MISSING_REASON");
         }
 
-        var present = Selectors.Where(s => entry.TryGetProperty(s, out _)).ToList();
-        if (present.Count == 0)
-        {
-            throw new DependablyConfigException(
-                $"exception for rule \"{rule}\" needs at least one selector ({string.Join(", ", Selectors)})",
-                "EXCEPTION_NO_SELECTOR");
-        }
+        ValidateSelectors(entry, rule!, source, applicableSelectors);
 
-        foreach (var sel in present)
-        {
-            var value = GetString(entry, sel);
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                throw new DependablyConfigException(
-                    $"exception selector \"{sel}\" for rule \"{rule}\" must be a non-empty string", "EXCEPTION_BAD_SELECTOR");
-            }
-
-            if (source == "own" && !applicableSelectors.Contains(sel))
-            {
-                throw new DependablyConfigException(
-                    $"exception selector \"{sel}\" is not applicable to this tool (applicable: {string.Join(", ", applicableSelectors)})",
-                    "EXCEPTION_BAD_SELECTOR");
-            }
-        }
-
-        DateOnly? expires = null;
-        if (entry.TryGetProperty("expires", out var expEl))
-        {
-            var raw = expEl.ValueKind == JsonValueKind.String ? expEl.GetString() : null;
-            if (raw is null || !ExpiresPattern.IsMatch(raw) || !DateOnly.TryParse(raw, out var parsed))
-            {
-                throw new DependablyConfigException(
-                    $"exception \"expires\" for rule \"{rule}\" must be a valid YYYY-MM-DD date", "EXCEPTION_BAD_EXPIRES");
-            }
-
-            expires = parsed;
-        }
+        var expires = ParseExpires(entry, rule!);
 
         if (source == "own" && knownRules is not null && !knownRules.Contains(rule))
         {
@@ -179,6 +145,58 @@ public static class DependablyExceptions
             Symbol: entry.TryGetProperty("symbol", out _) ? GetString(entry, "symbol") : null,
             Id: entry.TryGetProperty("id", out _) ? GetString(entry, "id") : null,
             Expires: expires);
+    }
+
+    /// <summary>
+    /// Validates the selector properties present on an exception entry (spec §6.3-§6.4): at
+    /// least one selector must be present, each present selector must be a non-empty string,
+    /// and (for the tool's own section) each must be applicable to this tool's findings.
+    /// </summary>
+    private static void ValidateSelectors(
+        JsonElement entry, string rule, string source, IReadOnlyCollection<string> applicableSelectors)
+    {
+        var present = Selectors.Where(s => entry.TryGetProperty(s, out _)).ToList();
+        if (present.Count == 0)
+        {
+            throw new DependablyConfigException(
+                $"exception for rule \"{rule}\" needs at least one selector ({string.Join(", ", Selectors)})",
+                "EXCEPTION_NO_SELECTOR");
+        }
+
+        foreach (var sel in present)
+        {
+            var value = GetString(entry, sel);
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                throw new DependablyConfigException(
+                    $"exception selector \"{sel}\" for rule \"{rule}\" must be a non-empty string", "EXCEPTION_BAD_SELECTOR");
+            }
+
+            if (source == "own" && !applicableSelectors.Contains(sel))
+            {
+                throw new DependablyConfigException(
+                    $"exception selector \"{sel}\" is not applicable to this tool (applicable: {string.Join(", ", applicableSelectors)})",
+                    "EXCEPTION_BAD_SELECTOR");
+            }
+        }
+    }
+
+    /// <summary>Parses the optional <c>expires</c> date (spec §6.5); returns null when absent.</summary>
+    private static DateOnly? ParseExpires(JsonElement entry, string rule)
+    {
+        if (!entry.TryGetProperty("expires", out var expEl))
+        {
+            return null;
+        }
+
+        var raw = expEl.ValueKind == JsonValueKind.String ? expEl.GetString() : null;
+        if (raw is null || !ExpiresPattern.IsMatch(raw) || !DateOnly.TryParse(raw, out var parsed))
+        {
+            throw new DependablyConfigException(
+                $"exception \"expires\" for rule \"{rule}\" must be a valid YYYY-MM-DD date", "EXCEPTION_BAD_EXPIRES");
+        }
+
+        return parsed;
     }
 
     /// <summary>Split a <c>package</c> selector into (name, version?) — version from an <c>@&lt;version&gt;</c> suffix.</summary>
