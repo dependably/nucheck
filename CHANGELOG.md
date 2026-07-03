@@ -114,6 +114,13 @@ All notable changes to `nucheck` are documented here. The format is based on
   audit scope even though a restore would still honour them; `nucheck` now emits a visible
   `info` finding naming those excluded config files instead of silently failing open.
 
+### Supply chain
+
+- **Keyless publishing to nuget.org via Trusted Publishing (OIDC).** The GitHub Actions
+  release workflow no longer relies on a long-lived `NUGET_API_KEY` secret; it exchanges a
+  GitHub OIDC token for a short-lived, single-use nuget.org key at publish time, removing a
+  stored credential that could leak or need rotation.
+
 ## [1.1.1] - 2026-06-21
 
 Released under the previous package id `Dependably.NuGetCheck` (command `nuget-check`); no

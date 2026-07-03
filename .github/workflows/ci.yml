@@ -113,8 +113,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the GitHub Release + upload the .nupkg
-      id-token: write # OIDC token for keyless sigstore signing
+      id-token: write # OIDC token: keyless sigstore signing + nuget.org Trusted Publishing
       attestations: write # store the provenance attestation on the repo
+    env:
+      # nuget.org profile name for Trusted Publishing (OIDC). When unset, the publish
+      # steps self-skip and only provenance + the GitHub Release are produced.
+      NUGET_USER: ${{ secrets.NUGET_USER }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-dotnet@v5
@@ -145,20 +149,26 @@ jobs:
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-path: "artifacts/*.nupkg"
-      # Publish to nuget.org. Skipped (not failed) until NUGET_API_KEY is set, so
-      # the provenance + GitHub Release still produce on the first tagged run.
+      # Publish to nuget.org via Trusted Publishing (OIDC) — no long-lived API key.
+      # The id-token above is exchanged for a short-lived, single-use nuget.org key at
+      # publish time. Requires a Trusted Publishing policy on nuget.org (Repository
+      # Owner: dependably, Repository: nucheck, Workflow File: ci.yml) plus the nuget.org
+      # profile name in the NUGET_USER secret. Both steps skip (not fail) when NUGET_USER
+      # is unset, so provenance + the GitHub Release still produce before publishing is
+      # configured. Pinned to a full commit SHA (v1).
+      - name: NuGet login (Trusted Publishing → short-lived key)
+        id: nuget-login
+        if: env.NUGET_USER != ''
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
       - name: Publish to nuget.org
-        env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        if: env.NUGET_USER != ''
         run: |
           set -eu
-          if [ -z "${NUGET_API_KEY:-}" ]; then
-            echo "NUGET_API_KEY not set — skipping nuget.org push (provenance + GitHub Release still produced)."
-            exit 0
-          fi
           dotnet nuget push artifacts/*.nupkg \
             --source https://api.nuget.org/v3/index.json \
-            --api-key "$NUGET_API_KEY" --skip-duplicate
+            --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --skip-duplicate
       # Attach the attested .nupkg to a GitHub Release so the exact signed bytes
       # are downloadable and verifiable by digest.
       - name: Publish .nupkg to the GitHub Release
