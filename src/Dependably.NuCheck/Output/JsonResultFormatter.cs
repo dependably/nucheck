@@ -145,6 +145,8 @@ public sealed class JsonResultFormatter : IResultFormatter
                 extra = new
                 {
                     package = unused.Id,
+                    installedVersion = unused.Version,
+                    declaringProject = unused.DeclaringProject,
                 },
             });
         }

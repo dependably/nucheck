@@ -1782,4 +1782,280 @@ public class UnusedPackageServiceTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    // -----------------------------------------------------------------
+    // #58: namespace-alias resolution (package id != namespace)
+    // -----------------------------------------------------------------
+
+    [Theory]
+    [InlineData("BCrypt.Net-Next", "BCrypt.Net")]
+    [InlineData("zxcvbn-core", "Zxcvbn")]
+    [InlineData("AWSSDK.S3", "Amazon.S3")]
+    [InlineData("Serilog.AspNetCore", "Serilog")]
+    public void Core_alias_namespace_usage_suppresses_finding(string packageId, string usedNamespace)
+    {
+        // Before #58: the namespace differed from the id, so a genuine `using` of the real
+        // namespace did not match and the package was a guaranteed false positive.
+        var findings = UnusedPackageService.Check(
+            directPackageIds: [packageId],
+            namespaceUsages: new HashSet<string>(StringComparer.OrdinalIgnoreCase) { usedNamespace },
+            ignoredPackages: []);
+
+        Assert.Empty(findings);
+    }
+
+    [Fact]
+    public void Core_alias_unused_package_is_still_flagged()
+    {
+        // The alias mapping must not silence a genuinely-unused aliased package: AWSSDK.S3
+        // with no Amazon.S3 usage anywhere must still be reported.
+        var findings = UnusedPackageService.Check(
+            directPackageIds: ["AWSSDK.S3"],
+            namespaceUsages: new HashSet<string>(),
+            ignoredPackages: []);
+
+        var finding = Assert.Single(findings);
+        Assert.Equal("AWSSDK.S3", finding.Id);
+    }
+
+    [Fact]
+    public void Disk_alias_namespace_usage_suppresses_finding()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // Real namespace differs from the package id — before #58 this was a false positive.
+            File.WriteAllText(Path.Combine(dir, "Hasher.cs"),
+                "using BCrypt.Net;\npublic class Hasher { }");
+
+            var findings = UnusedPackageService.Check(dir, []);
+            Assert.Empty(findings);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // #58: DI-extension-method usage (services.AddX() / builder.UseX())
+    // -----------------------------------------------------------------
+
+    [Theory]
+    [InlineData("OpenTelemetry", "AddOpenTelemetry")]        // derived: Add<id>
+    [InlineData("Serilog.AspNetCore", "UseSerilog")]         // curated
+    [InlineData("Swashbuckle.AspNetCore", "AddSwaggerGen")]  // curated (id != method)
+    [InlineData("Npgsql.EntityFrameworkCore.PostgreSQL", "UseNpgsql")] // curated
+    public void Core_di_extension_method_usage_suppresses_finding(string packageId, string diMethod)
+    {
+        // Before #58: a package wired up only via a DI extension method surfaced no `using`
+        // of its own namespace and was a false positive.
+        var findings = UnusedPackageService.Check(
+            directPackageIds: [packageId],
+            namespaceUsages: new HashSet<string>(),
+            diMethodUsages: new HashSet<string>(StringComparer.OrdinalIgnoreCase) { diMethod },
+            ignoredPackages: []);
+
+        Assert.Empty(findings);
+    }
+
+    [Fact]
+    public void Core_di_extension_method_unrelated_call_does_not_suppress()
+    {
+        // A DI call for a DIFFERENT package must not mask a genuinely-unused one.
+        var findings = UnusedPackageService.Check(
+            directPackageIds: ["Serilog.AspNetCore", "Unrelated.Pkg"],
+            namespaceUsages: new HashSet<string>(),
+            diMethodUsages: new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "UseSerilog" },
+            ignoredPackages: []);
+
+        var finding = Assert.Single(findings);
+        Assert.Equal("Unrelated.Pkg", finding.Id);
+    }
+
+    [Fact]
+    public void Disk_di_extension_method_usage_suppresses_finding()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="OpenTelemetry" Version="1.9.0" />
+                    <PackageReference Include="Serilog.AspNetCore" Version="8.0.1" />
+                    <PackageReference Include="Serilog" Version="4.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // OpenTelemetry wired via AddOpenTelemetry(); Serilog.AspNetCore via UseSerilog();
+            // Serilog itself surfaces its namespace via the DI extension's `using`.
+            File.WriteAllText(Path.Combine(dir, "Startup.cs"), """
+                using Serilog;
+                public class Startup
+                {
+                    public void Configure(object services, object builder)
+                    {
+                        services.AddOpenTelemetry();
+                        builder.UseSerilog();
+                    }
+                }
+                """);
+
+            var findings = UnusedPackageService.Check(dir, []);
+            Assert.Empty(findings);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_di_partial_failure_used_via_di_vs_genuinely_unused()
+    {
+        // Mixed batch: one package used only via a DI extension method (suppressed) and one
+        // genuinely unused. Only the genuinely-unused one must fire.
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="OpenTelemetry" Version="1.9.0" />
+                    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            // OpenTelemetry wired via AddOpenTelemetry(); Newtonsoft.Json is never referenced.
+            File.WriteAllText(Path.Combine(dir, "Startup.cs"),
+                "public class Startup { void C(object s) { s.AddOpenTelemetry(); } }");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            var finding = Assert.Single(findings);
+            Assert.Equal("Newtonsoft.Json", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_di_method_name_only_in_comment_does_not_suppress()
+    {
+        // A DI method name mentioned only in a comment must not count as usage (the DI scan
+        // runs on comment/literal-stripped content).
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="OpenTelemetry" Version="1.9.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            File.WriteAllText(Path.Combine(dir, "Class.cs"),
+                "// we used to call services.AddOpenTelemetry(); here\npublic class C { }");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            var finding = Assert.Single(findings);
+            Assert.Equal("OpenTelemetry", finding.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // #58: installed version + declaring project threaded into findings
+    // -----------------------------------------------------------------
+
+    [Fact]
+    public void Disk_finding_carries_version_and_declaring_project()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var projDir = Path.Combine(dir, "src", "Api");
+            Directory.CreateDirectory(projDir);
+            File.WriteAllText(Path.Combine(projDir, "Api.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            File.WriteAllText(Path.Combine(projDir, "Class.cs"), "public class C { }");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            var finding = Assert.Single(findings);
+            Assert.Equal("Newtonsoft.Json", finding.Id);
+            Assert.Equal("13.0.3", finding.Version);
+            Assert.Equal("src/Api/Api.csproj", finding.DeclaringProject);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Disk_CPM_finding_reports_props_version_and_prefers_csproj_path()
+    {
+        // Central Package Management: version lives in Directory.Packages.props, the reference
+        // lives in the .csproj. The finding must report the version from props and prefer the
+        // .csproj as the declaring project (the file that actually references the package).
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "Directory.Packages.props"), """
+                <Project>
+                  <ItemGroup>
+                    <PackageVersion Include="Newtonsoft.Json" Version="13.0.3" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            var projDir = Path.Combine(dir, "src", "Api");
+            Directory.CreateDirectory(projDir);
+            File.WriteAllText(Path.Combine(projDir, "Api.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <PackageReference Include="Newtonsoft.Json" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            File.WriteAllText(Path.Combine(projDir, "Class.cs"), "public class C { }");
+
+            var findings = UnusedPackageService.Check(dir, []);
+
+            var finding = Assert.Single(findings);
+            Assert.Equal("Newtonsoft.Json", finding.Id);
+            Assert.Equal("13.0.3", finding.Version);
+            Assert.Equal("src/Api/Api.csproj", finding.DeclaringProject);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }

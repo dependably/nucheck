@@ -64,6 +64,9 @@ public sealed class GitHubAdvisoryClient : IAdvisorySource
         _delay = delay ?? Task.Delay;
     }
 
+    /// <inheritdoc />
+    public string DisplayName => "the GitHub Advisory Database";
+
     public Task<IReadOnlyList<Advisory>> GetAdvisoriesAsync(string packageId, CancellationToken cancellationToken = default)
         => _useRest ? QueryRestAsync(packageId, cancellationToken) : QueryGraphQlAsync(packageId, cancellationToken);
 

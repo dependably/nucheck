@@ -9,6 +9,8 @@ public sealed class TableResultFormatter : IResultFormatter
 {
     private readonly string? _severityFilter;
     private readonly int _exitCode;
+    private readonly string? _manifestName;
+    private readonly string? _advisorySource;
 
     /// <param name="severityFilter">
     /// The active <c>--severity</c> display filter (a normalised ladder word such as
@@ -22,10 +24,24 @@ public sealed class TableResultFormatter : IResultFormatter
     /// non-zero exit (e.g. an <c>info</c>-severity policy finding gated by
     /// <c>--fail-on severity=info</c>).
     /// </param>
-    public TableResultFormatter(string? severityFilter = null, int exitCode = 0)
+    /// <param name="target">
+    /// The audited manifest path; its file name is echoed in the header so the result names
+    /// what was audited. Optional.
+    /// </param>
+    /// <param name="advisorySource">
+    /// The advisory database label (e.g. <c>OSV.dev</c>) echoed in the header so the result is
+    /// verifiable — it names the source it was checked against. Optional.
+    /// </param>
+    public TableResultFormatter(
+        string? severityFilter = null,
+        int exitCode = 0,
+        string? target = null,
+        string? advisorySource = null)
     {
         _severityFilter = severityFilter;
         _exitCode = exitCode;
+        _manifestName = string.IsNullOrEmpty(target) ? null : Path.GetFileName(target);
+        _advisorySource = string.IsNullOrEmpty(advisorySource) ? null : advisorySource;
     }
 
     public string Format(AuditResult result)
@@ -33,6 +49,16 @@ public sealed class TableResultFormatter : IResultFormatter
         var builder = new StringBuilder();
         builder.AppendLine("NUGET AUDIT RESULTS");
         builder.AppendLine("===================");
+        if (_manifestName is not null)
+        {
+            builder.AppendLine($"Manifest:               {TextSanitizer.Sanitize(_manifestName)}");
+        }
+
+        if (_advisorySource is not null)
+        {
+            builder.AppendLine($"Advisory Source:        {TextSanitizer.Sanitize(_advisorySource)}");
+        }
+
         builder.AppendLine($"Total Packages:         {result.TotalPackages}");
         builder.AppendLine($"Vulnerable Packages:    {result.VulnerablePackageCount}");
         builder.AppendLine($"Advisories Found:       {result.VulnerabilityCount}");
@@ -169,11 +195,11 @@ public sealed class TableResultFormatter : IResultFormatter
         builder.AppendLine("-------------------");
         builder.AppendLine("POSSIBLY UNUSED PACKAGES (HEURISTIC — ADVISORY ONLY)");
 
-        // Only the variable datum per line (the package id); the heuristic caveat is a single
-        // footer below rather than a per-line repetition.
+        // Only the variable data per line (id, installed version, declaring project); the
+        // heuristic caveat is a single footer below rather than a per-line repetition.
         foreach (var finding in result.UnusedPackages)
         {
-            builder.AppendLine($"   {TextSanitizer.Sanitize(finding.Id)} — not referenced in any .cs file");
+            builder.AppendLine($"   {UnusedPackageText.Label(finding)} — not referenced in any .cs file");
         }
 
         builder.AppendLine($"   {TextSanitizer.Sanitize(UnusedPackageService.HeuristicCaveat)}");

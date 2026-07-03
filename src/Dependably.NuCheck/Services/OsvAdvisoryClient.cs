@@ -44,6 +44,9 @@ public sealed class OsvAdvisoryClient : IAdvisorySource
         _delay = delay ?? Task.Delay;
     }
 
+    /// <inheritdoc />
+    public string DisplayName => "OSV.dev";
+
     public async Task<IReadOnlyList<Advisory>> GetAdvisoriesAsync(string packageId, CancellationToken cancellationToken = default)
     {
         var payload = JsonSerializer.Serialize(new

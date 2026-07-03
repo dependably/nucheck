@@ -22,8 +22,20 @@ public sealed record SourceFinding(
 /// .cs source file under the scan root. This is heuristic: build-tool, analyzer, and
 /// MSBuild-task packages often match. Suppress via <c>ignoreUnusedPackages</c> in
 /// <c>.dependably-check</c>. Never causes the process to exit non-zero.
+/// <para>
+/// <paramref name="Version"/> is the version declared for the package on the
+/// <c>&lt;PackageReference&gt;</c>/<c>&lt;PackageVersion&gt;</c> element, and
+/// <paramref name="DeclaringProject"/> is the project/props file (relative to the scan root)
+/// that declared it. Both are optional context so a reader of a multi-project solution can
+/// tell exactly where to look; either may be <see langword="null"/> when unknown (e.g. a
+/// version-less Central Package Management reference, or the pure/testing overload).
+/// </para>
 /// </summary>
-public sealed record UnusedPackageFinding(string Id, string Message);
+public sealed record UnusedPackageFinding(
+    string Id,
+    string Message,
+    string? Version = null,
+    string? DeclaringProject = null);
 
 /// <summary>
 /// A warning raised when an advisory's <c>VulnerableVersionRange</c> cannot be parsed by

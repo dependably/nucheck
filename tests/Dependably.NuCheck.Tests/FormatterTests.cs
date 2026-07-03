@@ -321,6 +321,92 @@ public class FormatterTests
         Assert.Contains("heuristic", finding.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
     }
 
+    // ---- #58: installed version + declaring project per unused finding ---------------------
+
+    private static AuditResult UnusedResultWithMetadata() => new()
+    {
+        TotalPackages = 3,
+        UnusedPackages =
+        [
+            new UnusedPackageFinding(
+                "AWSSDK.S3",
+                "Package 'AWSSDK.S3' does not appear to be referenced in any .cs source file (heuristic).",
+                "3.7.301",
+                "src/Api/Api.csproj"),
+        ],
+    };
+
+    [Fact]
+    public void Summary_formatter_renders_version_and_declaring_project()
+    {
+        var output = new SummaryResultFormatter().Format(UnusedResultWithMetadata());
+
+        Assert.Contains(
+            "AWSSDK.S3 3.7.301 (src/Api/Api.csproj) — not referenced in any .cs file", output);
+    }
+
+    [Fact]
+    public void Table_formatter_renders_version_and_declaring_project()
+    {
+        var output = new TableResultFormatter().Format(UnusedResultWithMetadata());
+
+        Assert.Contains(
+            "AWSSDK.S3 3.7.301 (src/Api/Api.csproj) — not referenced in any .cs file", output);
+    }
+
+    [Fact]
+    public void Json_unused_finding_carries_version_and_declaring_project()
+    {
+        using var document = JsonDocument.Parse(Json().Format(UnusedResultWithMetadata()));
+        var extra = document.RootElement.GetProperty("findings")[0].GetProperty("extra");
+
+        Assert.Equal("AWSSDK.S3", extra.GetProperty("package").GetString());
+        Assert.Equal("3.7.301", extra.GetProperty("installedVersion").GetString());
+        Assert.Equal("src/Api/Api.csproj", extra.GetProperty("declaringProject").GetString());
+    }
+
+    [Fact]
+    public void Unused_line_omits_version_and_project_when_unknown()
+    {
+        // A finding with no version/project (e.g. the pure overload) renders just the id —
+        // no stray empty parentheses or trailing spaces.
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            UnusedPackages = [new UnusedPackageFinding("Serilog", "heuristic")],
+        };
+
+        var output = new SummaryResultFormatter().Format(result);
+
+        Assert.Contains("Serilog — not referenced in any .cs file", output);
+        Assert.DoesNotContain("Serilog  ", output);
+        Assert.DoesNotContain("Serilog ()", output);
+    }
+
+    // ---- #58: summary line echoes the manifest name and advisory source -------------------
+
+    [Fact]
+    public void Summary_formatter_first_line_echoes_manifest_and_source()
+    {
+        var result = new AuditResult { TotalPackages = 72 };
+        var output = new SummaryResultFormatter(
+            severityFilter: null,
+            exitCode: 0,
+            target: "/repo/src/packages.lock.json",
+            advisorySource: "OSV.dev").Format(result);
+
+        Assert.Contains("Audited 72 packages (packages.lock.json) against OSV.dev.", output);
+    }
+
+    [Fact]
+    public void Summary_formatter_first_line_degrades_gracefully_without_context()
+    {
+        var result = new AuditResult { TotalPackages = 5 };
+        var output = new SummaryResultFormatter().Format(result);
+
+        Assert.Contains("Audited 5 packages.", output);
+    }
+
     // ---- issue #43: "All packages are secure" misleading when filter is active -------
 
     private static AuditResult OnlyHighResult() => new()

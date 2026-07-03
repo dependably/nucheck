@@ -21,17 +21,22 @@ public static class FormatterFactory
     /// (<c>human</c>, <c>table</c>, <c>json</c>). In production, <see cref="CliOptions"/>
     /// rejects unknown tokens before this is called; the exception is a defensive API guard.
     /// </exception>
+    /// <param name="advisorySource">
+    /// The advisory database label (e.g. <c>OSV.dev</c>) echoed by the text formatters so a
+    /// clean result names the source it was checked against. Optional.
+    /// </param>
     public static IResultFormatter Get(
         string? format,
         string toolVersion,
         string target,
         int? exitCode = null,
-        string? severityFilter = null) =>
+        string? severityFilter = null,
+        string? advisorySource = null) =>
         format?.Trim().ToLowerInvariant() switch
         {
             "json" => new JsonResultFormatter(toolVersion, target, exitCode),
-            "table" => new TableResultFormatter(severityFilter, exitCode ?? 0),
-            "human" or null => new SummaryResultFormatter(severityFilter, exitCode ?? 0),
+            "table" => new TableResultFormatter(severityFilter, exitCode ?? 0, target, advisorySource),
+            "human" or null => new SummaryResultFormatter(severityFilter, exitCode ?? 0, target, advisorySource),
             _ => throw new ArgumentException(
                 $"Unknown --format '{format}': use {string.Join(", ", ValidFormats)}."),
         };
