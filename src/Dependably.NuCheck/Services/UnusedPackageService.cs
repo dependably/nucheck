@@ -760,6 +760,7 @@ public static partial class UnusedPackageService
             "Microsoft.CodeAnalysis.Analyzers",
             "Microsoft.CodeAnalysis.NetAnalyzers",
             "Microsoft.NET.Test.Sdk",
+            "xunit.runner.visualstudio",
             "coverlet.collector",
             "coverlet.msbuild",
             "Nullable",
@@ -832,7 +833,45 @@ public static partial class UnusedPackageService
             }
         }
 
+        AddImplicitUsingNamespaces(scanDirectory, namespaces);
+
         return new SourceUsages(namespaces, diMethods);
+    }
+
+    /// <summary>
+    /// Adds namespaces declared via an MSBuild <c>&lt;Using Include="..."/&gt;</c> item in any
+    /// <c>*.csproj</c> under <paramref name="scanDirectory"/> — a common SDK-style pattern
+    /// (e.g. test projects adding <c>&lt;Using Include="Xunit" /&gt;</c> instead of a literal
+    /// <c>using Xunit;</c> in every file) that <see cref="AddUsagesFromContent"/> cannot see
+    /// because it only scans <c>.cs</c> file text. Without this, a package referenced solely
+    /// via an implicit/global using declared in the project file is misreported as unused.
+    /// </summary>
+    private static void AddImplicitUsingNamespaces(string scanDirectory, HashSet<string> namespaces)
+    {
+        var csprojFiles = Directory.EnumerateFiles(scanDirectory, "*.csproj", SearchOption.AllDirectories);
+        foreach (var file in csprojFiles)
+        {
+            try
+            {
+                foreach (var element in XDocument.Load(file).Descendants())
+                {
+                    if (!element.Name.LocalName.Equals("Using", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    var include = element.Attribute("Include")?.Value;
+                    if (!string.IsNullOrWhiteSpace(include))
+                    {
+                        namespaces.Add(include);
+                    }
+                }
+            }
+            catch
+            {
+                // A malformed project file skips silently.
+            }
+        }
     }
 
     /// <summary>

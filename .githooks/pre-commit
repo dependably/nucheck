@@ -2,7 +2,14 @@
 
 # Pre-commit hook for nucheck (tracked; install by running
 # `git config core.hooksPath .githooks`).
-# Gates a commit on `dotnet format` (hard gate) and runs the tests (advisory).
+#
+# Gates a commit on:
+#   1. `dotnet format` (hard gate)
+#   2. the test suite (advisory)
+#   3. nucheck dogfooding itself against its own lock files (hard gate)
+#   4. cross-dogfooding the sibling Dependably .NET tools, cslint + codemetrics,
+#      against this repo's own C# source (hard gate; skipped with a warning if a
+#      tool isn't installed globally)
 
 echo "Running pre-commit checks..."
 
@@ -26,6 +33,59 @@ if [ $? -ne 0 ]; then
   echo "Warning: some tests failed. Review the output above."
   echo "Run 'dotnet test Dependably.NuCheck.slnx' for the full suite."
   # Don't exit 1 here — allow commit with warning
+fi
+
+# 3. Dogfood nucheck on itself — hard gate
+#    Audits nucheck's own two packages.lock.json files with the OSV source (no token
+#    needed, safe for a hook) and fails the commit on any high-or-above vulnerability
+#    or policy error (untrusted registry, etc).
+echo "Dogfooding nucheck on its own dependencies..."
+for lockfile in \
+  "src/Dependably.NuCheck/packages.lock.json" \
+  "tests/Dependably.NuCheck.Tests/packages.lock.json"; do
+  echo "  auditing $lockfile ..."
+  dotnet run --project src/Dependably.NuCheck -c Release --framework net10.0 -- \
+    "$lockfile" --source osv --fail-on severity=high
+  if [ $? -ne 0 ]; then
+    echo "nucheck found a high-or-above finding in $lockfile. Fix it (or add a scoped"
+    echo ".dependably exception with a reason) before committing."
+    exit 1
+  fi
+done
+
+# 4. Cross-dogfood the sibling Dependably .NET tools — hard gate.
+#    cslint and codemetrics are installed globally as dotnet tools; a tool that isn't
+#    installed is a warning + skip, not a hook failure — only a real finding blocks.
+echo "Cross-dogfooding sibling Dependably tools..."
+
+if command -v cslint &> /dev/null; then
+  echo "  running cslint --sast --global ..."
+  cslint --sast --global --fail-on severity=high
+  if [ $? -ne 0 ]; then
+    echo "cslint found a blocking finding in this repo's C# source. Fix it before committing."
+    exit 1
+  fi
+else
+  echo "  Warning: cslint is not installed globally (dotnet tool install -g Dependably.CsLint) — skipping."
+fi
+
+if command -v codemetrics &> /dev/null; then
+  echo "  running codemetrics ./src ..."
+  # Per-metric thresholds mirror codemetrics' own "high" severity band (there is no
+  # composite --fail-on severity=<level> in the currently-installed codemetrics build).
+  # UnusedPackageService.cs is excluded: it is an intentional, self-contained heuristic
+  # C# lexer (comment/string-literal stripping, interpolated-hole scanning) whose
+  # complexity is accepted-by-design, not a defect.
+  # Type-level cohesion/coupling (lcom4/coupling) are left off the hard gate; they are
+  # architectural signals better reviewed periodically than blocked per-commit.
+  codemetrics ./src --exclude "**/UnusedPackageService.cs" \
+    --fail-on cyclomatic=21 --fail-on cognitive=25 --fail-on nesting=6 --fail-on mi=20
+  if [ $? -ne 0 ]; then
+    echo "codemetrics found a blocking finding in this repo's C# source. Fix it before committing."
+    exit 1
+  fi
+else
+  echo "  Warning: codemetrics is not installed globally (dotnet tool install -g Dependably.CodeMetrics) — skipping."
 fi
 
 echo "Pre-commit checks complete."
