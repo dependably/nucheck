@@ -1,0 +1,17 @@
+{
+  "name": "validation-bad-severity",
+  "description": "An invalid rule severity is INVALID_SEVERITY.",
+  "tool": "npm-check",
+  "files": {
+    ".dependably": {
+      "npm-check": {
+        "rules": {
+          "no-git-deps": "fatal"
+        }
+      }
+    }
+  },
+  "expect": {
+    "error": "INVALID_SEVERITY"
+  }
+}

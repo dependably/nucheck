@@ -6,6 +6,19 @@ All notable changes to `nucheck` are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Unified `.dependably` config + exceptions.** nucheck now reads the canonical
+  `.dependably` file (the deprecated `.dependably-check` filename is still read with a
+  one-line stderr notice; `.dependably` wins when both exist) and its own `nucheck` section
+  (the `nuget` section is a deprecated alias). New standardized `exceptions` grammar lets you
+  suppress a *specific* finding — `{ rule, package?|id?, reason, expires? }` — so it no longer
+  fails the build, without disabling a whole check; unused and expired exceptions are reported
+  on stderr. A file-level `failOn` (`severity` / `count`) gate is honored, with a CLI
+  `--fail-on` overriding it. Config `version` and shape are validated, and unknown keys in a
+  read section warn. Mirrors npm-check's reference implementation and is verified against the
+  shared cross-language conformance fixtures.
+
 ### Changed
 
 - **First run works without a token.** When `GITHUB_TOKEN` is unset and no `--source` is

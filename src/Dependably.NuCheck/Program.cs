@@ -92,6 +92,13 @@ public static class Program
 
             var checkDirectory = ResolveCheckDirectory(options.FilePath);
             var config = DependablyCheckConfig.Load(options.ConfigPath, checkDirectory);
+
+            // Surface .dependably deprecation / unknown-key notices (never gating).
+            foreach (var warning in config.Warnings)
+            {
+                Console.Error.WriteLine($".dependably: {warning.Message}");
+            }
+
             if (options.Verbose)
             {
                 Console.Error.WriteLine(
@@ -101,18 +108,32 @@ public static class Program
             var policyFindings = SourceTrustService.Check(
                 checkDirectory, config.AllowedRegistryHosts, config.AllowedLocalFeeds);
             var unusedPackages = UnusedPackageService.Check(checkDirectory, config.IgnoreUnusedPackages);
+
+            // Apply .dependably exceptions: suppress specific findings so they no longer gate
+            // (spec §6). Suppressed counts and unused/expired entries are reported on stderr.
+            var suppression = ExceptionApplier.Apply(
+                audit.Vulnerabilities, unusedPackages, audit.UnverifiableAdvisories, config.Exceptions);
+            foreach (var note in suppression.Notices)
+            {
+                Console.Error.WriteLine($".dependably: {note}");
+            }
+
             var result = new AuditResult
             {
                 TotalPackages = audit.TotalPackages,
-                Vulnerabilities = audit.Vulnerabilities,
+                Vulnerabilities = suppression.Vulnerabilities,
                 PolicyFindings = policyFindings,
-                UnusedPackages = unusedPackages,
-                UnverifiableAdvisories = audit.UnverifiableAdvisories,
+                UnusedPackages = suppression.UnusedPackages,
+                UnverifiableAdvisories = suppression.UnverifiableAdvisories,
             };
+
+            // Config `failOn` feeds the gate; a CLI `--fail-on` overrides it (flags > files).
+            var failOnSeverity = options.FailOnSeverity ?? config.FailOnSeverity;
+            var failOnCount = options.FailOnCount ?? config.FailOnCount;
 
             // The CI gate (--fail-on, or the default any-vuln-or-policy rule) always
             // evaluates the UNFILTERED result so a display filter cannot hide a failure.
-            var exitCode = result.GateTrips(options.FailOnSeverity, options.FailOnCount) ? ExitFindings : ExitClean;
+            var exitCode = result.GateTrips(failOnSeverity, failOnCount) ? ExitFindings : ExitClean;
 
             // --severity is a DISPLAY filter only: it narrows what is printed, never the gate.
             // The formatter is handed the real exit code so JSON's summary.exitCode matches.
@@ -226,8 +247,9 @@ Options:
   --source <name>            Advisory source: github (default), osv
   --format <type>            Output format: human, table, json (default: human)
   --severity <level>         Filter by severity: critical, high, moderate, low, info
-  --config <path>            Path to a .dependably-check config file. When omitted, the
-                             file is discovered by walking up from the audited file's directory.
+  --config <path>            Path to a .dependably config file (.dependably-check is a
+                             deprecated alias). When omitted, it is discovered by walking up
+                             from the audited file's directory to the repo root.
   --fail-on <key>=<value>    CI gate (repeatable). Without it, ANY vulnerability or policy
                              error fails the build (exit 1) — the default. Each rule below
                              REPLACES that default; the build fails if ANY rule trips:
@@ -251,8 +273,8 @@ Options:
 Policy checks:
   In addition to vulnerabilities, nucheck flags any configured NuGet package
   source whose host is not public (api.nuget.org / nuget.org) and not allowlisted
-  in .dependably-check (the union of the common.allowedRegistryHosts and
-  nuget.allowedRegistryHosts lists).
+  in .dependably (the union of the common.allowedRegistryHosts and
+  nucheck.allowedRegistryHosts lists).
   An untrusted source is an error and exits non-zero.
 
   Local folder feeds (relative paths or file:// URIs) declared inside the repo
@@ -260,8 +282,8 @@ Policy checks:
   packages past a restore. Trust one explicitly via allowedLocalFeeds:
 
     {
-      "common": { "allowedLocalFeeds": ["./local-packages"] },
-      "nuget":  { "allowedLocalFeeds": ["file:///opt/mirror"] }
+      "common":  { "allowedLocalFeeds": ["./local-packages"] },
+      "nucheck": { "allowedLocalFeeds": ["file:///opt/mirror"] }
     }
 
   When nucheck cannot find a repository boundary (.git), NuGet config in parent
@@ -277,11 +299,30 @@ Unused-package check (advisory only, never exits non-zero):
   or native runtime assets legitimately show no direct namespace usage. Build-tool,
   analyzer, MSBuild-task, PrivateAssets, and *.runtime.* / native-asset packages are
   suppressed automatically; suppress anything else via ignoreUnusedPackages in
-  .dependably-check:
+  .dependably:
 
     {
-      "common": { "ignoreUnusedPackages": ["StyleCop.Analyzers"] },
-      "nuget":  { "ignoreUnusedPackages": ["Microsoft.CodeAnalysis.Analyzers"] }
+      "common":  { "ignoreUnusedPackages": ["StyleCop.Analyzers"] },
+      "nucheck": { "ignoreUnusedPackages": ["Microsoft.CodeAnalysis.Analyzers"] }
+    }
+
+Exceptions (standardized .dependably suppression):
+  Suppress specific findings so they no longer fail the build, without disabling a
+  check wholesale. Each entry needs a rule id, at least one selector (nucheck matches
+  package and id), and a non-empty reason; an optional expires (YYYY-MM-DD) makes it
+  inert afterward. Suppressed findings are removed from the gate; unused and expired
+  exceptions are reported on stderr.
+
+    {
+      "nucheck": {
+        "exceptions": [
+          { "rule": "vulnerable-package", "package": "log4net@2.0.8", "id": "GHSA-2cwj-8chv-9pp9",
+            "reason": "sink unreachable; upgrade blocked", "expires": "2026-09-30" },
+          { "rule": "unused-packages", "package": "Microsoft.SourceLink.GitHub",
+            "reason": "build-time only, no runtime namespace" }
+        ],
+        "failOn": { "severity": "high" }
+      }
     }
 
 Environment Variables:
@@ -293,7 +334,7 @@ Examples:
   nucheck ./packages.config
   nucheck ./packages.lock.json --source osv --format json
   nucheck ./packages.config --severity high
-  nucheck ./packages.config --config ./.dependably-check
+  nucheck ./packages.config --config ./.dependably
   nucheck ./packages.config --fail-on severity=high   # ignore moderate/low for gating
   nucheck ./packages.config --fail-on count=0         # fail on any vulnerability
 """;

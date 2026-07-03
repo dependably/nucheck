@@ -1,0 +1,53 @@
+{
+  "name": "exceptions-path-and-symbol-and",
+  "description": "Selectors within one entry are AND: both path and symbol must match.",
+  "tool": "codemetrics",
+  "today": "2026-07-03",
+  "files": {
+    ".dependably": {
+      "codemetrics": {
+        "rules": {
+          "cyclomatic": [
+            "error",
+            {
+              "max": 25
+            }
+          ]
+        },
+        "failOn": {
+          "severity": "high"
+        },
+        "exceptions": [
+          {
+            "rule": "cyclomatic",
+            "path": "src/Parser/**",
+            "symbol": "Parser.ParseExpression",
+            "reason": "grandfathered #142"
+          }
+        ]
+      }
+    }
+  },
+  "findings": [
+    {
+      "rule": "cyclomatic",
+      "package": null,
+      "path": "src/Parser/Parser.cs",
+      "symbol": "Parser.ParseExpression",
+      "id": null
+    },
+    {
+      "rule": "cyclomatic",
+      "package": null,
+      "path": "src/Parser/Parser.cs",
+      "symbol": "Parser.ParseStatement",
+      "id": null
+    }
+  ],
+  "expect": {
+    "suppressedFindings": [
+      0
+    ],
+    "gated": true
+  }
+}

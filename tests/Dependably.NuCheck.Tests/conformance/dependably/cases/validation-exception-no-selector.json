@@ -1,0 +1,20 @@
+{
+  "name": "validation-exception-no-selector",
+  "description": "An exception with no selector is EXCEPTION_NO_SELECTOR.",
+  "tool": "npm-check",
+  "files": {
+    ".dependably": {
+      "npm-check": {
+        "exceptions": [
+          {
+            "rule": "install-scripts",
+            "reason": "why"
+          }
+        ]
+      }
+    }
+  },
+  "expect": {
+    "error": "EXCEPTION_NO_SELECTOR"
+  }
+}

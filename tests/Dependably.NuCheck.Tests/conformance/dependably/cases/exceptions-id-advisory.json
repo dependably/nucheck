@@ -1,0 +1,37 @@
+{
+  "name": "exceptions-id-advisory",
+  "description": "An advisory id selector suppresses by finding identity.",
+  "tool": "nucheck",
+  "today": "2026-07-03",
+  "files": {
+    ".dependably": {
+      "nucheck": {
+        "failOn": {
+          "severity": "high"
+        },
+        "exceptions": [
+          {
+            "rule": "vulnerable-package",
+            "id": "GHSA-2cwj-8chv-9pp9",
+            "reason": "accepted risk, tracked"
+          }
+        ]
+      }
+    }
+  },
+  "findings": [
+    {
+      "rule": "vulnerable-package",
+      "package": "log4net@2.0.8",
+      "path": null,
+      "symbol": null,
+      "id": "GHSA-2cwj-8chv-9pp9"
+    }
+  ],
+  "expect": {
+    "suppressedFindings": [
+      0
+    ],
+    "gated": false
+  }
+}

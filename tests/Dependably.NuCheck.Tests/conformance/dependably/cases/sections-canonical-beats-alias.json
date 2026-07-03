@@ -1,0 +1,29 @@
+{
+  "name": "sections-canonical-beats-alias",
+  "description": "When both npm-check and npm exist, canonical wins and alias is ignored (still warns).",
+  "tool": "npm-check",
+  "files": {
+    ".dependably": {
+      "npm-check": {
+        "failOn": {
+          "count": 2
+        }
+      },
+      "npm": {
+        "failOn": {
+          "count": 99
+        }
+      }
+    }
+  },
+  "expect": {
+    "warnings": [
+      "DEPRECATED_ALIAS_SECTION"
+    ],
+    "resolved": {
+      "failOn": {
+        "count": 2
+      }
+    }
+  }
+}

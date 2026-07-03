@@ -1,65 +1,85 @@
 using System.Text.Json;
+using Dependably.NuCheck.Models;
 
 namespace Dependably.NuCheck.Config;
 
+/// <summary>A deprecation / unknown-key notice emitted while loading <c>.dependably</c> (spec §11).</summary>
+public sealed record DependablyWarning(string Code, string Message);
+
 /// <summary>
-/// The shared repo-root <c>.dependably-check</c> config, consumed across the
-/// Dependably checker tools. Only the data relevant to the NuGet checker is
-/// surfaced: the union of the <c>common.*</c> and <c>nuget.*</c>
-/// <c>allowedRegistryHosts</c>, <c>ignoreUnusedPackages</c>, and
-/// <c>allowedLocalFeeds</c> arrays. Other sections and unknown keys are ignored.
+/// The shared repo-root <c>.dependably</c> config, consumed across the Dependably suite.
+/// <c>.dependably-check</c> is a deprecated alias filename. nucheck reads the <c>common</c>
+/// section and its own <c>nucheck</c> section (<c>nuget</c> is a deprecated section alias):
+/// the union of <c>allowedRegistryHosts</c>, <c>ignoreUnusedPackages</c>, and
+/// <c>allowedLocalFeeds</c>, plus the standardized <c>exceptions</c> grammar and the
+/// <c>failOn</c> gate. Other sections and unknown keys are ignored (unknown keys inside a
+/// read section warn). See docs/dependably-config-spec.md.
 /// </summary>
 public sealed class DependablyCheckConfig
 {
-    /// <summary>The config file name discovered by walking up the directory tree.</summary>
-    public const string FileName = ".dependably-check";
+    /// <summary>The canonical config file name discovered by walking up the directory tree.</summary>
+    public const string FileName = ".dependably";
+
+    /// <summary>The deprecated alias filename, still read for the migration window.</summary>
+    public const string DeprecatedFileName = ".dependably-check";
+
+    /// <summary>The canonical section key for nucheck, and its deprecated alias.</summary>
+    public const string SectionKey = "nucheck";
+    public const string DeprecatedSectionKey = "nuget";
+
+    /// <summary>Highest <c>.dependably</c> format version this build understands.</summary>
+    public const int SupportedVersion = 1;
+
+    private static readonly string[] KnownSectionKeys =
+        ["allowedRegistryHosts", "ignoreUnusedPackages", "allowedLocalFeeds", "exceptions", "failOn", "rules"];
 
     private DependablyCheckConfig(
         IReadOnlyList<string> allowedRegistryHosts,
         IReadOnlyList<string> ignoreUnusedPackages,
-        IReadOnlyList<string> allowedLocalFeeds)
+        IReadOnlyList<string> allowedLocalFeeds,
+        IReadOnlyList<DependablyException> exceptions,
+        string? failOnSeverity,
+        int? failOnCount,
+        IReadOnlyList<DependablyWarning> warnings)
     {
         AllowedRegistryHosts = allowedRegistryHosts;
         IgnoreUnusedPackages = ignoreUnusedPackages;
         AllowedLocalFeeds = allowedLocalFeeds;
+        Exceptions = exceptions;
+        FailOnSeverity = failOnSeverity;
+        FailOnCount = failOnCount;
+        Warnings = warnings;
     }
 
-    /// <summary>
-    /// Bare hostnames that are trusted as NuGet package sources, in addition to the
-    /// built-in public hosts. The union of the config's <c>common</c> and <c>nuget</c>
-    /// <c>allowedRegistryHosts</c>, de-duplicated case-insensitively.
-    /// </summary>
+    /// <summary>Bare hostnames trusted as NuGet sources (union of common + nucheck, deduped case-insensitively).</summary>
     public IReadOnlyList<string> AllowedRegistryHosts { get; }
 
-    /// <summary>
-    /// Package ids that should never be reported as unused, regardless of whether they
-    /// appear in source. The union of the config's <c>common</c> and <c>nuget</c>
-    /// <c>ignoreUnusedPackages</c>, de-duplicated case-insensitively. Useful for
-    /// build-tool, analyzer, MSBuild-task, and <c>PrivateAssets</c> packages that
-    /// have no runtime namespace.
-    /// </summary>
+    /// <summary>Package ids never reported as unused (union of common + nucheck, deduped case-insensitively).</summary>
     public IReadOnlyList<string> IgnoreUnusedPackages { get; }
 
-    /// <summary>
-    /// Local folder feeds (relative paths or <c>file://</c> URIs) that are explicitly
-    /// trusted even though they are declared inside the repository tree. The union of the
-    /// config's <c>common</c> and <c>nuget</c> <c>allowedLocalFeeds</c>, de-duplicated
-    /// case-insensitively. An entry matches a source when it equals the source's path, or
-    /// when it is a trailing path-segment suffix of it (e.g. <c>feeds</c> or <c>./feeds</c>
-    /// matches a resolved <c>/repo/feeds</c>). Any enabled local feed NOT listed here is
-    /// reported as a policy error, because a repo-committed local feed can smuggle tampered
-    /// packages past a restore.
-    /// </summary>
+    /// <summary>Repo-local feeds explicitly trusted (union of common + nucheck, deduped case-insensitively).</summary>
     public IReadOnlyList<string> AllowedLocalFeeds { get; }
 
-    /// <summary>An empty config (no allowlisted hosts, no ignored packages, no local feeds), used when no file is found.</summary>
-    public static DependablyCheckConfig Empty { get; } = new([], [], []);
+    /// <summary>Parsed <c>exceptions</c> entries (common + nucheck), suppressing specific findings (spec §6).</summary>
+    public IReadOnlyList<DependablyException> Exceptions { get; }
+
+    /// <summary>The <c>failOn.severity</c> gate from the file (CLI <c>--fail-on</c> overrides), or null.</summary>
+    public string? FailOnSeverity { get; }
+
+    /// <summary>The <c>failOn.count</c> gate from the file (CLI <c>--fail-on</c> overrides), or null.</summary>
+    public int? FailOnCount { get; }
+
+    /// <summary>Deprecation / unknown-key notices (stderr; never affect exit codes).</summary>
+    public IReadOnlyList<DependablyWarning> Warnings { get; }
+
+    /// <summary>An empty config, used when no file is found.</summary>
+    public static DependablyCheckConfig Empty { get; } = new([], [], [], [], null, null, []);
 
     /// <summary>
-    /// Loads the config. When <paramref name="explicitPath"/> is given it is read
-    /// directly; otherwise <c>.dependably-check</c> is discovered by walking up from
-    /// <paramref name="startDirectory"/>. Returns <see cref="Empty"/> when no file is found.
-    /// Throws when an existing file cannot be parsed (the path is included in the message).
+    /// Loads the config. When <paramref name="explicitPath"/> is given it is read directly;
+    /// otherwise <c>.dependably</c> (or the deprecated <c>.dependably-check</c>) is discovered
+    /// by walking up from <paramref name="startDirectory"/>. Returns <see cref="Empty"/> when
+    /// no file is found. Throws when an existing file cannot be parsed.
     /// </summary>
     public static DependablyCheckConfig Load(string? explicitPath, string startDirectory)
     {
@@ -70,18 +90,18 @@ public sealed class DependablyCheckConfig
                 throw new FileNotFoundException($"Config file not found: {explicitPath}", explicitPath);
             }
 
-            return Parse(explicitPath);
+            return Parse(explicitPath, []);
         }
 
         var discovered = Discover(startDirectory);
-        return discovered is null ? Empty : Parse(discovered);
+        return discovered is null ? Empty : Parse(discovered, FilenameWarnings(discovered));
     }
 
     /// <summary>
-    /// Walks up from <paramref name="startDirectory"/> looking for a <c>.dependably-check</c>
-    /// file. The walk stops at the filesystem root, or at a directory containing a
-    /// <c>.git</c> entry (the repo boundary) after checking that directory. Returns the
-    /// file path, or null when none is found.
+    /// Walks up from <paramref name="startDirectory"/> looking for a shared config file.
+    /// <c>.dependably</c> is preferred over the deprecated <c>.dependably-check</c> at each
+    /// level. Stops at the filesystem root, or at a directory containing a <c>.git</c> entry
+    /// (the repo boundary) after checking that directory.
     /// </summary>
     public static string? Discover(string startDirectory)
     {
@@ -89,13 +109,15 @@ public sealed class DependablyCheckConfig
 
         while (directory is not null)
         {
-            var candidate = Path.Combine(directory.FullName, FileName);
-            if (File.Exists(candidate))
+            foreach (var name in new[] { FileName, DeprecatedFileName })
             {
-                return candidate;
+                var candidate = Path.Combine(directory.FullName, name);
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
             }
 
-            // Stop at the repository boundary once this directory has been checked.
             var gitPath = Path.Combine(directory.FullName, ".git");
             if (Directory.Exists(gitPath) || File.Exists(gitPath))
             {
@@ -108,68 +130,188 @@ public sealed class DependablyCheckConfig
         return null;
     }
 
-    private static DependablyCheckConfig Parse(string path)
+    private static List<DependablyWarning> FilenameWarnings(string path)
     {
+        var warnings = new List<DependablyWarning>();
+        var dir = Path.GetDirectoryName(path)!;
+        if (Path.GetFileName(path) == DeprecatedFileName)
+        {
+            warnings.Add(new DependablyWarning("DEPRECATED_FILENAME",
+                $"{DeprecatedFileName} is deprecated; rename it to {FileName}"));
+        }
+        else if (File.Exists(Path.Combine(dir, DeprecatedFileName)))
+        {
+            warnings.Add(new DependablyWarning("BOTH_FILES_PRESENT",
+                $"both {FileName} and {DeprecatedFileName} found in {dir}; using {FileName} ({DeprecatedFileName} is ignored — delete it)"));
+        }
+
+        return warnings;
+    }
+
+    private static DependablyCheckConfig Parse(string path, List<DependablyWarning> warnings)
+    {
+        JsonDocument document;
         try
         {
             using var stream = File.OpenRead(path);
-            using var document = JsonDocument.Parse(stream);
-            var root = document.RootElement;
-
-            var hosts = new List<string>();
-            var seenHosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            AppendStringArray(root, "common", "allowedRegistryHosts", hosts, seenHosts);
-            AppendStringArray(root, "nuget", "allowedRegistryHosts", hosts, seenHosts);
-
-            var ignored = new List<string>();
-            var seenIgnored = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            AppendStringArray(root, "common", "ignoreUnusedPackages", ignored, seenIgnored);
-            AppendStringArray(root, "nuget", "ignoreUnusedPackages", ignored, seenIgnored);
-
-            var localFeeds = new List<string>();
-            var seenLocalFeeds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            AppendStringArray(root, "common", "allowedLocalFeeds", localFeeds, seenLocalFeeds);
-            AppendStringArray(root, "nuget", "allowedLocalFeeds", localFeeds, seenLocalFeeds);
-
-            return new DependablyCheckConfig(hosts, ignored, localFeeds);
+            document = JsonDocument.Parse(stream);
         }
         catch (JsonException ex)
         {
             throw new InvalidDataException($"Failed to parse {path}: {ex.Message}", ex);
         }
+
+        using (document)
+        {
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                throw new DependablyConfigException($"Config must be a JSON object: {path}", "CONFIG_SHAPE");
+            }
+
+            ValidateVersion(root, path);
+
+            // Resolve the tool section: canonical `nucheck`, else the deprecated `nuget` alias.
+            var hasCanonical = TryGetObject(root, SectionKey, out _);
+            var hasAlias = TryGetObject(root, DeprecatedSectionKey, out _);
+            var toolKey = hasCanonical ? SectionKey : (hasAlias ? DeprecatedSectionKey : SectionKey);
+            if (!hasCanonical && hasAlias)
+            {
+                warnings.Add(new DependablyWarning("DEPRECATED_ALIAS_SECTION",
+                    $"section \"{DeprecatedSectionKey}\" is deprecated; rename it to \"{SectionKey}\""));
+            }
+            else if (hasCanonical && hasAlias)
+            {
+                warnings.Add(new DependablyWarning("DEPRECATED_ALIAS_SECTION",
+                    $"both \"{SectionKey}\" and \"{DeprecatedSectionKey}\" sections present; using \"{SectionKey}\""));
+            }
+
+            WarnUnknownKeys(root, "common", warnings);
+            WarnUnknownKeys(root, toolKey, warnings);
+
+            var hosts = UnionStringArray(root, toolKey, "allowedRegistryHosts");
+            var ignored = UnionStringArray(root, toolKey, "ignoreUnusedPackages");
+            var localFeeds = UnionStringArray(root, toolKey, "allowedLocalFeeds");
+
+            var exceptions = new List<DependablyException>();
+            exceptions.AddRange(DependablyExceptions.Parse(
+                GetProperty(root, "common", "exceptions"), "common", DependablyExceptions.NuCheckSelectors, null));
+            exceptions.AddRange(DependablyExceptions.Parse(
+                GetProperty(root, toolKey, "exceptions"), "own", DependablyExceptions.NuCheckSelectors, DependablyExceptions.KnownRules));
+
+            var (failOnSeverity, failOnCount) = ParseFailOn(root, toolKey);
+
+            return new DependablyCheckConfig(hosts, ignored, localFeeds, exceptions, failOnSeverity, failOnCount, warnings);
+        }
     }
 
-    private static void AppendStringArray(
-        JsonElement root,
-        string section,
-        string arrayKey,
-        List<string> values,
-        HashSet<string> seen)
+    private static void ValidateVersion(JsonElement root, string path)
     {
-        if (root.ValueKind != JsonValueKind.Object
-            || !root.TryGetProperty(section, out var sectionElement)
-            || sectionElement.ValueKind != JsonValueKind.Object
-            || !sectionElement.TryGetProperty(arrayKey, out var arrayElement)
-            || arrayElement.ValueKind != JsonValueKind.Array)
+        if (root.TryGetProperty("version", out var v))
         {
-            return;
+            if (v.ValueKind != JsonValueKind.Number || !v.TryGetInt32(out var version) || version > SupportedVersion)
+            {
+                throw new DependablyConfigException(
+                    $"Unsupported .dependably version in {path} (this build supports up to {SupportedVersion})", "CONFIG_VERSION");
+            }
         }
+    }
 
-        foreach (var element in arrayElement.EnumerateArray())
+    private static (string? severity, int? count) ParseFailOn(JsonElement root, string toolKey)
+    {
+        string? severity = null;
+        int? count = null;
+
+        foreach (var section in new[] { "common", toolKey })
         {
-            if (element.ValueKind != JsonValueKind.String)
+            if (GetProperty(root, section, "failOn") is not { ValueKind: JsonValueKind.Object } failOn)
             {
                 continue;
             }
 
-            var value = element.GetString();
-            if (!string.IsNullOrWhiteSpace(value) && seen.Add(value))
+            if (failOn.TryGetProperty("severity", out var sevEl) && sevEl.ValueKind == JsonValueKind.String)
             {
-                values.Add(value);
+                var level = Severity.ParseLevel(sevEl.GetString());
+                if (level is null)
+                {
+                    throw new DependablyConfigException($"invalid failOn.severity \"{sevEl.GetString()}\"", "INVALID_FAIL_ON");
+                }
+
+                severity = level;
+            }
+
+            if (failOn.TryGetProperty("count", out var countEl))
+            {
+                if (countEl.ValueKind != JsonValueKind.Number || !countEl.TryGetInt32(out var c) || c < 0)
+                {
+                    throw new DependablyConfigException("failOn.count must be a non-negative integer", "INVALID_FAIL_ON");
+                }
+
+                count = c;
             }
         }
+
+        return (severity, count);
+    }
+
+    private static void WarnUnknownKeys(JsonElement root, string section, List<DependablyWarning> warnings)
+    {
+        if (!TryGetObject(root, section, out var el))
+        {
+            return;
+        }
+
+        foreach (var prop in el.EnumerateObject())
+        {
+            if (!KnownSectionKeys.Contains(prop.Name))
+            {
+                warnings.Add(new DependablyWarning("UNKNOWN_KEY", $"unknown key \"{section}.{prop.Name}\" in .dependably — ignoring"));
+            }
+        }
+    }
+
+    // Union `common.<arrayKey>` and `<toolKey>.<arrayKey>`, deduped case-insensitively.
+    private static List<string> UnionStringArray(JsonElement root, string toolKey, string arrayKey)
+    {
+        var values = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var section in new[] { "common", toolKey })
+        {
+            if (GetProperty(root, section, arrayKey) is not { ValueKind: JsonValueKind.Array } arr)
+            {
+                continue;
+            }
+
+            foreach (var element in arr.EnumerateArray())
+            {
+                if (element.ValueKind != JsonValueKind.String)
+                {
+                    continue;
+                }
+
+                var value = element.GetString();
+                if (!string.IsNullOrWhiteSpace(value) && seen.Add(value))
+                {
+                    values.Add(value);
+                }
+            }
+        }
+
+        return values;
+    }
+
+    private static JsonElement? GetProperty(JsonElement root, string section, string key)
+        => TryGetObject(root, section, out var sectionEl) && sectionEl.TryGetProperty(key, out var el) ? el : null;
+
+    private static bool TryGetObject(JsonElement root, string section, out JsonElement element)
+    {
+        if (root.TryGetProperty(section, out var el) && el.ValueKind == JsonValueKind.Object)
+        {
+            element = el;
+            return true;
+        }
+
+        element = default;
+        return false;
     }
 }

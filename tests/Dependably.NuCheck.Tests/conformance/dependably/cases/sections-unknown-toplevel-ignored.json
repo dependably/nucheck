@@ -1,0 +1,28 @@
+{
+  "name": "sections-unknown-toplevel-ignored",
+  "description": "An unknown top-level section is ignored silently (forward compat).",
+  "tool": "npm-check",
+  "files": {
+    ".dependably": {
+      "future-tool": {
+        "rules": {
+          "whatever": "error"
+        }
+      },
+      "npm-check": {
+        "failOn": {
+          "count": 1
+        }
+      }
+    }
+  },
+  "expect": {
+    "error": null,
+    "warnings": [],
+    "resolved": {
+      "failOn": {
+        "count": 1
+      }
+    }
+  }
+}

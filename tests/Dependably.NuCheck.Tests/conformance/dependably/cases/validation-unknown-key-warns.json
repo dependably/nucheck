@@ -1,0 +1,28 @@
+{
+  "name": "validation-unknown-key-warns",
+  "description": "An unknown key in the own section warns UNKNOWN_KEY but does not error.",
+  "tool": "npm-check",
+  "files": {
+    ".dependably": {
+      "npm-check": {
+        "exclde": [
+          "typo/**"
+        ],
+        "failOn": {
+          "count": 1
+        }
+      }
+    }
+  },
+  "expect": {
+    "error": null,
+    "warnings": [
+      "UNKNOWN_KEY"
+    ],
+    "resolved": {
+      "failOn": {
+        "count": 1
+      }
+    }
+  }
+}
