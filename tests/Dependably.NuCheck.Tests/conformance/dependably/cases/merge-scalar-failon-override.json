@@ -1,0 +1,28 @@
+{
+  "name": "merge-scalar-failon-override",
+  "description": "failOn merges per key: tool overrides severity, common count survives.",
+  "tool": "cslint",
+  "files": {
+    ".dependably": {
+      "common": {
+        "failOn": {
+          "severity": "high",
+          "count": 20
+        }
+      },
+      "cslint": {
+        "failOn": {
+          "severity": "warning"
+        }
+      }
+    }
+  },
+  "expect": {
+    "resolved": {
+      "failOn": {
+        "severity": "warning",
+        "count": 20
+      }
+    }
+  }
+}

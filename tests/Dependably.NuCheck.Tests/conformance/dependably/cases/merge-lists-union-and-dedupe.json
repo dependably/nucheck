@@ -1,0 +1,39 @@
+{
+  "name": "merge-lists-union-and-dedupe",
+  "description": "exclude unions ordinally; allowedRegistryHosts unions case-insensitively (lowercased canonical).",
+  "tool": "npm-check",
+  "files": {
+    ".dependably": {
+      "common": {
+        "exclude": [
+          "dist/**"
+        ],
+        "allowedRegistryHosts": [
+          "Packages.Corp.Dev"
+        ]
+      },
+      "npm-check": {
+        "exclude": [
+          "dist/**",
+          "vendor/**"
+        ],
+        "allowedRegistryHosts": [
+          "packages.corp.dev",
+          "npm.pkg.github.com"
+        ]
+      }
+    }
+  },
+  "expect": {
+    "resolved": {
+      "exclude": [
+        "dist/**",
+        "vendor/**"
+      ],
+      "allowedRegistryHosts": [
+        "packages.corp.dev",
+        "npm.pkg.github.com"
+      ]
+    }
+  }
+}

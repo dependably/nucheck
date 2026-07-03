@@ -1,0 +1,20 @@
+{
+  "name": "validation-exception-missing-reason",
+  "description": "An exception without a reason is EXCEPTION_MISSING_REASON.",
+  "tool": "npm-check",
+  "files": {
+    ".dependably": {
+      "npm-check": {
+        "exceptions": [
+          {
+            "rule": "install-scripts",
+            "package": "esbuild"
+          }
+        ]
+      }
+    }
+  },
+  "expect": {
+    "error": "EXCEPTION_MISSING_REASON"
+  }
+}

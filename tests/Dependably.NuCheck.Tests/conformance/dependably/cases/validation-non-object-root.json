@@ -1,0 +1,15 @@
+{
+  "name": "validation-non-object-root",
+  "description": "A non-object root is CONFIG_SHAPE.",
+  "tool": "npm-check",
+  "files": {
+    ".dependably": [
+      "not",
+      "an",
+      "object"
+    ]
+  },
+  "expect": {
+    "error": "CONFIG_SHAPE"
+  }
+}

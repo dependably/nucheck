@@ -1,0 +1,29 @@
+{
+  "name": "exceptions-unused-warns",
+  "description": "An exception matching no finding warns UNUSED_EXCEPTION.",
+  "tool": "npm-check",
+  "today": "2026-07-03",
+  "files": {
+    ".dependably": {
+      "npm-check": {
+        "exceptions": [
+          {
+            "rule": "install-scripts",
+            "package": "never-seen",
+            "reason": "stale"
+          }
+        ]
+      }
+    }
+  },
+  "findings": [],
+  "expect": {
+    "suppressedFindings": [],
+    "unusedExceptions": [
+      0
+    ],
+    "warnings": [
+      "UNUSED_EXCEPTION"
+    ]
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "sections-alias-read",
+  "description": "A lone alias section (npm) is read and warns DEPRECATED_ALIAS_SECTION.",
+  "tool": "npm-check",
+  "files": {
+    ".dependably": {
+      "npm": {
+        "failOn": {
+          "count": 5
+        }
+      }
+    }
+  },
+  "expect": {
+    "warnings": [
+      "DEPRECATED_ALIAS_SECTION"
+    ],
+    "resolved": {
+      "failOn": {
+        "count": 5
+      }
+    }
+  }
+}

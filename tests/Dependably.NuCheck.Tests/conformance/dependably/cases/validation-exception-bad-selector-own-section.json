@@ -1,0 +1,21 @@
+{
+  "name": "validation-exception-bad-selector-own-section",
+  "description": "A selector a tool never emits (symbol for npm-check) is EXCEPTION_BAD_SELECTOR in its own section.",
+  "tool": "npm-check",
+  "files": {
+    ".dependably": {
+      "npm-check": {
+        "exceptions": [
+          {
+            "rule": "install-scripts",
+            "symbol": "Foo.Bar",
+            "reason": "x"
+          }
+        ]
+      }
+    }
+  },
+  "expect": {
+    "error": "EXCEPTION_BAD_SELECTOR"
+  }
+}

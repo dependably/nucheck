@@ -1,0 +1,24 @@
+{
+  "name": "discovery-walkup-finds-repo-root",
+  "description": "Discovery walks up from a subdirectory to the repo-root .dependably.",
+  "tool": "npm-check",
+  "files": {
+    ".dependably": {
+      "common": {
+        "exclude": [
+          "dist/**"
+        ]
+      }
+    }
+  },
+  "startDir": "packages/app",
+  "expect": {
+    "selectedFile": ".dependably",
+    "warnings": [],
+    "resolved": {
+      "exclude": [
+        "dist/**"
+      ]
+    }
+  }
+}

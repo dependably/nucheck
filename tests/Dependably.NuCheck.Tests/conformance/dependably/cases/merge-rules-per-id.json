@@ -1,0 +1,38 @@
+{
+  "name": "merge-rules-per-id",
+  "description": "rules merge per id: distinct ids union; a shared id is replaced wholesale by the tool section.",
+  "tool": "npm-check",
+  "files": {
+    ".dependably": {
+      "common": {
+        "rules": {
+          "no-git-deps": "error",
+          "install-scripts": "warn"
+        }
+      },
+      "npm-check": {
+        "rules": {
+          "install-scripts": [
+            "error",
+            {
+              "allow": []
+            }
+          ]
+        }
+      }
+    }
+  },
+  "expect": {
+    "resolved": {
+      "rules": {
+        "no-git-deps": "error",
+        "install-scripts": [
+          "error",
+          {
+            "allow": []
+          }
+        ]
+      }
+    }
+  }
+}

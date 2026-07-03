@@ -1,0 +1,40 @@
+{
+  "name": "exceptions-suppressed-still-counted",
+  "description": "A suppressed finding is reported (suppressed:true) but does not gate.",
+  "tool": "npm-check",
+  "today": "2026-07-03",
+  "files": {
+    ".dependably": {
+      "npm-check": {
+        "failOn": {
+          "severity": "warning"
+        },
+        "rules": {
+          "unused-dependencies": "warn"
+        },
+        "exceptions": [
+          {
+            "rule": "unused-dependencies",
+            "package": "tslib",
+            "reason": "tsc importHelpers"
+          }
+        ]
+      }
+    }
+  },
+  "findings": [
+    {
+      "rule": "unused-dependencies",
+      "package": "tslib",
+      "path": null,
+      "symbol": null,
+      "id": null
+    }
+  ],
+  "expect": {
+    "suppressedFindings": [
+      0
+    ],
+    "gated": false
+  }
+}

@@ -31,4 +31,9 @@
     <ProjectReference Include="..\..\src\Dependably.NuCheck\Dependably.NuCheck.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Shared cross-language .dependably conformance fixtures (vendored from the spec repo). -->
+    <None Include="conformance\**\*.json" CopyToOutputDirectory="PreserveNewest" LinkBase="conformance" />
+  </ItemGroup>
+
 </Project>

@@ -1,0 +1,22 @@
+{
+  "name": "validation-exception-bad-expires",
+  "description": "A malformed expires date is EXCEPTION_BAD_EXPIRES.",
+  "tool": "npm-check",
+  "files": {
+    ".dependably": {
+      "npm-check": {
+        "exceptions": [
+          {
+            "rule": "install-scripts",
+            "package": "esbuild",
+            "reason": "x",
+            "expires": "31-12-2026"
+          }
+        ]
+      }
+    }
+  },
+  "expect": {
+    "error": "EXCEPTION_BAD_EXPIRES"
+  }
+}

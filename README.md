@@ -33,7 +33,7 @@ nucheck <path-to-packages-file> [options]
   --format <type>       Output: human (default), table, json
   --severity <level>    Show only: critical, high, moderate, low, info
   --fail-on <k>=<v>     CI gate: severity=<level> or count=<N> (repeatable)
-  --config <path>       Path to a .dependably-check config file
+  --config <path>       Path to a .dependably config file (.dependably-check: deprecated alias)
   --rest                Use the GitHub REST API instead of GraphQL
   --verbose, -v         Write progress to stderr
   --help, -h            Show full help
@@ -74,7 +74,9 @@ Beyond vulnerabilities, `nucheck` also reports:
 - **Possibly-unused packages** — direct `<PackageReference>`s whose namespace never appears
   in your `.cs` files. Advisory only; never fails the build.
 
-Configure both in a `.dependably-check` JSON file at your repo root:
+Configure both in a `.dependably` JSON file at your repo root (the shared Dependably-suite
+config; `.dependably-check` is a deprecated alias filename). nucheck reads the `common`
+section and its own `nucheck` section (`nuget` is a deprecated section alias):
 
 ```json
 {
@@ -82,6 +84,27 @@ Configure both in a `.dependably-check` JSON file at your repo root:
     "allowedRegistryHosts": ["nuget.internal.example.com"],
     "allowedLocalFeeds": ["./local-packages"],
     "ignoreUnusedPackages": ["StyleCop.Analyzers"]
+  }
+}
+```
+
+### Exceptions
+
+To silence a *specific* finding without disabling a whole check, add an `exceptions` entry —
+a rule id, at least one selector (`package` / `id`), and a required `reason`; an optional
+`expires` (`YYYY-MM-DD`) makes it inert afterward. Suppressed findings no longer fail the
+build; unused and expired exceptions are reported on stderr.
+
+```json
+{
+  "nucheck": {
+    "failOn": { "severity": "high" },
+    "exceptions": [
+      { "rule": "vulnerable-package", "package": "log4net@2.0.8", "id": "GHSA-2cwj-8chv-9pp9",
+        "reason": "sink unreachable; upgrade blocked", "expires": "2026-09-30" },
+      { "rule": "unused-packages", "package": "Microsoft.SourceLink.GitHub",
+        "reason": "build-time only, no runtime namespace" }
+    ]
   }
 }
 ```

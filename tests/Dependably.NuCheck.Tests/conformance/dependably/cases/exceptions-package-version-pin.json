@@ -1,0 +1,44 @@
+{
+  "name": "exceptions-package-version-pin",
+  "description": "@version pin matches only the exact locked version; a different version re-arms.",
+  "tool": "nucheck",
+  "today": "2026-07-03",
+  "files": {
+    ".dependably": {
+      "nucheck": {
+        "failOn": {
+          "severity": "high"
+        },
+        "exceptions": [
+          {
+            "rule": "vulnerable-package",
+            "package": "log4net@2.0.8",
+            "reason": "sink unreachable"
+          }
+        ]
+      }
+    }
+  },
+  "findings": [
+    {
+      "rule": "vulnerable-package",
+      "package": "log4net@2.0.8",
+      "path": null,
+      "symbol": null,
+      "id": "GHSA-x"
+    },
+    {
+      "rule": "vulnerable-package",
+      "package": "log4net@2.0.15",
+      "path": null,
+      "symbol": null,
+      "id": "GHSA-x"
+    }
+  ],
+  "expect": {
+    "suppressedFindings": [
+      0
+    ],
+    "gated": true
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "validation-unknown-rule-in-common-ignored",
+  "description": "A rule id belonging to a sibling tool is legal in common and ignored by this tool.",
+  "tool": "npm-check",
+  "files": {
+    ".dependably": {
+      "common": {
+        "rules": {
+          "cyclomatic": [
+            "error",
+            {
+              "max": 25
+            }
+          ]
+        }
+      },
+      "npm-check": {
+        "rules": {
+          "no-git-deps": "error"
+        }
+      }
+    }
+  },
+  "expect": {
+    "error": null,
+    "resolved": {
+      "rules": {
+        "no-git-deps": "error"
+      }
+    }
+  }
+}

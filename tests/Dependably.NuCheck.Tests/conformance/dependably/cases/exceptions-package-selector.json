@@ -1,0 +1,41 @@
+{
+  "name": "exceptions-package-selector",
+  "description": "A package selector suppresses the matching finding; the run does not gate on it.",
+  "tool": "npm-check",
+  "today": "2026-07-03",
+  "files": {
+    ".dependably": {
+      "npm-check": {
+        "failOn": {
+          "severity": "warning"
+        },
+        "rules": {
+          "install-scripts": "warn"
+        },
+        "exceptions": [
+          {
+            "rule": "install-scripts",
+            "package": "esbuild",
+            "reason": "vendored build tool"
+          }
+        ]
+      }
+    }
+  },
+  "findings": [
+    {
+      "rule": "install-scripts",
+      "package": "esbuild",
+      "path": null,
+      "symbol": null,
+      "id": null
+    }
+  ],
+  "expect": {
+    "suppressedFindings": [
+      0
+    ],
+    "gated": false,
+    "unusedExceptions": []
+  }
+}

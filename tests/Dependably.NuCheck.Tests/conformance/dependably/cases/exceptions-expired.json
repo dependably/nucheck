@@ -1,0 +1,42 @@
+{
+  "name": "exceptions-expired",
+  "description": "An expired exception does not suppress and warns EXPIRED_EXCEPTION.",
+  "tool": "npm-check",
+  "today": "2026-07-03",
+  "files": {
+    ".dependably": {
+      "npm-check": {
+        "failOn": {
+          "severity": "warning"
+        },
+        "rules": {
+          "install-scripts": "warn"
+        },
+        "exceptions": [
+          {
+            "rule": "install-scripts",
+            "package": "esbuild",
+            "reason": "temporary",
+            "expires": "2026-01-01"
+          }
+        ]
+      }
+    }
+  },
+  "findings": [
+    {
+      "rule": "install-scripts",
+      "package": "esbuild",
+      "path": null,
+      "symbol": null,
+      "id": null
+    }
+  ],
+  "expect": {
+    "suppressedFindings": [],
+    "gated": true,
+    "expiredExceptions": [
+      0
+    ]
+  }
+}

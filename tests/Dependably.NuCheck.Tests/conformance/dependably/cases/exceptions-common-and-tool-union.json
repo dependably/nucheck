@@ -1,0 +1,54 @@
+{
+  "name": "exceptions-common-and-tool-union",
+  "description": "Exceptions from common and the tool section both apply.",
+  "tool": "cslint",
+  "today": "2026-07-03",
+  "files": {
+    ".dependably": {
+      "common": {
+        "exceptions": [
+          {
+            "rule": "OP004",
+            "path": "src/Protocol/**",
+            "reason": "wire constants"
+          }
+        ]
+      },
+      "cslint": {
+        "failOn": {
+          "severity": "warning"
+        },
+        "exceptions": [
+          {
+            "rule": "OP005",
+            "path": "src/Api/**",
+            "reason": "flag params here ok"
+          }
+        ]
+      }
+    }
+  },
+  "findings": [
+    {
+      "rule": "OP004",
+      "package": null,
+      "path": "src/Protocol/Frame.cs",
+      "symbol": null,
+      "id": null
+    },
+    {
+      "rule": "OP005",
+      "package": null,
+      "path": "src/Api/Client.cs",
+      "symbol": null,
+      "id": null
+    }
+  ],
+  "expect": {
+    "suppressedFindings": [
+      0,
+      1
+    ],
+    "gated": false
+  }
+}

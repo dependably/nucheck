@@ -1,0 +1,25 @@
+{
+  "name": "discovery-deprecated-filename",
+  "description": "A lone .dependably-check is read and warns DEPRECATED_FILENAME.",
+  "tool": "npm-check",
+  "files": {
+    ".dependably-check": {
+      "npm-check": {
+        "rules": {
+          "no-git-deps": "error"
+        }
+      }
+    }
+  },
+  "expect": {
+    "selectedFile": ".dependably-check",
+    "warnings": [
+      "DEPRECATED_FILENAME"
+    ],
+    "resolved": {
+      "rules": {
+        "no-git-deps": "error"
+      }
+    }
+  }
+}
