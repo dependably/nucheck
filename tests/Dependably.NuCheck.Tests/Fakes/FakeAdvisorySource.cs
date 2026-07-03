@@ -11,6 +11,8 @@ public sealed class FakeAdvisorySource : IAdvisorySource
     public FakeAdvisorySource(IReadOnlyDictionary<string, IReadOnlyList<Advisory>> advisoriesById)
         => _advisoriesById = advisoriesById;
 
+    public string DisplayName { get; init; } = "the fake advisory source";
+
     public Task<IReadOnlyList<Advisory>> GetAdvisoriesAsync(string packageId, CancellationToken cancellationToken = default)
         => Task.FromResult(_advisoriesById.TryGetValue(packageId, out var advisories) ? advisories : []);
 }

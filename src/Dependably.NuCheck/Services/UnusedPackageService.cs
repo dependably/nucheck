@@ -79,6 +79,18 @@ public static partial class UnusedPackageService
     private static partial Regex NamespaceDeclarationPattern();
 
     /// <summary>
+    /// Matches an invocation of an <c>Add*</c>/<c>Use*</c> dependency-injection extension method
+    /// (e.g. <c>services.AddOpenTelemetry()</c>, <c>builder.UseSerilog&lt;T&gt;()</c>). Capture
+    /// group 1 is the method name. Applied only after comments and literals are stripped so a
+    /// method name appearing only in a comment or string does not count as usage.
+    /// </summary>
+    [GeneratedRegex(
+        @"\b((?:Add|Use)[A-Za-z_]\w*)\s*(?:<[^<>()]*>)?\s*\(",
+        RegexOptions.None,
+        RegexTimeoutMs)]
+    private static partial Regex DiExtensionMethodPattern();
+
+    /// <summary>
     /// Disk-based entry point. Reads <c>*.csproj</c> and <c>Directory.Packages.props</c>
     /// files under <paramref name="scanDirectory"/> to obtain direct package ids, then
     /// checks each against namespace usages found in <c>.cs</c> files (excluding
@@ -92,20 +104,30 @@ public static partial class UnusedPackageService
     {
         try
         {
-            var directPackageIds = ReadDirectPackageIds(scanDirectory);
-            if (directPackageIds.Count == 0)
+            var directPackages = ReadDirectPackages(scanDirectory);
+            if (directPackages.Count == 0)
             {
                 return [];
             }
 
-            var namespaceUsages = CollectNamespaceUsages(scanDirectory);
-            return Check(directPackageIds, namespaceUsages, ignoredPackages);
+            var usages = CollectSourceUsages(scanDirectory);
+            return CheckCore(directPackages, usages.Namespaces, usages.DiMethods, ignoredPackages);
         }
         catch
         {
             return [];
         }
     }
+
+    /// <summary>
+    /// A direct package declaration discovered on disk: its id, the version declared for it
+    /// (null when a Central Package Management <c>&lt;PackageReference&gt;</c> carries none),
+    /// and the project/props file that declared it, relative to the scan root.
+    /// </summary>
+    private sealed record DirectPackage(string Id, string? Version, string? DeclaringProject);
+
+    /// <summary>Namespace usages and DI-extension-method invocations collected from source.</summary>
+    private sealed record SourceUsages(HashSet<string> Namespaces, HashSet<string> DiMethods);
 
     /// <summary>
     /// Pure, testable core — operates on already-extracted data, no disk access.
@@ -125,25 +147,58 @@ public static partial class UnusedPackageService
         IReadOnlyList<string> directPackageIds,
         IReadOnlySet<string> namespaceUsages,
         IReadOnlyList<string> ignoredPackages)
+        => Check(directPackageIds, namespaceUsages, new HashSet<string>(), ignoredPackages);
+
+    /// <summary>
+    /// Pure, testable core with the DI-extension-method signal made explicit. Identical to the
+    /// three-argument overload but additionally treats a package as used when one of its
+    /// <c>Add*</c>/<c>Use*</c> dependency-injection extension methods (see
+    /// <paramref name="diMethodUsages"/>) is invoked in source — the false-positive class where
+    /// a package is wired up only through <c>services.AddFoo()</c> / <c>builder.UseFoo()</c> and
+    /// never surfaces a <c>using</c> of its own namespace.
+    /// </summary>
+    /// <param name="diMethodUsages">
+    /// Names of <c>Add*</c>/<c>Use*</c> extension methods invoked in .cs source files.
+    /// </param>
+    public static IReadOnlyList<UnusedPackageFinding> Check(
+        IReadOnlyList<string> directPackageIds,
+        IReadOnlySet<string> namespaceUsages,
+        IReadOnlySet<string> diMethodUsages,
+        IReadOnlyList<string> ignoredPackages)
+        => CheckCore(
+            [.. directPackageIds.Select(id => new DirectPackage(id, null, null))],
+            namespaceUsages,
+            diMethodUsages,
+            ignoredPackages);
+
+    private static IReadOnlyList<UnusedPackageFinding> CheckCore(
+        IReadOnlyList<DirectPackage> directPackages,
+        IReadOnlySet<string> namespaceUsages,
+        IReadOnlySet<string> diMethodUsages,
+        IReadOnlyList<string> ignoredPackages)
     {
         var ignored = new HashSet<string>(ignoredPackages, StringComparer.OrdinalIgnoreCase);
         var findings = new List<UnusedPackageFinding>();
 
-        foreach (var id in directPackageIds)
+        foreach (var package in directPackages)
         {
-            if (ignored.Contains(id))
+            if (ignored.Contains(package.Id))
             {
                 continue;
             }
 
-            if (!IsUsed(id, namespaceUsages))
+            if (!IsUsed(package.Id, namespaceUsages, diMethodUsages))
             {
                 // Per-finding message carries only the variable data — the package id and the
                 // one-line reason. The (repeated) heuristic caveat is emitted ONCE as a section
                 // footer by the formatters (see <see cref="HeuristicCaveat"/>), not per line.
+                // The installed version and declaring project (when known) are threaded through
+                // as structured fields so multi-project solutions point the reader at the file.
                 findings.Add(new UnusedPackageFinding(
-                    id,
-                    $"Package '{id}' does not appear to be referenced in any .cs source file (heuristic)."));
+                    package.Id,
+                    $"Package '{package.Id}' does not appear to be referenced in any .cs source file (heuristic).",
+                    package.Version,
+                    package.DeclaringProject));
             }
         }
 
@@ -151,15 +206,48 @@ public static partial class UnusedPackageService
     }
 
     /// <summary>
-    /// Returns true when any namespace usage string matches <paramref name="packageId"/>
-    /// exactly or starts with <c>packageId.</c> (i.e. a sub-namespace), case-insensitive.
+    /// Returns true when the package appears to be used, by any of three signals:
+    /// <list type="number">
+    ///   <item>a namespace usage matches the package id exactly or as a sub-namespace;</item>
+    ///   <item>a namespace usage matches one of the package's curated namespace aliases —
+    ///     the false-positive class where the namespace differs from the package id
+    ///     (e.g. <c>BCrypt.Net-Next</c> → <c>BCrypt.Net</c>, <c>AWSSDK.S3</c> → <c>Amazon.S3</c>); or</item>
+    ///   <item>one of the package's <c>Add*</c>/<c>Use*</c> dependency-injection extension
+    ///     methods is invoked in source (e.g. <c>UseSerilog()</c>, <c>AddOpenTelemetry()</c>).</item>
+    /// </list>
+    /// All comparisons are case-insensitive.
     /// </summary>
-    private static bool IsUsed(string packageId, IReadOnlySet<string> namespaceUsages)
+    private static bool IsUsed(
+        string packageId,
+        IReadOnlySet<string> namespaceUsages,
+        IReadOnlySet<string> diMethodUsages)
     {
-        var prefix = packageId + ".";
+        if (MatchesNamespace(packageId, namespaceUsages))
+        {
+            return true;
+        }
+
+        foreach (var alias in NamespaceAliasesFor(packageId))
+        {
+            if (MatchesNamespace(alias, namespaceUsages))
+            {
+                return true;
+            }
+        }
+
+        return UsedViaDiExtension(packageId, diMethodUsages);
+    }
+
+    /// <summary>
+    /// Returns true when any namespace usage string matches <paramref name="candidate"/>
+    /// exactly or starts with <c>candidate.</c> (i.e. a sub-namespace), case-insensitive.
+    /// </summary>
+    private static bool MatchesNamespace(string candidate, IReadOnlySet<string> namespaceUsages)
+    {
+        var prefix = candidate + ".";
         foreach (var ns in namespaceUsages)
         {
-            if (ns.Equals(packageId, StringComparison.OrdinalIgnoreCase)
+            if (ns.Equals(candidate, StringComparison.OrdinalIgnoreCase)
                 || ns.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             {
                 return true;
@@ -169,7 +257,180 @@ public static partial class UnusedPackageService
         return false;
     }
 
-    private static IReadOnlyList<string> ReadDirectPackageIds(string scanDirectory)
+    /// <summary>
+    /// Curated package-id → root-namespace(s) map for common packages whose namespace differs
+    /// from the package id, so a genuine <c>using</c> of the real namespace is not mistaken for
+    /// "unused". Deliberately small and high-confidence; anything missing here remains
+    /// suppressible via <c>ignoreUnusedPackages</c>. <c>AWSSDK.*</c> is handled by a prefix
+    /// transform in <see cref="NamespaceAliasesFor"/> rather than an entry per service package.
+    /// </summary>
+    private static readonly Dictionary<string, string[]> KnownNamespaceAliases =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["BCrypt.Net-Next"] = ["BCrypt.Net"],
+            ["zxcvbn-core"] = ["Zxcvbn"],
+            ["protobuf-net"] = ["ProtoBuf"],
+            ["Handlebars.Net"] = ["HandlebarsDotNet"],
+            ["Serilog.AspNetCore"] = ["Serilog"],
+            ["Serilog.Extensions.Hosting"] = ["Serilog"],
+            ["Serilog.Extensions.Logging"] = ["Serilog"],
+            ["Serilog.Settings.Configuration"] = ["Serilog"],
+            ["Npgsql.EntityFrameworkCore.PostgreSQL"] = ["Npgsql"],
+            ["MySqlConnector"] = ["MySqlConnector"],
+            ["Microsoft.Data.Sqlite"] = ["Microsoft.Data.Sqlite"],
+        };
+
+    /// <summary>
+    /// Returns the candidate root namespaces to test for <paramref name="packageId"/> in
+    /// addition to the id itself: the curated <see cref="KnownNamespaceAliases"/> entry when
+    /// present, plus the <c>AWSSDK.* → Amazon.*</c> convention (e.g. <c>AWSSDK.S3</c> →
+    /// <c>Amazon.S3</c>, <c>AWSSDK.Core</c> → <c>Amazon</c>).
+    /// </summary>
+    private static IEnumerable<string> NamespaceAliasesFor(string packageId)
+    {
+        if (KnownNamespaceAliases.TryGetValue(packageId, out var aliases))
+        {
+            foreach (var alias in aliases)
+            {
+                yield return alias;
+            }
+        }
+
+        if (packageId.StartsWith("AWSSDK.", StringComparison.OrdinalIgnoreCase))
+        {
+            var service = packageId["AWSSDK.".Length..];
+            yield return service.Equals("Core", StringComparison.OrdinalIgnoreCase)
+                ? "Amazon"
+                : "Amazon." + service;
+        }
+    }
+
+    /// <summary>
+    /// Curated package-id → DI extension-method names for common packages whose registration
+    /// method name is NOT derivable from the id (e.g. <c>Swashbuckle.AspNetCore</c> registers
+    /// <c>AddSwaggerGen()</c>/<c>UseSwagger()</c>). Packages whose method name IS the id (e.g.
+    /// <c>OpenTelemetry</c> → <c>AddOpenTelemetry()</c>) are covered by
+    /// <see cref="DeriveDiMethods"/> and need no entry here.
+    /// </summary>
+    private static readonly Dictionary<string, string[]> KnownDiMethods =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Swashbuckle.AspNetCore"] = ["AddSwaggerGen", "AddSwagger", "UseSwagger", "UseSwaggerUI"],
+            ["Serilog.AspNetCore"] = ["UseSerilog", "AddSerilog"],
+            ["Serilog.Extensions.Hosting"] = ["UseSerilog", "AddSerilog"],
+            ["MediatR"] = ["AddMediatR"],
+            ["AutoMapper"] = ["AddAutoMapper"],
+            ["FluentValidation.DependencyInjectionExtensions"] = ["AddValidatorsFromAssembly", "AddValidatorsFromAssemblyContaining"],
+            ["Npgsql.EntityFrameworkCore.PostgreSQL"] = ["UseNpgsql"],
+            ["Pomelo.EntityFrameworkCore.MySql"] = ["UseMySql"],
+        };
+
+    /// <summary>
+    /// Infra/suffix segments that describe HOW a package plugs in rather than WHAT it is; they
+    /// are stripped before deriving a DI method name so <c>Serilog.AspNetCore</c> derives
+    /// <c>Serilog</c> (→ <c>AddSerilog</c>/<c>UseSerilog</c>) rather than <c>SerilogAspNetCore</c>.
+    /// </summary>
+    private static readonly string[] DiDerivationStripSuffixes =
+    [
+        ".AspNetCore",
+        ".Extensions.DependencyInjection",
+        ".Extensions.Hosting",
+        ".DependencyInjection",
+    ];
+
+    /// <summary>
+    /// Returns true when one of the package's <c>Add*</c>/<c>Use*</c> DI extension methods —
+    /// curated (<see cref="KnownDiMethods"/>) or derived from the id
+    /// (<see cref="DeriveDiMethods"/>) — was invoked in source.
+    /// </summary>
+    private static bool UsedViaDiExtension(string packageId, IReadOnlySet<string> diMethodUsages)
+    {
+        if (diMethodUsages.Count == 0)
+        {
+            return false;
+        }
+
+        if (KnownDiMethods.TryGetValue(packageId, out var known)
+            && known.Any(diMethodUsages.Contains))
+        {
+            return true;
+        }
+
+        return DeriveDiMethods(packageId).Any(diMethodUsages.Contains);
+    }
+
+    /// <summary>
+    /// Derives candidate DI extension-method names from a package id by convention:
+    /// <c>Add&lt;core&gt;</c>/<c>Use&lt;core&gt;</c> where <c>core</c> is the id with infra
+    /// suffixes (<see cref="DiDerivationStripSuffixes"/>) removed and dots collapsed, plus the
+    /// same for the id's final dotted segment. Only produces names when <c>core</c> is a single
+    /// identifier token so the derivation stays conservative (over-derivation would risk a
+    /// false "used" verdict).
+    /// </summary>
+    private static IEnumerable<string> DeriveDiMethods(string packageId)
+    {
+        var core = packageId;
+        foreach (var suffix in DiDerivationStripSuffixes)
+        {
+            if (core.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            {
+                core = core[..^suffix.Length];
+                break;
+            }
+        }
+
+        foreach (var token in DiTokens(core))
+        {
+            yield return "Add" + token;
+            yield return "Use" + token;
+        }
+    }
+
+    /// <summary>
+    /// The identifier tokens to build DI method names from: the whole id with dots removed
+    /// (e.g. <c>OpenTelemetry</c>), and its final dotted segment (e.g. <c>Serilog</c> from
+    /// <c>Serilog.AspNetCore</c> after suffix stripping). Tokens with non-identifier characters
+    /// are dropped so ids like <c>BCrypt.Net-Next</c> do not yield malformed method names.
+    /// </summary>
+    private static IEnumerable<string> DiTokens(string core)
+    {
+        var collapsed = core.Replace(".", string.Empty);
+        if (IsIdentifier(collapsed))
+        {
+            yield return collapsed;
+        }
+
+        var lastDot = core.LastIndexOf('.');
+        if (lastDot >= 0 && lastDot + 1 < core.Length)
+        {
+            var lastSegment = core[(lastDot + 1)..];
+            if (IsIdentifier(lastSegment)
+                && !lastSegment.Equals(collapsed, StringComparison.Ordinal))
+            {
+                yield return lastSegment;
+            }
+        }
+    }
+
+    private static bool IsIdentifier(string value)
+    {
+        if (value.Length == 0 || !(char.IsLetter(value[0]) || value[0] == '_'))
+        {
+            return false;
+        }
+
+        foreach (var c in value)
+        {
+            if (!(char.IsLetterOrDigit(c) || c == '_'))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static IReadOnlyList<DirectPackage> ReadDirectPackages(string scanDirectory)
     {
         var files = Directory
             .EnumerateFiles(scanDirectory, "*.csproj", SearchOption.AllDirectories)
@@ -181,14 +442,19 @@ public static partial class UnusedPackageService
         // a central <PackageVersion> entry for the same id can be suppressed.
         var devOnlyIds = CollectDevOnlyPackageReferenceIds(files);
 
-        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Keyed by id (first declaration wins order); merge fills in the version and prefers a
+        // .csproj declaring file so a Central Package Management package points at the project
+        // that references it rather than only at Directory.Packages.props.
+        var byId = new Dictionary<string, DirectPackage>(StringComparer.OrdinalIgnoreCase);
+        var order = new List<string>();
         foreach (var file in files)
         {
+            var relative = RelativeDeclaringPath(scanDirectory, file);
             try
             {
-                foreach (var id in ParsePackageReferences(file, devOnlyIds))
+                foreach (var (id, version) in ParsePackageReferences(file, devOnlyIds))
                 {
-                    ids.Add(id);
+                    MergeDirectPackage(byId, order, id, version, relative);
                 }
             }
             catch
@@ -197,7 +463,70 @@ public static partial class UnusedPackageService
             }
         }
 
-        return [.. ids];
+        return [.. order.Select(id => byId[id])];
+    }
+
+    /// <summary>
+    /// Inserts or refines the <see cref="DirectPackage"/> for <paramref name="id"/>: the first
+    /// occurrence sets insertion order; later occurrences fill in a still-unknown version and
+    /// prefer a <c>.csproj</c> declaring file over <c>Directory.Packages.props</c>.
+    /// </summary>
+    private static void MergeDirectPackage(
+        Dictionary<string, DirectPackage> byId,
+        List<string> order,
+        string id,
+        string? version,
+        string? declaringProject)
+    {
+        if (!byId.TryGetValue(id, out var existing))
+        {
+            byId[id] = new DirectPackage(id, NullIfBlank(version), declaringProject);
+            order.Add(id);
+            return;
+        }
+
+        byId[id] = existing with
+        {
+            Version = existing.Version ?? NullIfBlank(version),
+            DeclaringProject = PreferProjectFile(existing.DeclaringProject, declaringProject),
+        };
+    }
+
+    private static string? NullIfBlank(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : value;
+
+    /// <summary>
+    /// Prefers a <c>.csproj</c> declaring path over a <c>.props</c> one; otherwise keeps the
+    /// existing value. This makes a CPM package report the project that references it.
+    /// </summary>
+    private static string? PreferProjectFile(string? existing, string? candidate)
+    {
+        var existingIsProject = existing?.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) == true;
+        var candidateIsProject = candidate?.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) == true;
+        if (candidateIsProject && !existingIsProject)
+        {
+            return candidate;
+        }
+
+        return existing ?? candidate;
+    }
+
+    /// <summary>
+    /// The declaring file's path relative to the scan root, with forward slashes for stable
+    /// cross-platform display (e.g. <c>src/Api/Api.csproj</c>). Falls back to the file name if
+    /// a relative path cannot be computed.
+    /// </summary>
+    private static string RelativeDeclaringPath(string scanDirectory, string filePath)
+    {
+        try
+        {
+            var relative = Path.GetRelativePath(scanDirectory, filePath);
+            return relative.Replace('\\', '/');
+        }
+        catch
+        {
+            return Path.GetFileName(filePath);
+        }
     }
 
     /// <summary>
@@ -248,7 +577,7 @@ public static partial class UnusedPackageService
         }
     }
 
-    private static IEnumerable<string> ParsePackageReferences(
+    private static IEnumerable<(string Id, string? Version)> ParsePackageReferences(
         string filePath, HashSet<string>? devOnlyIds = null)
     {
         XDocument doc;
@@ -297,8 +626,24 @@ public static partial class UnusedPackageService
                 continue;
             }
 
-            yield return include;
+            yield return (include, ReadVersion(element));
         }
+    }
+
+    /// <summary>
+    /// Reads the declared version for a package element from the <c>Version</c> attribute or a
+    /// child <c>&lt;Version&gt;</c> element. Returns null when neither is present (e.g. a
+    /// Central Package Management <c>&lt;PackageReference&gt;</c> whose version lives in
+    /// <c>Directory.Packages.props</c>).
+    /// </summary>
+    private static string? ReadVersion(XElement element)
+    {
+        var version = element.Attribute("Version")?.Value
+            ?? element.Elements()
+                .FirstOrDefault(e => e.Name.LocalName.Equals("Version", StringComparison.OrdinalIgnoreCase))
+                ?.Value;
+
+        return string.IsNullOrWhiteSpace(version) ? null : version;
     }
 
     /// <summary>
@@ -466,9 +811,10 @@ public static partial class UnusedPackageService
             || id.StartsWith("SQLitePCLRaw.lib.", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static HashSet<string> CollectNamespaceUsages(string scanDirectory)
+    private static SourceUsages CollectSourceUsages(string scanDirectory)
     {
-        var usages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var namespaces = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var diMethods = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         var csFiles = Directory
             .EnumerateFiles(scanDirectory, "*.cs", SearchOption.AllDirectories)
@@ -478,7 +824,7 @@ public static partial class UnusedPackageService
         {
             try
             {
-                AddUsagesFromContent(File.ReadAllText(file), usages);
+                AddUsagesFromContent(File.ReadAllText(file), namespaces, diMethods);
             }
             catch
             {
@@ -486,17 +832,23 @@ public static partial class UnusedPackageService
             }
         }
 
-        return usages;
+        return new SourceUsages(namespaces, diMethods);
     }
 
     /// <summary>
-    /// Extracts namespace usages from one file's text into <paramref name="usages"/>:
-    /// explicit <c>using</c> directives (primary) plus qualified type references (secondary).
-    /// The secondary scan runs on a comment- and literal-stripped copy of the content so that
-    /// package ids mentioned only in comments, string values, or the file's own
+    /// Extracts usage signals from one file's text:
+    /// <list type="bullet">
+    ///   <item>namespace usages into <paramref name="namespaces"/> — explicit <c>using</c>
+    ///     directives (primary) plus qualified type references (secondary); and</item>
+    ///   <item><c>Add*</c>/<c>Use*</c> dependency-injection extension-method invocations into
+    ///     <paramref name="diMethods"/>.</item>
+    /// </list>
+    /// The secondary scans run on a comment- and literal-stripped copy of the content so that
+    /// package ids or method names mentioned only in comments, string values, or the file's own
     /// <c>namespace</c> declaration are not counted as usage.
     /// </summary>
-    private static void AddUsagesFromContent(string content, HashSet<string> usages)
+    private static void AddUsagesFromContent(
+        string content, HashSet<string> namespaces, HashSet<string> diMethods)
     {
         // Primary: explicit `using` directives on raw content — most reliable indicator.
         foreach (Match m in UsingDirectivePattern().Matches(content))
@@ -504,17 +856,25 @@ public static partial class UnusedPackageService
             var ns = m.Groups[1].Value;
             if (!string.IsNullOrWhiteSpace(ns))
             {
-                usages.Add(ns);
+                namespaces.Add(ns);
             }
         }
 
-        // Secondary: qualified type references — strip comments, string/char literals, and
-        // namespace declarations first so non-code mentions do not count as usage.
+        // Strip comments, string/char literals, and namespace declarations before the secondary
+        // scans so non-code mentions do not count as usage.
         var codeOnly = NamespaceDeclarationPattern().Replace(
             StripCommentsAndLiterals(content), " ");
+
+        // Secondary: qualified type references (namespace signal).
         foreach (Match m in QualifiedNamePattern().Matches(codeOnly))
         {
-            usages.Add(m.Groups[1].Value);
+            namespaces.Add(m.Groups[1].Value);
+        }
+
+        // Secondary: Add*/Use* DI extension-method invocations (used-via-DI signal).
+        foreach (Match m in DiExtensionMethodPattern().Matches(codeOnly))
+        {
+            diMethods.Add(m.Groups[1].Value);
         }
     }
 

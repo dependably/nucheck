@@ -9,6 +9,8 @@ public sealed class SummaryResultFormatter : IResultFormatter
 {
     private readonly string? _severityFilter;
     private readonly int _exitCode;
+    private readonly string? _manifestName;
+    private readonly string? _advisorySource;
 
     /// <param name="severityFilter">
     /// The active <c>--severity</c> display filter (a normalised ladder word), or
@@ -22,16 +24,30 @@ public sealed class SummaryResultFormatter : IResultFormatter
     /// beside a non-zero exit (e.g. an <c>info</c>-severity policy finding that a
     /// <c>--fail-on severity=info</c> rule gated).
     /// </param>
-    public SummaryResultFormatter(string? severityFilter = null, int exitCode = 0)
+    /// <param name="target">
+    /// The audited manifest path; its file name is echoed in the summary line so a clean
+    /// result names what was audited (e.g. <c>packages.lock.json</c>). Optional.
+    /// </param>
+    /// <param name="advisorySource">
+    /// The advisory database label (e.g. <c>OSV.dev</c>) echoed in the summary line so the
+    /// "all secure" result is verifiable — it names the source it was checked against. Optional.
+    /// </param>
+    public SummaryResultFormatter(
+        string? severityFilter = null,
+        int exitCode = 0,
+        string? target = null,
+        string? advisorySource = null)
     {
         _severityFilter = severityFilter;
         _exitCode = exitCode;
+        _manifestName = string.IsNullOrEmpty(target) ? null : Path.GetFileName(target);
+        _advisorySource = string.IsNullOrEmpty(advisorySource) ? null : advisorySource;
     }
 
     public string Format(AuditResult result)
     {
         var builder = new StringBuilder();
-        builder.AppendLine($"Found {result.TotalPackages} packages in audit.");
+        builder.AppendLine(AuditedLine(result.TotalPackages));
 
         if (result.VulnerabilityCount == 0)
         {
@@ -68,6 +84,22 @@ public sealed class SummaryResultFormatter : IResultFormatter
         AppendUnusedPackages(builder, result);
         AppendUnverifiableAdvisories(builder, result);
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// The opening line: how many packages were audited, and — when known — the manifest that
+    /// was read and the advisory source it was checked against, so a clean result is verifiable
+    /// (e.g. <c>Audited 72 packages (packages.lock.json) against OSV.dev.</c>).
+    /// </summary>
+    private string AuditedLine(int totalPackages)
+    {
+        var manifest = _manifestName is null
+            ? string.Empty
+            : $" ({TextSanitizer.Sanitize(_manifestName)})";
+        var source = _advisorySource is null
+            ? string.Empty
+            : $" against {TextSanitizer.Sanitize(_advisorySource)}";
+        return $"Audited {totalPackages} packages{manifest}{source}.";
     }
 
     /// <summary>
@@ -134,11 +166,11 @@ public sealed class SummaryResultFormatter : IResultFormatter
         builder.AppendLine();
         builder.AppendLine($"ℹ Possibly unused packages (heuristic) — {count} {(count == 1 ? "finding" : "findings")}:");
 
-        // Each line carries only the variable datum (the package id); the repeated heuristic
-        // caveat is printed ONCE below as a section footer instead of on every line.
+        // Each line carries only the variable data (id, installed version, declaring project);
+        // the repeated heuristic caveat is printed ONCE below as a section footer.
         foreach (var finding in result.UnusedPackages)
         {
-            builder.AppendLine($"  • {TextSanitizer.Sanitize(finding.Id)} — not referenced in any .cs file");
+            builder.AppendLine($"  • {UnusedPackageText.Label(finding)} — not referenced in any .cs file");
         }
 
         builder.AppendLine();

@@ -117,6 +117,24 @@ public class ProgramTests : IDisposable
     }
 
     [Fact]
+    public void Clean_audit_summary_echoes_manifest_and_advisory_source()
+    {
+        // #58: the summary line must name the manifest that was read and the advisory source it
+        // was checked against, so a clean "all secure" result is verifiable.
+        var path = WritePackagesConfig("Safe.Pkg", "1.0.0");
+        var source = new FakeAdvisorySource(new Dictionary<string, IReadOnlyList<Advisory>>())
+        {
+            DisplayName = "OSV.dev",
+        };
+
+        var (exit, output, _) = Run([path], _ => source);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("Audited 1 packages (packages.config) against OSV.dev.", output);
+        Assert.DoesNotContain("Found 1 packages in audit", output);
+    }
+
+    [Fact]
     public void Vulnerable_audit_exits_one()
     {
         var path = WritePackagesConfig("Vulnerable.Pkg", "1.5.0");

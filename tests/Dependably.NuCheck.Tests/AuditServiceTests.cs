@@ -141,6 +141,8 @@ public class AuditServiceTests
     /// <summary>An advisory source that fails for one package, to prove the audit surfaces it.</summary>
     private sealed class ThrowingSource : IAdvisorySource
     {
+        public string DisplayName => "the throwing source";
+
         public Task<IReadOnlyList<Advisory>> GetAdvisoriesAsync(string packageId, CancellationToken cancellationToken = default)
             => packageId == "Boom"
                 ? throw new InvalidOperationException("query failed")
