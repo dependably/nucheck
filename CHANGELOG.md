@@ -4,9 +4,17 @@ All notable changes to `nucheck` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.1] - 2026-07-03
 
 ### Added
+
+- **Pre-commit dogfooding.** The tracked `.githooks/pre-commit` hook now dogfoods nucheck
+  against its own two `packages.lock.json` files (`--source osv --fail-on severity=high`,
+  a hard gate) and cross-dogfoods the sibling Dependably `.NET` tools — `cslint --sast
+  --global` and `codemetrics ./src` — against this repo's own C# source (also hard gates;
+  skipped with a warning, not a failure, when a sibling tool isn't installed globally). A
+  root `.dependably` config documents the private registry proxy
+  (`dependably.northwardlabs.ca`) as an `allowedRegistryHosts` entry for suite consistency.
 
 - **Unified `.dependably` config + exceptions.** nucheck now reads the canonical
   `.dependably` file (the deprecated `.dependably-check` filename is still read with a
@@ -19,26 +27,15 @@ All notable changes to `nucheck` are documented here. The format is based on
   read section warn. Mirrors npm-check's reference implementation and is verified against the
   shared cross-language conformance fixtures.
 
-### Changed
-
-- **First run works without a token.** When `GITHUB_TOKEN` is unset and no `--source` is
-  given, `nucheck` now falls back to OSV.dev automatically with a one-line stderr notice
-  instead of exiting `2`. The hard error is reserved for an explicit `--source github` with
-  no token. (moonlitlabs/nucheck#57)
-- **Cleaner unused-package output.** Each possibly-unused finding is reduced to the package
-  id (`• AWSSDK.S3 — not referenced in any .cs file`); the heuristic disclaimer and the
-  `ignoreUnusedPackages` hint are printed once as a section footer instead of on every line.
-  The caveat now names the real false-positive classes (namespace ≠ package ID,
-  dependency-injection extension methods, transitive/native runtime assets).
-  (moonlitlabs/nucheck#57)
-
 ### Fixed
 
-- **Fewer unused-package false positives.** Native/runtime-asset packages that carry no
-  managed namespace are now suppressed automatically: ids following the NuGet `runtime.*` /
-  `*.runtime.*` convention and the `SQLitePCLRaw.lib.*` native bundles. A full
-  assembly/namespace resolution from the nupkg (to also catch namespace-differs-from-id and
-  DI-extension-method usage) remains deferred. (moonlitlabs/nucheck#57)
+- **Unused-package heuristic now recognizes MSBuild implicit `<Using Include="...">`
+  items.** A package referenced only via a project-level implicit using (e.g. test
+  projects declaring `<Using Include="Xunit" />` instead of a literal `using Xunit;` in
+  every file) was previously misreported as unused; `xunit.runner.visualstudio` — a
+  test-discovery package with no directly-callable API — is now also allow-listed, the
+  same class as the existing `Microsoft.NET.Test.Sdk` entry. Found by dogfooding nucheck
+  on its own test project.
 
 ## [2.0.0] - 2026-07-02
 
@@ -221,7 +218,8 @@ Advisory Database, matching installed versions with the real `NuGet.Versioning` 
 
 - Published as a `dotnet tool` (`PackAsTool`); metadata includes `PackageProjectUrl`.
 
-[Unreleased]: https://github.com/dependably/nucheck/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/dependably/nucheck/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/dependably/nucheck/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/dependably/nucheck/compare/v1.1.1...v2.0.0
 [1.1.1]: https://github.com/dependably/nucheck/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/dependably/nucheck/releases/tag/v1.1.0
