@@ -261,7 +261,7 @@ public class ProgramTests : IDisposable
     [Fact]
     public void Untrusted_source_fails_clean_audit()
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"nugetcheck-{Guid.NewGuid():N}");
+        var dir = Path.Combine(Path.GetTempPath(), $"nucheck-{Guid.NewGuid():N}");
         Directory.CreateDirectory(dir);
         _tempDirs.Add(dir);
 
@@ -349,7 +349,7 @@ public class ProgramTests : IDisposable
     {
         // Junk that is recognised as neither packages.config/.lock.json nor a project
         // file is an operational error (the scanner refuses to fail open) -> exit 2.
-        var dir = Path.Combine(Path.GetTempPath(), $"nugetcheck-{Guid.NewGuid():N}");
+        var dir = Path.Combine(Path.GetTempPath(), $"nucheck-{Guid.NewGuid():N}");
         Directory.CreateDirectory(dir);
         _tempDirs.Add(dir);
         var path = Path.Combine(dir, "garbage.txt");
@@ -382,7 +382,7 @@ public class ProgramTests : IDisposable
         // Place the manifest in its own directory with an isolating nuget.config so the
         // source-trust policy check sees only nuget.org, independent of the machine's
         // ambient NuGet configuration.
-        var dir = Path.Combine(Path.GetTempPath(), $"nugetcheck-{Guid.NewGuid():N}");
+        var dir = Path.Combine(Path.GetTempPath(), $"nucheck-{Guid.NewGuid():N}");
         Directory.CreateDirectory(dir);
         _tempDirs.Add(dir);
 
