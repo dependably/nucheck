@@ -307,4 +307,38 @@ public class CliOptionsTests
         Assert.Equal("github", options.Source);
         Assert.Null(options.Error);
     }
+
+    // ---- --rule <id>:<severity> ---------------------------------------------------
+
+    [Fact]
+    public void Parse_reads_rule_override()
+    {
+        var options = CliOptions.Parse(["./p.config", "--rule", "pinned-versions:warn"]);
+
+        Assert.Null(options.Error);
+        Assert.Equal("warn", options.RuleOverrides["pinned-versions"]);
+    }
+
+    [Fact]
+    public void Parse_rule_is_repeatable_and_case_insensitive_on_severity()
+    {
+        var options = CliOptions.Parse(
+            ["./p.config", "--rule", "pinned-versions:OFF", "--rule", "unused-packages:warn"]);
+
+        Assert.Null(options.Error);
+        Assert.Equal("off", options.RuleOverrides["pinned-versions"]);
+        Assert.Equal("warn", options.RuleOverrides["unused-packages"]);
+    }
+
+    [Theory]
+    [InlineData("pinned-versions")]        // no ':'
+    [InlineData("pinned-versions:fatal")]  // not error/warn/off
+    [InlineData("no-such-rule:error")]     // unknown rule id
+    [InlineData(":warn")]                  // empty id
+    public void Parse_rejects_malformed_rule_override(string spec)
+    {
+        var options = CliOptions.Parse(["./p.config", "--rule", spec]);
+
+        Assert.NotNull(options.Error);
+    }
 }

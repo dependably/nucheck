@@ -226,6 +226,116 @@ public class DependablyCheckConfigTests : IDisposable
         Assert.Equal(["NugetOnly.Pkg"], config.IgnoreUnusedPackages);
     }
 
+    // ---- rules severity map (spec §4.1/§5) --------------------------------------
+    // These mirror the shared conformance fixtures (merge-rules-per-id,
+    // validation-bad-severity, validation-unknown-rule-*) with nucheck rule ids —
+    // the fixtures themselves are npm-flavoured, so like the other config-loader
+    // cases they are covered natively here rather than replayed.
+
+    [Fact]
+    public void Rules_merge_per_id_tool_replaces_common_wholesale()
+    {
+        var dir = NewTempDir();
+        Write(dir, """
+        {
+          "common":  { "rules": { "pinned-versions": "warn", "unused-packages": "warn" } },
+          "nucheck": { "rules": { "pinned-versions": ["error", { "ignore": [] }] } }
+        }
+        """);
+
+        var config = DependablyCheckConfig.Load(null, dir);
+
+        Assert.Equal("error", config.RuleSeverities["pinned-versions"]);
+        Assert.Equal("warn", config.RuleSeverities["unused-packages"]);
+    }
+
+    [Fact]
+    public void Rules_off_round_trips()
+    {
+        var dir = NewTempDir();
+        Write(dir, """
+        { "nucheck": { "rules": { "pinned-versions": "off" } } }
+        """);
+
+        Assert.Equal("off", DependablyCheckConfig.Load(null, dir).RuleSeverities["pinned-versions"]);
+    }
+
+    [Fact]
+    public void Rules_invalid_severity_is_INVALID_SEVERITY()
+    {
+        var dir = NewTempDir();
+        Write(dir, """
+        { "nucheck": { "rules": { "pinned-versions": "fatal" } } }
+        """);
+
+        var ex = Assert.Throws<DependablyConfigException>(() => DependablyCheckConfig.Load(null, dir));
+        Assert.Equal("INVALID_SEVERITY", ex.Code);
+    }
+
+    [Fact]
+    public void Rules_non_object_options_is_INVALID_RULE_OPTIONS()
+    {
+        var dir = NewTempDir();
+        Write(dir, """
+        { "nucheck": { "rules": { "pinned-versions": ["warn", 42] } } }
+        """);
+
+        var ex = Assert.Throws<DependablyConfigException>(() => DependablyCheckConfig.Load(null, dir));
+        Assert.Equal("INVALID_RULE_OPTIONS", ex.Code);
+    }
+
+    [Fact]
+    public void Rules_unknown_rule_in_own_section_is_UNKNOWN_RULE()
+    {
+        var dir = NewTempDir();
+        Write(dir, """
+        { "nucheck": { "rules": { "no-such-rule": "error" } } }
+        """);
+
+        var ex = Assert.Throws<DependablyConfigException>(() => DependablyCheckConfig.Load(null, dir));
+        Assert.Equal("UNKNOWN_RULE", ex.Code);
+    }
+
+    [Fact]
+    public void Rules_sibling_tool_rule_in_common_is_tolerated()
+    {
+        var dir = NewTempDir();
+        Write(dir, """
+        {
+          "common":  { "rules": { "cyclomatic": ["error", { "max": 25 }] } },
+          "nucheck": { "rules": { "pinned-versions": "warn" } }
+        }
+        """);
+
+        var config = DependablyCheckConfig.Load(null, dir);
+
+        Assert.Equal("warn", config.RuleSeverities["pinned-versions"]);
+        Assert.Equal("error", config.RuleSeverities["cyclomatic"]); // parsed, unused by nucheck
+    }
+
+    [Fact]
+    public void Rules_severity_in_common_is_still_value_validated()
+    {
+        var dir = NewTempDir();
+        Write(dir, """
+        { "common": { "rules": { "cyclomatic": "fatal" } } }
+        """);
+
+        var ex = Assert.Throws<DependablyConfigException>(() => DependablyCheckConfig.Load(null, dir));
+        Assert.Equal("INVALID_SEVERITY", ex.Code);
+    }
+
+    [Fact]
+    public void Rules_absent_means_empty_map()
+    {
+        var dir = NewTempDir();
+        Write(dir, """
+        { "nucheck": { "allowedRegistryHosts": [] } }
+        """);
+
+        Assert.Empty(DependablyCheckConfig.Load(null, dir).RuleSeverities);
+    }
+
     public void Dispose()
     {
         GC.SuppressFinalize(this);

@@ -63,12 +63,14 @@ public sealed class TableResultFormatter : IResultFormatter
         builder.AppendLine($"Vulnerable Packages:    {result.VulnerablePackageCount}");
         builder.AppendLine($"Advisories Found:       {result.VulnerabilityCount}");
         builder.AppendLine($"Policy Findings:        {result.PolicyFindings.Count}");
+        builder.AppendLine($"Unpinned Versions:      {result.PinnedVersionFindings.Count}");
         builder.AppendLine($"Possibly Unused:        {result.UnusedPackages.Count} (heuristic, advisory only)");
         builder.AppendLine($"Unverifiable Ranges:    {result.UnverifiableAdvisories.Count} (range not parsed — investigate)");
         builder.AppendLine("-------------------");
 
         AppendVulnerabilities(builder, result);
         AppendPolicyFindings(builder, result);
+        AppendPinnedVersionFindings(builder, result);
         AppendUnusedPackages(builder, result);
         AppendUnverifiableAdvisories(builder, result);
         return builder.ToString();
@@ -117,10 +119,10 @@ public sealed class TableResultFormatter : IResultFormatter
         }
 
         // The all-clear checkmark is only honest when the process is exiting 0 and there
-        // are no policy findings to show below. A non-zero exit (e.g. an info-severity
-        // parent-config notice gated by --fail-on severity=info) or any policy finding
-        // must suppress it so the table never contradicts the exit code.
-        if (_exitCode != 0 || result.PolicyFindings.Count > 0)
+        // are no policy/pinned findings to show below. A non-zero exit (e.g. an
+        // info-severity parent-config notice gated by --fail-on severity=info) or any such
+        // finding must suppress it so the table never contradicts the exit code.
+        if (_exitCode != 0 || result.PolicyFindings.Count > 0 || result.PinnedVersionFindings.Count > 0)
         {
             return;
         }
@@ -182,6 +184,22 @@ public sealed class TableResultFormatter : IResultFormatter
             var host = TextSanitizer.Sanitize(finding.Host);
             var message = TextSanitizer.Sanitize(finding.Message);
             builder.AppendLine($"   [{level}] {source} -> {host}: {message}");
+        }
+    }
+
+    private static void AppendPinnedVersionFindings(StringBuilder builder, AuditResult result)
+    {
+        if (result.PinnedVersionFindings.Count == 0)
+        {
+            return;
+        }
+
+        builder.AppendLine("-------------------");
+        builder.AppendLine("UNPINNED PACKAGE VERSIONS (pinned-versions rule)");
+        foreach (var finding in result.PinnedVersionFindings)
+        {
+            var level = Severity.Normalize(finding.Severity);
+            builder.AppendLine($"   [{level}] {TextSanitizer.Sanitize(finding.Message)}");
         }
     }
 

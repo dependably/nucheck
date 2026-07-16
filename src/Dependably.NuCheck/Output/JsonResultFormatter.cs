@@ -39,6 +39,7 @@ public sealed class JsonResultFormatter : IResultFormatter
         var findings = new List<(string Severity, object Finding)>();
         findings.AddRange(VulnerabilityFindings(result));
         findings.AddRange(PolicyFindings(result));
+        findings.AddRange(PinnedVersionFindings(result));
         findings.AddRange(UnusedFindings(result));
         findings.AddRange(UnverifiableRangeFindings(result));
 
@@ -123,6 +124,30 @@ public sealed class JsonResultFormatter : IResultFormatter
                 extra = new
                 {
                     host = finding.Host,
+                    source = finding.Source,
+                },
+            });
+        }
+    }
+
+    // pinned-versions rule findings (error → high gates; warn → low reports only).
+    private static IEnumerable<(string Severity, object Finding)> PinnedVersionFindings(AuditResult result)
+    {
+        foreach (var finding in result.PinnedVersionFindings)
+        {
+            var severity = Severity.Normalize(finding.Severity);
+            yield return (severity, new
+            {
+                severity,
+                ruleId = "pinned-versions",
+                category = "policy",
+                message = finding.Message,
+                location = (object?)null,
+                remediation = "pin the package to an exact version",
+                extra = new
+                {
+                    package = finding.Id,
+                    declaredVersion = finding.RawVersion,
                     source = finding.Source,
                 },
             });

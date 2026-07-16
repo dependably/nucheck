@@ -15,6 +15,7 @@ public static class ExceptionApplier
         IReadOnlyList<PackageVulnerability> Vulnerabilities,
         IReadOnlyList<UnusedPackageFinding> UnusedPackages,
         IReadOnlyList<UnverifiableAdvisoryFinding> UnverifiableAdvisories,
+        IReadOnlyList<PinnedVersionFinding> PinnedVersionFindings,
         IReadOnlyList<string> Notices);
 
     public static Result Apply(
@@ -22,11 +23,13 @@ public static class ExceptionApplier
         IReadOnlyList<UnusedPackageFinding> unusedPackages,
         IReadOnlyList<UnverifiableAdvisoryFinding> unverifiableAdvisories,
         IReadOnlyList<DependablyException> exceptions,
-        DateOnly? todayOverride = null)
+        DateOnly? todayOverride = null,
+        IReadOnlyList<PinnedVersionFinding>? pinnedVersionFindings = null)
     {
+        pinnedVersionFindings ??= [];
         if (exceptions.Count == 0)
         {
-            return new Result(vulnerabilities, unusedPackages, unverifiableAdvisories, []);
+            return new Result(vulnerabilities, unusedPackages, unverifiableAdvisories, pinnedVersionFindings, []);
         }
 
         var today = todayOverride ?? DateOnly.FromDateTime(DateTime.UtcNow);
@@ -64,6 +67,8 @@ public static class ExceptionApplier
             f => new ExceptionTarget("unused-packages", Package: f.Id));
         var keptUnverifiable = Filter(unverifiableAdvisories, live, used, ref suppressed,
             f => new ExceptionTarget("unverifiable-advisory", Package: f.PackageId, Id: f.AdvisoryId));
+        var keptPinned = Filter(pinnedVersionFindings, live, used, ref suppressed,
+            f => new ExceptionTarget("pinned-versions", Package: f.Id, Version: f.RawVersion));
 
         var notices = new List<string>();
         if (suppressed > 0)
@@ -81,7 +86,7 @@ public static class ExceptionApplier
             notices.Add($"exception expired {ex.Expires:yyyy-MM-dd} for rule \"{ex.Rule}\" — {ex.Reason}");
         }
 
-        return new Result(keptVulns, keptUnused, keptUnverifiable, notices);
+        return new Result(keptVulns, keptUnused, keptUnverifiable, keptPinned, notices);
     }
 
     private static List<T> Filter<T>(

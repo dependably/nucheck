@@ -81,6 +81,7 @@ public sealed class SummaryResultFormatter : IResultFormatter
         }
 
         AppendPolicyFindings(builder, result);
+        AppendPinnedVersionFindings(builder, result);
         AppendUnusedPackages(builder, result);
         AppendUnverifiableAdvisories(builder, result);
         return builder.ToString();
@@ -129,10 +130,10 @@ public sealed class SummaryResultFormatter : IResultFormatter
         }
 
         // The all-clear checkmark is only honest when the process is exiting 0 and there
-        // are no policy findings to show below. A non-zero exit (e.g. an info-severity
-        // parent-config notice gated by --fail-on severity=info) or any policy finding
-        // must suppress it so the summary never contradicts the exit code.
-        if (_exitCode != 0 || result.PolicyFindings.Count > 0)
+        // are no policy/pinned findings to show below. A non-zero exit (e.g. an
+        // info-severity parent-config notice gated by --fail-on severity=info) or any such
+        // finding must suppress it so the summary never contradicts the exit code.
+        if (_exitCode != 0 || result.PolicyFindings.Count > 0 || result.PinnedVersionFindings.Count > 0)
         {
             return;
         }
@@ -150,6 +151,21 @@ public sealed class SummaryResultFormatter : IResultFormatter
         builder.AppendLine();
         builder.AppendLine($"⚠ Found {result.PolicyFindings.Count} policy finding(s):");
         foreach (var finding in result.PolicyFindings)
+        {
+            builder.AppendLine($"  • [{Severity.Normalize(finding.Severity)}] {TextSanitizer.Sanitize(finding.Message)}");
+        }
+    }
+
+    private static void AppendPinnedVersionFindings(StringBuilder builder, AuditResult result)
+    {
+        if (result.PinnedVersionFindings.Count == 0)
+        {
+            return;
+        }
+
+        builder.AppendLine();
+        builder.AppendLine($"⚠ Found {result.PinnedVersionFindings.Count} unpinned package version(s):");
+        foreach (var finding in result.PinnedVersionFindings)
         {
             builder.AppendLine($"  • [{Severity.Normalize(finding.Severity)}] {TextSanitizer.Sanitize(finding.Message)}");
         }

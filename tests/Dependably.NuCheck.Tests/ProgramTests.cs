@@ -421,6 +421,146 @@ public class ProgramTests : IDisposable
         Assert.Contains("bogus", error);
     }
 
+    // ---- pinned-versions rule end-to-end -------------------------------------------
+
+    [Fact]
+    public void Unpinned_version_fails_the_audit_by_default()
+    {
+        var path = WriteFloatingCsproj();
+
+        var (exit, output, _) = Run([path, "--format", "json"], _ => Source());
+
+        Assert.Equal(1, exit);
+        Assert.Contains("pinned-versions", output);
+        Assert.Contains("Float.Pkg", output);
+    }
+
+    [Fact]
+    public void Config_warn_override_reports_without_gating()
+    {
+        var path = WriteFloatingCsproj();
+        File.WriteAllText(Path.Combine(Path.GetDirectoryName(path)!, ".dependably"),
+            """{ "nucheck": { "rules": { "pinned-versions": "warn" } } }""");
+
+        var (exit, output, _) = Run([path, "--format", "json"], _ => Source());
+
+        Assert.Equal(0, exit);
+        Assert.Contains("pinned-versions", output);   // still reported, as low severity
+        Assert.Contains("\"low\"", output);
+    }
+
+    [Fact]
+    public void Config_off_override_drops_the_finding_entirely()
+    {
+        var path = WriteFloatingCsproj();
+        File.WriteAllText(Path.Combine(Path.GetDirectoryName(path)!, ".dependably"),
+            """{ "nucheck": { "rules": { "pinned-versions": "off" } } }""");
+
+        var (exit, output, _) = Run([path, "--format", "json"], _ => Source());
+
+        Assert.Equal(0, exit);
+        Assert.DoesNotContain("pinned-versions", output);
+    }
+
+    [Fact]
+    public void Common_section_rules_are_honoured()
+    {
+        var path = WriteFloatingCsproj();
+        File.WriteAllText(Path.Combine(Path.GetDirectoryName(path)!, ".dependably"),
+            """{ "common": { "rules": { "pinned-versions": "warn" } } }""");
+
+        var (exit, _, _) = Run([path], _ => Source());
+
+        Assert.Equal(0, exit);
+    }
+
+    [Fact]
+    public void Cli_rule_override_beats_the_config()
+    {
+        var path = WriteFloatingCsproj();
+        File.WriteAllText(Path.Combine(Path.GetDirectoryName(path)!, ".dependably"),
+            """{ "nucheck": { "rules": { "pinned-versions": "error" } } }""");
+
+        var (exit, _, _) = Run([path, "--rule", "pinned-versions:warn"], _ => Source());
+
+        Assert.Equal(0, exit);
+    }
+
+    [Fact]
+    public void Invalid_rule_flag_is_usage_error_exits_two()
+    {
+        var path = WriteFloatingCsproj();
+
+        var (exit, _, error) = Run([path, "--rule", "pinned-versions:fatal"], _ => Source());
+
+        Assert.Equal(2, exit);
+        Assert.Contains("--rule", error);
+    }
+
+    [Fact]
+    public void Pinned_exception_suppresses_the_finding()
+    {
+        var path = WriteFloatingCsproj();
+        File.WriteAllText(Path.Combine(Path.GetDirectoryName(path)!, ".dependably"),
+            """{ "nucheck": { "exceptions": [{ "rule": "pinned-versions", "package": "Float.Pkg", "reason": "vendor requires floating" }] } }""");
+
+        var (exit, _, error) = Run([path], _ => Source());
+
+        Assert.Equal(0, exit);
+        Assert.Contains("suppressed", error);
+    }
+
+    [Fact]
+    public void Lock_file_audit_is_unaffected_by_the_pinned_rule()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"nucheck-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        _tempDirs.Add(dir);
+        WriteIsolatingNugetConfig(dir);
+        var path = Path.Combine(dir, "packages.lock.json");
+        File.WriteAllText(path, """
+{
+  "version": 1,
+  "dependencies": {
+    "net6.0": { "Safe.Pkg": { "type": "Direct", "requested": "[1.0.0, )", "resolved": "1.0.0", "contentHash": "abc" } }
+  }
+}
+""");
+
+        var (exit, output, _) = Run([path, "--format", "json"], _ => Source());
+
+        Assert.Equal(0, exit);
+        Assert.DoesNotContain("pinned-versions", output);
+    }
+
+    /// <summary>A csproj with one floating PackageReference, in an isolated temp dir.</summary>
+    private string WriteFloatingCsproj()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"nucheck-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        _tempDirs.Add(dir);
+        WriteIsolatingNugetConfig(dir);
+        // A .git marker stops .dependably discovery from walking above the temp dir.
+        Directory.CreateDirectory(Path.Combine(dir, ".git"));
+
+        var path = Path.Combine(dir, "app.csproj");
+        File.WriteAllText(path, """
+<Project><ItemGroup><PackageReference Include="Float.Pkg" Version="6.*" /></ItemGroup></Project>
+""");
+        return path;
+    }
+
+    private static void WriteIsolatingNugetConfig(string dir)
+        => File.WriteAllText(Path.Combine(dir, "nuget.config"), """
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+  </packageSources>
+</configuration>
+""");
+
     private string WritePackagesConfig(string id, string version)
     {
         // Place the manifest in its own directory with an isolating nuget.config so the

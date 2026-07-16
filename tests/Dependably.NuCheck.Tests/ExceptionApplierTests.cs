@@ -72,4 +72,44 @@ public class ExceptionApplierTests
         Assert.Single(result.Vulnerabilities);
         Assert.Contains(result.Notices, n => n.Contains("unused exception"));
     }
+
+    // ---- pinned-versions suppression ----------------------------------------------
+
+    [Fact]
+    public void Suppresses_pinned_finding_by_package()
+    {
+        var pinned = new[] { new PinnedVersionFinding("Float.Pkg", "6.*", "app.csproj", "unpinned") };
+        var exceptions = Parse("""[{ "rule": "pinned-versions", "package": "Float.Pkg", "reason": "vendor requires floating" }]""");
+
+        var result = ExceptionApplier.Apply([], [], [], exceptions, new DateOnly(2026, 7, 3), pinned);
+
+        Assert.Empty(result.PinnedVersionFindings);
+        Assert.Contains(result.Notices, n => n.Contains("1 finding(s) suppressed"));
+    }
+
+    [Fact]
+    public void Pinned_exception_with_version_pin_matches_declared_version_only()
+    {
+        var pinned = new[]
+        {
+            new PinnedVersionFinding("Float.Pkg", "6.*", "app.csproj", "unpinned"),
+            new PinnedVersionFinding("Float.Pkg", "7.*", "other.csproj", "unpinned"),
+        };
+        var exceptions = Parse("""[{ "rule": "pinned-versions", "package": "Float.Pkg@6.*", "reason": "legacy TFM" }]""");
+
+        var result = ExceptionApplier.Apply([], [], [], exceptions, new DateOnly(2026, 7, 3), pinned);
+
+        var kept = Assert.Single(result.PinnedVersionFindings);
+        Assert.Equal("7.*", kept.RawVersion);
+    }
+
+    [Fact]
+    public void Pinned_findings_pass_through_with_no_exceptions()
+    {
+        var pinned = new[] { new PinnedVersionFinding("Float.Pkg", "6.*", "app.csproj", "unpinned") };
+
+        var result = ExceptionApplier.Apply([], [], [], [], pinnedVersionFindings: pinned);
+
+        Assert.Same(pinned, result.PinnedVersionFindings);
+    }
 }

@@ -56,7 +56,7 @@ public static class DependablyExceptions
 
     /// <summary>Rule ids nucheck emits (for own-section unknown-rule validation).</summary>
     public static readonly string[] KnownRules =
-        ["vulnerable-package", "untrusted-source", "untrusted-local-feed", "unused-packages", "unverifiable-advisory"];
+        ["vulnerable-package", "untrusted-source", "untrusted-local-feed", "unused-packages", "unverifiable-advisory", "pinned-versions"];
 
     private static readonly Regex ExpiresPattern = new(@"^\d{4}-\d{2}-\d{2}$", RegexOptions.Compiled);
 

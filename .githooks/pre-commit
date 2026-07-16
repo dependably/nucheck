@@ -40,14 +40,18 @@ fi
 #    needed, safe for a hook) and fails the commit on any high-or-above vulnerability
 #    or policy error (untrusted registry, etc).
 echo "Dogfooding nucheck on its own dependencies..."
-for lockfile in \
+#    The .csproj files are included so the pinned-versions rule (error by default,
+#    maps to high) is exercised against the repo's own declared versions.
+for manifest in \
   "src/Dependably.NuCheck/packages.lock.json" \
-  "tests/Dependably.NuCheck.Tests/packages.lock.json"; do
-  echo "  auditing $lockfile ..."
+  "tests/Dependably.NuCheck.Tests/packages.lock.json" \
+  "src/Dependably.NuCheck/Dependably.NuCheck.csproj" \
+  "tests/Dependably.NuCheck.Tests/Dependably.NuCheck.Tests.csproj"; do
+  echo "  auditing $manifest ..."
   dotnet run --project src/Dependably.NuCheck -c Release --framework net10.0 -- \
-    "$lockfile" --source osv --fail-on severity=high
+    "$manifest" --source osv --fail-on severity=high
   if [ $? -ne 0 ]; then
-    echo "nucheck found a high-or-above finding in $lockfile. Fix it (or add a scoped"
+    echo "nucheck found a high-or-above finding in $manifest. Fix it (or add a scoped"
     echo ".dependably exception with a reason) before committing."
     exit 1
   fi
