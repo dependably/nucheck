@@ -109,10 +109,18 @@ public static class Program
                 checkDirectory, config.AllowedRegistryHosts, config.AllowedLocalFeeds);
             var unusedPackages = UnusedPackageService.Check(checkDirectory, config.IgnoreUnusedPackages);
 
+            // The pinned-versions rule: error by default, resolved CLI --rule > config
+            // rules map > built-in (flags > files). "off" skips the check entirely.
+            var pinnedSeverity = options.RuleOverrides.TryGetValue(PinnedVersionChecker.RuleId, out var cliSeverity)
+                ? cliSeverity
+                : config.RuleSeverities.GetValueOrDefault(PinnedVersionChecker.RuleId, PinnedVersionChecker.DefaultSeverity);
+            var pinnedFindings = PinnedVersionChecker.Check(options.FilePath, pinnedSeverity);
+
             // Apply .dependably exceptions: suppress specific findings so they no longer gate
             // (spec §6). Suppressed counts and unused/expired entries are reported on stderr.
             var suppression = ExceptionApplier.Apply(
-                audit.Vulnerabilities, unusedPackages, audit.UnverifiableAdvisories, config.Exceptions);
+                audit.Vulnerabilities, unusedPackages, audit.UnverifiableAdvisories, config.Exceptions,
+                pinnedVersionFindings: pinnedFindings);
             foreach (var note in suppression.Notices)
             {
                 Console.Error.WriteLine($".dependably: {note}");
@@ -123,6 +131,7 @@ public static class Program
                 TotalPackages = audit.TotalPackages,
                 Vulnerabilities = suppression.Vulnerabilities,
                 PolicyFindings = policyFindings,
+                PinnedVersionFindings = suppression.PinnedVersionFindings,
                 UnusedPackages = suppression.UnusedPackages,
                 UnverifiableAdvisories = suppression.UnverifiableAdvisories,
             };
@@ -265,6 +274,9 @@ Options:
                              Policy errors are only relaxed by an explicit severity rule
                              (which governs policy findings too, e.g. severity=critical).
                              Distinct from --severity, which only filters what is printed.
+  --rule <id>:<severity>     Override a rule's severity for this run (repeatable), e.g.
+                             --rule pinned-versions:warn. Severity is error, warn, or off;
+                             takes precedence over the .dependably rules map (flags > files).
   --rest                     Use the GitHub REST API instead of GraphQL (github source)
   --verbose, -v              Write progress to stderr
   --help, -h                 Show this help message
@@ -289,6 +301,22 @@ Policy checks:
   When nucheck cannot find a repository boundary (.git), NuGet config in parent
   directories is not audited; nucheck then emits an info finding naming the
   excluded config so the fail-open is visible.
+
+Pinned-versions check (error by default — gates the build):
+  Every declared package version must be an exact pin. Floating versions (6.*),
+  ranges ([1.0,2.0)), a range-carrying allowedVersions in packages.config, and a
+  version-less <PackageReference> with no Central Package Management entry are
+  findings; the exact bracket range [1.2.3] counts as pinned. NOT applicable to
+  packages.lock.json — a lock file's resolved versions are exact by definition.
+  Relax per repo via .dependably rules (error / warn / off; warn reports without
+  gating, off disables the check), or per run with --rule:
+
+    {
+      "nucheck": { "rules": { "pinned-versions": "warn" } }
+    }
+
+  Suppress a specific finding instead with an exceptions entry
+  (rule "pinned-versions", selector package, optionally @<declared-version>).
 
 Unused-package check (advisory only, never exits non-zero):
   nucheck heuristically detects packages declared as direct <PackageReference>

@@ -4,6 +4,36 @@ All notable changes to `nucheck` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-07-16
+
+### Added
+
+- **`pinned-versions` rule — unpinned package versions now fail the build by default.**
+  Every declared version must be an exact pin: floating versions (`6.*`), ranges
+  (`[1.0,2.0)`), a range-carrying `allowedVersions` in `packages.config`, and a
+  version-less `<PackageReference>` with no Central Package Management entry are error
+  findings (exit 1); the exact bracket range `[1.2.3]` counts as pinned, and MSBuild
+  property versions (`$(...)`) are skipped (static parse, no MSBuild evaluation). Not
+  applicable to `packages.lock.json` — a lock file's resolved versions are exact by
+  definition. Suite parity with npm-check 1.8.0 / pycheck 1.3.0: the shared rule id means
+  one `common.rules["pinned-versions"]` entry in `.dependably` governs all three tools.
+
+- **The `.dependably` `rules` severity map is now parsed and applied.** Previously
+  whitelisted but ignored, per-rule severities (`error` / `warn` / `off`) resolve with the
+  suite merge rule (per rule id, the `nucheck` section replacing `common` wholesale);
+  `warn` findings are reported (ladder severity `low`) but never gate, `off` skips the
+  check. Unknown rule ids in nucheck's own section are `UNKNOWN_RULE`; invalid severities
+  are `INVALID_SEVERITY`.
+
+- **`--rule <id>:<severity>` CLI flag** (repeatable) overrides the config's `rules` map for
+  one run — e.g. `--rule pinned-versions:warn`. Unknown ids and bad severities are usage
+  errors (exit 2).
+
+- Pinned-versions findings are suppressible per package via the standard `exceptions`
+  grammar (`{ "rule": "pinned-versions", "package": "Foo.Bar", ... }`, optionally
+  `@<declared-version>`), and the pre-commit hook now also audits the repo's own two
+  `.csproj` files so the new rule is dogfooded.
+
 ## [2.0.1] - 2026-07-03
 
 ### Added

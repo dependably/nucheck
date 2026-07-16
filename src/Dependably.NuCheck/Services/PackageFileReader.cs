@@ -24,6 +24,15 @@ namespace Dependably.NuCheck.Services;
 /// raises an error rather than silently reporting "0 packages / all secure", which
 /// would make the vulnerability scanner fail open.
 /// </remarks>
+/// <summary>
+/// A declared package version as written in a manifest, for the <c>pinned-versions</c>
+/// rule. <paramref name="RawVersion"/> is the literal version string (null when the
+/// declaration carries none), <paramref name="IsExact"/> is true when it pins one exact
+/// version, and <paramref name="Source"/> names where the version was declared (the
+/// manifest itself, or the Central Package Management file that supplied it).
+/// </summary>
+public sealed record PackageDeclaration(string Id, string? RawVersion, bool IsExact, string Source);
+
 public static class PackageFileReader
 {
     private const string UnsupportedSuffix =
@@ -62,6 +71,189 @@ public static class PackageFileReader
 
         throw new InvalidDataException(
             $"Unsupported manifest '{filePath}'. {UnsupportedSuffix}");
+    }
+
+    /// <summary>
+    /// Reads the declared package versions AS WRITTEN for the <c>pinned-versions</c>
+    /// rule, or <c>null</c> when the rule is not applicable to the file: a
+    /// <c>packages.lock.json</c>'s resolved versions are exact by definition.
+    /// </summary>
+    /// <remarks>
+    /// Exactness per declaration:
+    /// <list type="bullet">
+    /// <item>A version that parses as a plain <see cref="NuGetVersion"/> is exact; so is
+    /// the exact bracket range <c>[1.2.3]</c> (semantically a pin). Floating versions
+    /// (<c>6.*</c>) and ranges (<c>[1.0,2.0)</c>) are not.</item>
+    /// <item>A version-less <c>&lt;PackageReference&gt;</c> is exact iff Central Package
+    /// Management resolves it and EVERY resolved central version string is exact; with no
+    /// central entry at all it is a finding (nothing pins it).</item>
+    /// <item>An MSBuild property version (<c>$(...)</c>) is skipped — this is a static
+    /// parse (no MSBuild evaluation), matching the vulnerability audit's behaviour for
+    /// unresolvable versions.</item>
+    /// <item>A <c>packages.config</c> entry needs a parseable exact <c>version</c>; a
+    /// range-carrying <c>allowedVersions</c> attribute is a finding unless it is an
+    /// exact bracket range.</item>
+    /// </list>
+    /// </remarks>
+    public static IReadOnlyList<PackageDeclaration>? TryReadDeclarations(string filePath)
+    {
+        if (!File.Exists(filePath))
+        {
+            throw new FileNotFoundException($"File not found: {filePath}", filePath);
+        }
+
+        // Lock files resolve exact versions by definition — the rule does not apply.
+        if (Path.GetExtension(filePath).ToLowerInvariant() == ".json")
+        {
+            return null;
+        }
+
+        var root = TryGetXmlRootLocalName(filePath);
+        if (string.Equals(root, "packages", StringComparison.OrdinalIgnoreCase))
+        {
+            return ReadPackagesConfigDeclarations(filePath);
+        }
+
+        if (string.Equals(root, "Project", StringComparison.OrdinalIgnoreCase))
+        {
+            return ReadProjectDeclarations(filePath);
+        }
+
+        throw new InvalidDataException($"Unsupported manifest '{filePath}'. {UnsupportedSuffix}");
+    }
+
+    private static List<PackageDeclaration> ReadPackagesConfigDeclarations(string path)
+    {
+        XDocument doc;
+        try
+        {
+            doc = XDocument.Load(path);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidDataException($"Failed to parse packages.config: {ex.Message}", ex);
+        }
+
+        var fileName = Path.GetFileName(path);
+        var declarations = new List<PackageDeclaration>();
+        foreach (var element in doc.Descendants()
+            .Where(e => e.Name.LocalName.Equals("package", StringComparison.OrdinalIgnoreCase)))
+        {
+            var id = element.Attribute("id")?.Value;
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                continue;
+            }
+
+            var version = element.Attribute("version")?.Value;
+            var allowed = element.Attribute("allowedVersions")?.Value;
+
+            // Exact iff the version pins one release AND any allowedVersions constraint is
+            // itself an exact bracket range (a plain allowedVersions is a range by purpose).
+            var exact = !string.IsNullOrWhiteSpace(version) && IsExactVersionString(version)
+                && (string.IsNullOrWhiteSpace(allowed) || IsExactVersionString(allowed));
+            var raw = string.IsNullOrWhiteSpace(allowed) ? version : $"{version} (allowedVersions: {allowed})";
+            declarations.Add(new PackageDeclaration(id, raw, exact, fileName));
+        }
+
+        return declarations;
+    }
+
+    private static List<PackageDeclaration> ReadProjectDeclarations(string path)
+    {
+        XDocument doc;
+        try
+        {
+            doc = XDocument.Load(path);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidDataException($"Failed to parse project file: {ex.Message}", ex);
+        }
+
+        var fileName = Path.GetFileName(path);
+        var declarations = new List<PackageDeclaration>();
+
+        // Every <PackageVersion> declared in THIS file (a Directory.Packages.props, or
+        // file-local CPM entries) is checked as written.
+        var localVersions = GatherPackageVersions(doc);
+        foreach (var (id, version) in localVersions.Where(v => !IsMsBuildProperty(v.Version)))
+        {
+            declarations.Add(new PackageDeclaration(id, version, IsExactVersionString(version), fileName));
+        }
+
+        var packageReferences = doc.Descendants()
+            .Where(e => e.Name.LocalName.Equals("PackageReference", StringComparison.OrdinalIgnoreCase))
+            .Where(e => !string.IsNullOrWhiteSpace(GetIncludeId(e)))
+            .ToList();
+        if (packageReferences.Count == 0)
+        {
+            return declarations;
+        }
+
+        // Central versions from the nearest Directory.Packages.props up the tree, for
+        // resolving version-less references (their exactness lives in that file).
+        var centralVersions = ToVersionLookup(FindCentralPackageVersions(path).Concat(localVersions));
+
+        foreach (var element in packageReferences)
+        {
+            var id = GetIncludeId(element)!;
+            var version = GetReferenceVersion(element);
+            if (!string.IsNullOrWhiteSpace(version))
+            {
+                if (!IsMsBuildProperty(version))
+                {
+                    declarations.Add(new PackageDeclaration(id, version, IsExactVersionString(version), fileName));
+                }
+            }
+            else if (centralVersions.TryGetValue(id, out var centrals))
+            {
+                // Pinned iff every centrally-declared version is exact (Conditions are not
+                // evaluated, so one floating conditional pin must not hide behind an exact
+                // sibling). Skip when every central entry is an MSBuild property.
+                var literal = centrals.Where(c => !IsMsBuildProperty(c)).ToList();
+                if (literal.Count > 0)
+                {
+                    var exact = literal.All(IsExactVersionString);
+                    declarations.Add(new PackageDeclaration(
+                        id, string.Join(", ", literal), exact, "Directory.Packages.props"));
+                }
+            }
+            else
+            {
+                // No version anywhere: nothing pins this reference.
+                declarations.Add(new PackageDeclaration(id, null, IsExact: false, fileName));
+            }
+        }
+
+        // A version-less reference resolved by a file-local <PackageVersion> would appear
+        // twice (once as the declaration, once via the reference); collapse those.
+        return declarations
+            .DistinctBy(d => $"{d.Id}@{d.RawVersion}", StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>An unevaluated MSBuild property version like <c>$(PackagesVersion)</c>.</summary>
+    private static bool IsMsBuildProperty(string versionString) => versionString.Contains("$(");
+
+    /// <summary>
+    /// True when a declared version string pins exactly one version: a plain parseable
+    /// <see cref="NuGetVersion"/>, or an exact bracket range like <c>[1.2.3]</c>
+    /// (min == max, both inclusive). Floating versions and open ranges are not exact.
+    /// </summary>
+    private static bool IsExactVersionString(string versionString)
+    {
+        if (NuGetVersion.TryParse(versionString, out _))
+        {
+            return true;
+        }
+
+        return VersionRange.TryParse(versionString, out var range)
+            && range.MinVersion is not null
+            && range.MaxVersion is not null
+            && range.IsMinInclusive
+            && range.IsMaxInclusive
+            && range.MinVersion.Equals(range.MaxVersion);
     }
 
     /// <summary>

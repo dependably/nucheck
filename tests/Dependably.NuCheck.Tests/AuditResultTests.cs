@@ -411,4 +411,65 @@ public class AuditResultTests
         // Default gate (no rules): HasFailures is true because PolicyErrorCount > 0 → trips.
         Assert.True(result.GateTrips(null, null));
     }
+
+    // ---- pinned-versions gate integration ----------------------------------------
+
+    private static AuditResult WithPinned(string severity) => new()
+    {
+        TotalPackages = 1,
+        Vulnerabilities = [],
+        PinnedVersionFindings = [new PinnedVersionFinding("Float.Pkg", "6.*", "app.csproj", "unpinned", severity)],
+    };
+
+    [Fact]
+    public void Pinned_error_finding_trips_the_default_gate()
+    {
+        var result = WithPinned("error");
+
+        Assert.True(result.HasFailures);
+        Assert.True(result.GateTrips(null, null));
+    }
+
+    [Fact]
+    public void Pinned_warning_finding_never_gates()
+    {
+        var result = WithPinned("warning");
+
+        Assert.False(result.HasFailures);
+        Assert.False(result.GateTrips(null, null));
+        // warning maps to low on the ladder: a moderate gate ignores it, a low gate trips.
+        Assert.False(result.GateTrips("moderate", null));
+        Assert.True(result.GateTrips("low", null));
+    }
+
+    [Fact]
+    public void Count_only_gate_still_trips_on_pinned_error()
+    {
+        // Like policy errors, pinned-versions errors are never silently ungated by a
+        // count-only rule (count governs vulnerabilities only).
+        Assert.True(WithPinned("error").GateTrips(null, 0));
+    }
+
+    [Fact]
+    public void Explicit_severity_rule_can_relax_pinned_errors()
+    {
+        // error maps to high; a deliberate severity=critical gate relaxes it.
+        Assert.False(WithPinned("error").GateTrips("critical", null));
+        Assert.True(WithPinned("error").GateTrips("high", null));
+    }
+
+    [Fact]
+    public void FilterBySeverity_carries_pinned_findings_through()
+    {
+        var result = new AuditResult
+        {
+            TotalPackages = 1,
+            Vulnerabilities = [new PackageVulnerability("Pkg", "1.0.0", [new Advisory("Low issue", "low", ">= 1.0", [])])],
+            PinnedVersionFindings = [new PinnedVersionFinding("Float.Pkg", "6.*", "app.csproj", "unpinned")],
+        };
+
+        var filtered = result.FilterBySeverity("high");
+
+        Assert.Single(filtered.PinnedVersionFindings);
+    }
 }

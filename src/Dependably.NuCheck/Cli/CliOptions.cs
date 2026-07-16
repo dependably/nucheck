@@ -13,6 +13,7 @@ public sealed class CliOptions
         ["--source"] = (o, v) => o.ApplySource(v),
         ["--config"] = (o, v) => o.ConfigPath = v,
         ["--fail-on"] = (o, v) => o.ApplyFailOn(v),
+        ["--rule"] = (o, v) => o.ApplyRule(v),
     };
 
     private static readonly Dictionary<string, Action<CliOptions>> BoolFlags = new(StringComparer.Ordinal)
@@ -60,6 +61,15 @@ public sealed class CliOptions
     /// vulnerability finding count exceeds <c>N</c>, or null when not configured.
     /// </summary>
     public int? FailOnCount { get; private set; }
+
+    /// <summary>
+    /// Per-rule severity overrides from the repeatable <c>--rule &lt;id&gt;:&lt;severity&gt;</c>
+    /// flag (e.g. <c>--rule pinned-versions:warn</c>). CLI overrides beat the
+    /// <c>.dependably</c> <c>rules</c> map per rule id (flags &gt; files).
+    /// </summary>
+    public IReadOnlyDictionary<string, string> RuleOverrides => _ruleOverrides;
+
+    private readonly Dictionary<string, string> _ruleOverrides = new(StringComparer.Ordinal);
 
     public bool UseRest { get; private set; }
 
@@ -167,6 +177,38 @@ public sealed class CliOptions
         }
 
         Severity = level;
+    }
+
+    /// <summary>
+    /// Apply one repeatable <c>--rule &lt;id&gt;:&lt;severity&gt;</c> override. The id must
+    /// be a known nucheck rule and the severity one of <c>error</c>/<c>warn</c>/<c>off</c>;
+    /// anything else is a usage error (first error wins, exit 2).
+    /// </summary>
+    private void ApplyRule(string spec)
+    {
+        var separator = spec.IndexOf(':');
+        if (separator <= 0 || separator == spec.Length - 1)
+        {
+            Error ??= $"invalid --rule '{spec}': expected <id>:<severity> (e.g. pinned-versions:warn)";
+            return;
+        }
+
+        var id = spec[..separator].Trim();
+        var severity = spec[(separator + 1)..].Trim().ToLowerInvariant();
+
+        if (!Config.DependablyExceptions.KnownRules.Contains(id))
+        {
+            Error ??= $"unknown --rule id '{id}': known rules: {string.Join(", ", Config.DependablyExceptions.KnownRules)}";
+            return;
+        }
+
+        if (!Config.DependablyCheckConfig.RuleSeverityValues.Contains(severity))
+        {
+            Error ??= $"invalid --rule severity '{severity}': use error, warn, or off";
+            return;
+        }
+
+        _ruleOverrides[id] = severity;
     }
 
     /// <summary>

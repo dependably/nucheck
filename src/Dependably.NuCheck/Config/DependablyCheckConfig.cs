@@ -33,6 +33,9 @@ public sealed class DependablyCheckConfig
     private static readonly string[] KnownSectionKeys =
         ["allowedRegistryHosts", "ignoreUnusedPackages", "allowedLocalFeeds", "exceptions", "failOn", "rules"];
 
+    /// <summary>The rule-severity vocabulary (spec §4.2).</summary>
+    public static readonly string[] RuleSeverityValues = ["error", "warn", "off"];
+
     private DependablyCheckConfig(
         IReadOnlyList<string> allowedRegistryHosts,
         IReadOnlyList<string> ignoreUnusedPackages,
@@ -40,6 +43,7 @@ public sealed class DependablyCheckConfig
         IReadOnlyList<DependablyException> exceptions,
         string? failOnSeverity,
         int? failOnCount,
+        IReadOnlyDictionary<string, string> ruleSeverities,
         IReadOnlyList<DependablyWarning> warnings)
     {
         AllowedRegistryHosts = allowedRegistryHosts;
@@ -48,6 +52,7 @@ public sealed class DependablyCheckConfig
         Exceptions = exceptions;
         FailOnSeverity = failOnSeverity;
         FailOnCount = failOnCount;
+        RuleSeverities = ruleSeverities;
         Warnings = warnings;
     }
 
@@ -69,11 +74,20 @@ public sealed class DependablyCheckConfig
     /// <summary>The <c>failOn.count</c> gate from the file (CLI <c>--fail-on</c> overrides), or null.</summary>
     public int? FailOnCount { get; }
 
+    /// <summary>
+    /// Per-rule severities from the merged <c>rules</c> maps (spec §4.1): rule id →
+    /// <c>error</c>/<c>warn</c>/<c>off</c>. Merged per id with the tool entry replacing
+    /// <c>common</c>'s wholesale (spec §5); an entry's options object is accepted but
+    /// ignored (nucheck defines no rule options yet). A CLI <c>--rule</c> overrides.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> RuleSeverities { get; }
+
     /// <summary>Deprecation / unknown-key notices (stderr; never affect exit codes).</summary>
     public IReadOnlyList<DependablyWarning> Warnings { get; }
 
     /// <summary>An empty config, used when no file is found.</summary>
-    public static DependablyCheckConfig Empty { get; } = new([], [], [], [], null, null, []);
+    public static DependablyCheckConfig Empty { get; } = new(
+        [], [], [], [], null, null, new Dictionary<string, string>(), []);
 
     /// <summary>
     /// Loads the config. When <paramref name="explicitPath"/> is given it is read directly;
@@ -200,8 +214,10 @@ public sealed class DependablyCheckConfig
                 GetProperty(root, toolKey, "exceptions"), "own", DependablyExceptions.NuCheckSelectors, DependablyExceptions.KnownRules));
 
             var (failOnSeverity, failOnCount) = ParseFailOn(root, toolKey);
+            var ruleSeverities = ParseRules(root, toolKey);
 
-            return new DependablyCheckConfig(hosts, ignored, localFeeds, exceptions, failOnSeverity, failOnCount, warnings);
+            return new DependablyCheckConfig(
+                hosts, ignored, localFeeds, exceptions, failOnSeverity, failOnCount, ruleSeverities, warnings);
         }
     }
 
@@ -252,6 +268,71 @@ public sealed class DependablyCheckConfig
         }
 
         return (severity, count);
+    }
+
+    /// <summary>
+    /// Parse and merge the <c>rules</c> severity maps: <c>common</c> first, then the tool
+    /// section replacing per rule id (spec §5). An unknown rule id is an error in the tool's
+    /// OWN section (<c>UNKNOWN_RULE</c>) and tolerated in <c>common</c> (it may belong to a
+    /// sibling tool). Each entry is a severity string or <c>[severity, options]</c>; the
+    /// options object is accepted and ignored.
+    /// </summary>
+    private static Dictionary<string, string> ParseRules(JsonElement root, string toolKey)
+    {
+        var severities = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var section in new[] { "common", toolKey })
+        {
+            if (GetProperty(root, section, "rules") is not { ValueKind: JsonValueKind.Object } rules)
+            {
+                continue;
+            }
+
+            foreach (var rule in rules.EnumerateObject())
+            {
+                if (section != "common" && !DependablyExceptions.KnownRules.Contains(rule.Name))
+                {
+                    throw new DependablyConfigException(
+                        $"Unknown rule \"{rule.Name}\" (known rules: {string.Join(", ", DependablyExceptions.KnownRules)})",
+                        "UNKNOWN_RULE");
+                }
+
+                severities[rule.Name] = ParseRuleSeverity(rule.Name, rule.Value);
+            }
+        }
+
+        return severities;
+    }
+
+    /// <summary>Validate one <c>rules</c> entry — <c>"warn"</c> or <c>["warn", { ... }]</c> — and return its severity.</summary>
+    private static string ParseRuleSeverity(string ruleId, JsonElement entry)
+    {
+        var severityElement = entry;
+        if (entry.ValueKind == JsonValueKind.Array)
+        {
+            using var items = entry.EnumerateArray();
+            if (!items.MoveNext())
+            {
+                throw new DependablyConfigException($"Invalid rule entry for \"{ruleId}\": empty array", "INVALID_SEVERITY");
+            }
+
+            severityElement = items.Current;
+            if (items.MoveNext() && items.Current.ValueKind != JsonValueKind.Object)
+            {
+                throw new DependablyConfigException(
+                    $"Rule options for \"{ruleId}\" must be an object", "INVALID_RULE_OPTIONS");
+            }
+        }
+
+        var severity = severityElement.ValueKind == JsonValueKind.String ? severityElement.GetString() : null;
+        if (severity is null || !RuleSeverityValues.Contains(severity))
+        {
+            throw new DependablyConfigException(
+                $"Invalid severity for rule \"{ruleId}\" (expected: {string.Join(", ", RuleSeverityValues)})",
+                "INVALID_SEVERITY");
+        }
+
+        return severity;
     }
 
     private static void WarnUnknownKeys(JsonElement root, string section, List<DependablyWarning> warnings)

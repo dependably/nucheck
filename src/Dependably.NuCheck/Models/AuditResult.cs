@@ -18,6 +18,22 @@ public sealed record SourceFinding(
     string Severity = "error");
 
 /// <summary>
+/// A finding from the cross-tool <c>pinned-versions</c> rule: a declared package version
+/// that is not an exact pin — floating (<c>6.*</c>), a range (<c>[1.0,2.0)</c>), or a
+/// version-less <c>&lt;PackageReference&gt;</c> with no Central Package Management entry.
+/// Error severity by default (gates the run); the <c>.dependably</c> <c>rules</c> map or
+/// <c>--rule pinned-versions:&lt;severity&gt;</c> downgrades to <c>warning</c> (reported,
+/// never gates) or turns the check off. Not applicable to lock files, whose resolved
+/// versions are exact by definition.
+/// </summary>
+public sealed record PinnedVersionFinding(
+    string Id,
+    string? RawVersion,
+    string Source,
+    string Message,
+    string Severity = "error");
+
+/// <summary>
 /// An advisory-only finding indicating a package id that could not be detected in any
 /// .cs source file under the scan root. This is heuristic: build-tool, analyzer, and
 /// MSBuild-task packages often match. Suppress via <c>ignoreUnusedPackages</c> in
@@ -59,6 +75,13 @@ public sealed class AuditResult
 
     /// <summary>Policy findings (e.g. untrusted package sources). Empty by default.</summary>
     public IReadOnlyList<SourceFinding> PolicyFindings { get; init; } = [];
+
+    /// <summary>
+    /// Findings from the <c>pinned-versions</c> rule (non-exact declared versions).
+    /// Error-severity entries gate like policy errors; warning-severity entries are
+    /// reported but never gate. Empty by default (also when the rule is <c>off</c>).
+    /// </summary>
+    public IReadOnlyList<PinnedVersionFinding> PinnedVersionFindings { get; init; } = [];
 
     /// <summary>
     /// Advisory-only heuristic findings for packages that appear unreferenced in source.
@@ -103,11 +126,16 @@ public sealed class AuditResult
     public int PolicyErrorCount =>
         PolicyFindings.Count(f => f.Severity.Equals("error", StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>Number of pinned-versions findings at error severity (warning entries never gate).</summary>
+    public int PinnedVersionErrorCount =>
+        PinnedVersionFindings.Count(f => f.Severity.Equals("error", StringComparison.OrdinalIgnoreCase));
+
     /// <summary>
-    /// True when the audit should fail the process (a vulnerability or a policy error).
-    /// Unused-package findings are advisory only and never contribute here.
+    /// True when the audit should fail the process (a vulnerability, a policy error, or a
+    /// pinned-versions error). Unused-package findings are advisory only and never
+    /// contribute here.
     /// </summary>
-    public bool HasFailures => VulnerabilityCount > 0 || PolicyErrorCount > 0;
+    public bool HasFailures => VulnerabilityCount > 0 || PolicyErrorCount > 0 || PinnedVersionErrorCount > 0;
 
     /// <summary>
     /// Evaluate the unified CI gate and return true when the build should fail (exit 1).
@@ -148,9 +176,10 @@ public sealed class AuditResult
         }
         else
         {
-            // No severity rule governs policy findings, so a count-only gate would drop them.
-            // Keep untrusted-source policy errors gating — they must never be silently ungated.
-            trips |= PolicyErrorCount > 0;
+            // No severity rule governs policy/pinned findings, so a count-only gate would
+            // drop them. Keep untrusted-source policy errors and pinned-versions errors
+            // gating — they must never be silently ungated.
+            trips |= PolicyErrorCount > 0 || PinnedVersionErrorCount > 0;
         }
 
         if (failOnCount is not null)
@@ -181,6 +210,12 @@ public sealed class AuditResult
 
         foreach (var finding in PolicyFindings)
         {
+            max = Math.Max(max, Severity.Rank(Severity.Normalize(finding.Severity)));
+        }
+
+        foreach (var finding in PinnedVersionFindings)
+        {
+            // error → high, warning → low on the shared ladder.
             max = Math.Max(max, Severity.Rank(Severity.Normalize(finding.Severity)));
         }
 
@@ -233,6 +268,7 @@ public sealed class AuditResult
             TotalPackages = TotalPackages,
             Vulnerabilities = filtered,
             PolicyFindings = PolicyFindings,
+            PinnedVersionFindings = PinnedVersionFindings,
             UnusedPackages = UnusedPackages,
             UnverifiableAdvisories = UnverifiableAdvisories,
             HiddenAdvisoryCount = VulnerabilityCount - filteredAdvisoryCount,
