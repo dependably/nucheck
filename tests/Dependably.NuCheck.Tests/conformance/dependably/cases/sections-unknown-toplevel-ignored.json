@@ -1,15 +1,15 @@
 {
   "name": "sections-unknown-toplevel-ignored",
   "description": "An unknown top-level section is ignored silently (forward compat).",
-  "tool": "npm-check",
+  "tool": "$any",
   "files": {
     ".dependably": {
       "future-tool": {
         "rules": {
-          "whatever": "error"
+          "$unknownRule": "error"
         }
       },
-      "npm-check": {
+      "$tool": {
         "failOn": {
           "count": 1
         }

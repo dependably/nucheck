@@ -1,10 +1,13 @@
 {
   "name": "sections-alias-read",
-  "description": "A lone alias section (npm) is read and warns DEPRECATED_ALIAS_SECTION.",
-  "tool": "npm-check",
+  "description": "A lone alias section is read and warns DEPRECATED_ALIAS_SECTION.",
+  "tool": "$any",
+  "requires": [
+    "alias"
+  ],
   "files": {
     ".dependably": {
-      "npm": {
+      "$alias": {
         "failOn": {
           "count": 5
         }

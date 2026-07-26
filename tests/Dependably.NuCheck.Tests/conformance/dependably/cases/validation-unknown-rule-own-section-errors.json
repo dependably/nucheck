@@ -1,12 +1,12 @@
 {
   "name": "validation-unknown-rule-own-section-errors",
   "description": "An unknown rule id in the tool own section is UNKNOWN_RULE.",
-  "tool": "npm-check",
+  "tool": "$any",
   "files": {
     ".dependably": {
-      "npm-check": {
+      "$tool": {
         "rules": {
-          "no-such-rule": "error"
+          "$unknownRule": "error"
         }
       }
     }

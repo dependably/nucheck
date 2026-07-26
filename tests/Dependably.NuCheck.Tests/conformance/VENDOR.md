@@ -8,15 +8,19 @@ the spec repository instead, then re-run the sync.
 |---|---|
 | Source | https://gitlab.northwardlabs.ca/moonlitlabs/dependably-spec.git |
 | Ref | `main` |
-| Commit | `4bffaf66ea3c67fa5fb14687e118fa27cb31738b` |
-| Committed | 2026-07-25T23:19:04-07:00 |
+| Commit | `55ba249cce35473690942e5842c2753eee10c4a2` |
+| Committed | 2026-07-26T09:10:53-07:00 |
 
 Re-sync with:
 
 ```bash
-git clone --depth 1 https://gitlab.northwardlabs.ca/moonlitlabs/dependably-spec /tmp/dependably-spec
+git clone --depth 1 https://gitlab.northwardlabs.ca/moonlitlabs/dependably-spec.git /tmp/dependably-spec
 /tmp/dependably-spec/tools/vendor.sh tests/Dependably.NuCheck.Tests/conformance main
 ```
+
+`corpus.sha256` beside this file records a checksum for every vendored file, written at
+copy time. CI verifies the copy against it without needing to reach this repository, so drift
+is caught on every pipeline rather than only when someone thinks to look.
 
 A newer upstream commit is not automatically a problem: this copy pins the contract version
 this tool is tested against. Update deliberately, and re-run the tool's test suite.

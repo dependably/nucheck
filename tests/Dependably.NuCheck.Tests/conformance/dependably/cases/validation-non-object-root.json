@@ -1,7 +1,7 @@
 {
   "name": "validation-non-object-root",
   "description": "A non-object root is CONFIG_SHAPE.",
-  "tool": "npm-check",
+  "tool": "$any",
   "files": {
     ".dependably": [
       "not",

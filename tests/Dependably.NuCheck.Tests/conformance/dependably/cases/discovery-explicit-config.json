@@ -1,34 +1,24 @@
 {
   "name": "discovery-explicit-config",
   "description": "--config bypasses discovery and accepts any filename.",
-  "tool": "codemetrics",
+  "tool": "$any",
   "files": {
-    "ci/metrics.json": {
-      "codemetrics": {
+    "ci/config.json": {
+      "$tool": {
         "rules": {
-          "cyclomatic": [
-            "error",
-            {
-              "max": 25
-            }
-          ]
+          "$rule1": "error"
         }
       }
     }
   },
   "cli": {
-    "config": "ci/metrics.json"
+    "config": "ci/config.json"
   },
   "expect": {
     "warnings": [],
     "resolved": {
       "rules": {
-        "cyclomatic": [
-          "error",
-          {
-            "max": 25
-          }
-        ]
+        "$rule1": "error"
       }
     }
   }

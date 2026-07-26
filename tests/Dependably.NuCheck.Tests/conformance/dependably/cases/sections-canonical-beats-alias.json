@@ -1,15 +1,18 @@
 {
   "name": "sections-canonical-beats-alias",
-  "description": "When both npm-check and npm exist, canonical wins and alias is ignored (still warns).",
-  "tool": "npm-check",
+  "description": "When both the canonical section and its alias exist, canonical wins and the alias is ignored (still warns).",
+  "tool": "$any",
+  "requires": [
+    "alias"
+  ],
   "files": {
     ".dependably": {
-      "npm-check": {
+      "$tool": {
         "failOn": {
           "count": 2
         }
       },
-      "npm": {
+      "$alias": {
         "failOn": {
           "count": 99
         }
