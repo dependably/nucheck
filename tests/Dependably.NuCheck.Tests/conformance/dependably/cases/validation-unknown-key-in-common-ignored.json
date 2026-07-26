@@ -1,0 +1,31 @@
+{
+  "name": "validation-unknown-key-in-common-ignored",
+  "description": "An unknown key in common belongs to a sibling tool and is ignored, unlike the same key in the tool's own section. Without this case every tool in the suite drifted into warning about its siblings' legitimate common keys.",
+  "tool": "npm-check",
+  "files": {
+    ".dependably": {
+      "common": {
+        "allowedRegistryHosts": [
+          "registry.example.com"
+        ],
+        "ignoreUnusedPackages": [
+          "some-sibling-tool-key"
+        ]
+      },
+      "npm-check": {
+        "failOn": {
+          "count": 1
+        }
+      }
+    }
+  },
+  "expect": {
+    "error": null,
+    "warnings": [],
+    "resolved": {
+      "failOn": {
+        "count": 1
+      }
+    }
+  }
+}

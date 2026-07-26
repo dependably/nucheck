@@ -6,9 +6,10 @@ the spec repository instead, then re-run the sync.
 
 | | |
 |---|---|
-| Source | https://gitlab.northwardlabs.ca/moonlitlabs/dependably-spec |
+| Source | https://gitlab.northwardlabs.ca/moonlitlabs/dependably-spec.git |
 | Ref | `main` |
-| Commit | `aa8782989ffd87ea66b65e677c2e7dbd739e0ccf` |
+| Commit | `4bffaf66ea3c67fa5fb14687e118fa27cb31738b` |
+| Committed | 2026-07-25T23:19:04-07:00 |
 
 Re-sync with:
 
@@ -18,4 +19,4 @@ git clone --depth 1 https://gitlab.northwardlabs.ca/moonlitlabs/dependably-spec 
 ```
 
 A newer upstream commit is not automatically a problem: this copy pins the contract version
-this tool is tested against. Update deliberately, and re-run the test suite.
+this tool is tested against. Update deliberately, and re-run the tool's test suite.
