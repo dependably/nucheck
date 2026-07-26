@@ -119,6 +119,22 @@ public class DependablyConfigV1Tests : IDisposable
         Assert.Contains("UNKNOWN_KEY", Codes(config));
     }
 
+    /// <summary>
+    /// <c>exclude</c> is one of the six spec-§4 keys legal in every tool's own section, even
+    /// though nucheck has no current use for it: legal-but-inert is the point (spec §4), not a
+    /// gap to fill in nucheck itself.
+    /// </summary>
+    [Fact]
+    public void Spec_universal_exclude_key_does_not_warn_in_own_section()
+    {
+        var dir = NewRepoDir();
+        Write(dir, DependablyCheckConfig.FileName, """{ "nucheck": { "exclude": ["**/vendor/**"] } }""");
+
+        var config = DependablyCheckConfig.Load(null, dir);
+
+        Assert.DoesNotContain("UNKNOWN_KEY", Codes(config));
+    }
+
     [Fact]
     public void Tolerates_unknown_key_in_common()
     {

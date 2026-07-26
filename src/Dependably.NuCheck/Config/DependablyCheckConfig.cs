@@ -10,10 +10,10 @@ public sealed record DependablyWarning(string Code, string Message);
 /// The shared repo-root <c>.dependably</c> config, consumed across the Dependably suite.
 /// <c>.dependably-check</c> is a deprecated alias filename. nucheck reads the <c>common</c>
 /// section and its own <c>nucheck</c> section (<c>nuget</c> is a deprecated section alias):
-/// the union of <c>allowedRegistryHosts</c>, <c>ignoreUnusedPackages</c>, and
-/// <c>allowedLocalFeeds</c>, plus the standardized <c>exceptions</c> grammar and the
-/// <c>failOn</c> gate. Other sections are ignored; an unknown key warns in nucheck's own
-/// section but is ignored in <c>common</c>, where it may belong to a sibling tool. See
+/// the six spec-§4 universal keys (<c>rules</c>, <c>exceptions</c>, <c>exclude</c>,
+/// <c>failOn</c>, <c>allowedRegistryHosts</c>, <c>allowedLocalFeeds</c>) plus nucheck's own
+/// <c>ignoreUnusedPackages</c>. Other sections are ignored; an unknown key warns in nucheck's
+/// own section but is ignored in <c>common</c>, where it may belong to a sibling tool. See
 /// docs/dependably-config-spec.md in
 /// https://gitlab.northwardlabs.ca/moonlitlabs/dependably-spec.
 /// </summary>
@@ -32,8 +32,15 @@ public sealed class DependablyCheckConfig
     /// <summary>Highest <c>.dependably</c> format version this build understands.</summary>
     public const int SupportedVersion = 1;
 
+    /// <summary>
+    /// The six spec-§4 universal keys (legal in <c>common</c> and every tool's own section)
+    /// plus <c>ignoreUnusedPackages</c>, which is nucheck's own extra key.
+    /// </summary>
     private static readonly string[] KnownSectionKeys =
-        ["allowedRegistryHosts", "ignoreUnusedPackages", "allowedLocalFeeds", "exceptions", "failOn", "rules"];
+    [
+        "rules", "exceptions", "exclude", "failOn", "allowedRegistryHosts", "allowedLocalFeeds",
+        "ignoreUnusedPackages",
+    ];
 
     /// <summary>The rule-severity vocabulary (spec §4.2).</summary>
     public static readonly string[] RuleSeverityValues = ["error", "warn", "off"];
