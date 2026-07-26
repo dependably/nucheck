@@ -12,8 +12,10 @@ public sealed record DependablyWarning(string Code, string Message);
 /// section and its own <c>nucheck</c> section (<c>nuget</c> is a deprecated section alias):
 /// the union of <c>allowedRegistryHosts</c>, <c>ignoreUnusedPackages</c>, and
 /// <c>allowedLocalFeeds</c>, plus the standardized <c>exceptions</c> grammar and the
-/// <c>failOn</c> gate. Other sections and unknown keys are ignored (unknown keys inside a
-/// read section warn). See docs/dependably-config-spec.md.
+/// <c>failOn</c> gate. Other sections are ignored; an unknown key warns in nucheck's own
+/// section but is ignored in <c>common</c>, where it may belong to a sibling tool. See
+/// docs/dependably-config-spec.md in
+/// https://gitlab.northwardlabs.ca/moonlitlabs/dependably-spec.
 /// </summary>
 public sealed class DependablyCheckConfig
 {
@@ -200,7 +202,9 @@ public sealed class DependablyCheckConfig
                     $"both \"{SectionKey}\" and \"{DeprecatedSectionKey}\" sections present; using \"{SectionKey}\""));
             }
 
-            WarnUnknownKeys(root, "common", warnings);
+            // Own section only: `common` is shared with every sibling tool, so a key nucheck does
+            // not know there is very likely someone else's, not a typo. Same reasoning the spec
+            // already applied to unknown rule ids in `common`.
             WarnUnknownKeys(root, toolKey, warnings);
 
             var hosts = UnionStringArray(root, toolKey, "allowedRegistryHosts");

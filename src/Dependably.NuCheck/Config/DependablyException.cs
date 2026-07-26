@@ -5,8 +5,9 @@ namespace Dependably.NuCheck.Config;
 
 /// <summary>
 /// Raised when an <c>exceptions</c> entry in <c>.dependably</c> is malformed. Carries a
-/// stable <see cref="Code"/> matching the shared spec (docs/dependably-config-spec.md §10)
-/// so the cross-language conformance fixtures assert the same codes in every tool.
+/// stable <see cref="Code"/> matching the shared spec — docs/dependably-config-spec.md §10 in
+/// https://gitlab.northwardlabs.ca/moonlitlabs/dependably-spec — so the cross-language
+/// conformance fixtures assert the same codes in every tool.
 /// </summary>
 public sealed class DependablyConfigException : Exception
 {
