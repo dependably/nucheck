@@ -1,7 +1,7 @@
 # `.dependably` conformance fixtures
 
 Language-neutral test cases that pin the behavior in
-[`docs/dependably-config-spec.md`](../../docs/dependably-config-spec.md). Every Dependably
+[`docs/dependably-config-spec.md`](https://gitlab.northwardlabs.ca/moonlitlabs/dependably-spec/-/blob/main/docs/dependably-config-spec.md). Every Dependably
 tool (npm-check in JS; nucheck, cslint, codemetrics and pdbcheck in C#; pycheck in Python)
 vendors this directory and runs each case through a thin per-language adapter. Same fixtures,
 one contract, three runtimes — this is what keeps the implementations from drifting.
