@@ -68,6 +68,19 @@ jobs:
             run_th git file:///repo --since-commit "$BASE" --only-verified --fail
           fi
 
+  # Verifies the vendored conformance/dependably/ copy (tests/Dependably.NuCheck.Tests/
+  # conformance/) still matches the commit VENDOR.md pins it to. VENDOR.md records that
+  # provenance but proves nothing on its own — this turns the pin into a checked
+  # assertion instead of a comment nobody re-reads. It does NOT fail because the spec
+  # repo's main has moved on; sitting on an older commit is a legitimate, deliberate
+  # choice. It fails only when the local copy no longer matches what it claims to be
+  # pinned at.
+  vendor-corpus-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: sh ci/verify-vendored-corpus.sh tests/Dependably.NuCheck.Tests/conformance
+
   format:
     runs-on: ubuntu-latest
     steps:
@@ -130,7 +143,7 @@ jobs:
   #   gh attestation verify <file>.nupkg -R dependably/nucheck
   # This is what raises the released artifact from SLSA Build L0 to L2.
   release:
-    needs: [secret-scan, format, build-test, sbom]
+    needs: [secret-scan, vendor-corpus-check, format, build-test, sbom]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

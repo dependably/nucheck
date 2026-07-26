@@ -169,6 +169,19 @@ sonarqube-check:
     - dotnet sonarscanner end /d:sonar.login="$SONAR_TOKEN"
   allow_failure: true
 
+# Verifies the vendored conformance/dependably/ copy (tests/Dependably.NuCheck.Tests/
+# conformance/) still matches the commit VENDOR.md pins it to. VENDOR.md records that
+# provenance but proves nothing on its own — this turns the pin into a checked assertion
+# instead of a comment nobody re-reads. It does NOT fail because the spec repo's main has
+# moved on; sitting on an older commit is a legitimate, deliberate choice. It fails only
+# when the local copy no longer matches what it claims to be pinned at.
+vendor-corpus-check:
+  stage: test
+  image: alpine:3
+  script:
+    - apk add --no-cache git diffutils
+    - sh ci/verify-vendored-corpus.sh tests/Dependably.NuCheck.Tests/conformance
+
 pack:
   stage: pack
   <<: *dotnet_cache
