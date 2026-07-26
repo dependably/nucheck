@@ -8,6 +8,12 @@ All notable changes to `nucheck` are documented here. The format is based on
 
 ### Fixed
 
+- **`exclude` in nucheck's own section no longer emits a spurious `UNKNOWN_KEY`.** It is one of
+  the six keys spec §4 declares legal in `common` and in every tool's own section with identical
+  semantics; nucheck's known-keys list had omitted it, so a spec-legal `nucheck.exclude` entry
+  warned as if it were a typo. nucheck has no current use for the key — it is legal and inert
+  here, per the spec — but it must not warn.
+
 - **An unknown key in the `common` section no longer emits `UNKNOWN_KEY`.** `common` is shared
   with every tool in the suite, so a key nucheck does not recognize is usually a sibling tool's
   legitimate setting rather than a typo — warning about it made a correct config noisier the
