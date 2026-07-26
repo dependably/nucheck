@@ -1,94 +1,107 @@
 #!/bin/sh
-# Verify a vendored conformance corpus still matches the commit it claims to be pinned at.
+# Verify a vendored conformance corpus against the checksums recorded when it was copied.
 #
-# Six Dependably tools each vendor a copy of conformance/dependably/ from the spec repo
-# (https://gitlab.northwardlabs.ca/moonlitlabs/dependably-spec) and record the commit they
-# copied it from in a VENDOR.md beside it. VENDOR.md records that provenance but proves
-# nothing by itself — nothing stops the vendored files from drifting (edited by hand, a
-# case lost in a bad merge, a partial re-vendor) while VENDOR.md still claims the old pin.
-# That happened once already, silently, for months. This script is the check that closes
-# the gap: it clones the spec repo, checks out the exact commit VENDOR.md names, and diffs
-# it against the local copy.
+# Vendor this script into each consuming repository alongside the corpus and run it in CI.
 #
-# What this deliberately does NOT do: fail because the spec repo's main has moved past the
-# pinned commit. Sitting on an older commit is a legitimate, ordinary choice — that is what
-# pinning means. This only fails when the local copy no longer matches its OWN declared pin.
+# It deliberately does not contact the spec repository. An earlier version cloned the pinned
+# commit and diffed against it, which failed for two reasons worth remembering: the spec
+# repository is private, so CI has no credentials for it, and half the consuming repositories
+# run CI on a forge that cannot reach it at all. Checking against a manifest written at copy
+# time needs no network and no credentials, so it runs everywhere and on every pipeline.
 #
-# Usage:
-#   verify-vendored-corpus.sh <vendored-dir>
+# What this catches: a vendored file edited, added or deleted in place after copying — the
+# drift that went unnoticed for months and motivated the whole arrangement.
 #
-# <vendored-dir> is the directory containing VENDOR.md and a dependably/ subdirectory, e.g.
-# tests/conformance or tests/CsLint.Tests/conformance. Requires git and diff on PATH.
+# What it does not catch: someone re-running the vendor script and committing the result. That
+# is a deliberate update rather than drift, and VENDOR.md records which commit it came from.
+#
+# Usage:  verify-vendored-corpus.sh <conformance-dir>
+#   e.g.  verify-vendored-corpus.sh tests/MyTool.Tests/conformance
 
 set -eu
 
-SPEC_REPO="${DEPENDABLY_SPEC_REPO:-https://gitlab.northwardlabs.ca/moonlitlabs/dependably-spec.git}"
-DEST="${1:-}"
+DIR="${1:-}"
 
-if [ -z "$DEST" ]; then
-  echo "usage: verify-vendored-corpus.sh <vendored-dir>" >&2
-  exit 2
+if [ -z "$DIR" ]; then
+    echo "usage: verify-vendored-corpus.sh <conformance-dir>" >&2
+    exit 2
 fi
 
-VENDOR_FILE="$DEST/VENDOR.md"
-if [ ! -f "$VENDOR_FILE" ]; then
-  echo "ERROR: $VENDOR_FILE is missing." >&2
-  echo "There is no pin to verify against — a vendored corpus without VENDOR.md has no" >&2
-  echo "recorded provenance at all. Re-vendor with the spec repo's tools/vendor.sh." >&2
-  exit 1
+MANIFEST="$DIR/corpus.sha256"
+CORPUS="$DIR/dependably"
+
+if [ ! -d "$CORPUS" ]; then
+    echo "ERROR: $CORPUS is missing. The conformance corpus is not vendored here." >&2
+    exit 1
 fi
 
-# The commit line looks like: | Commit | \`aa8782989ffd87ea66b65e677c2e7dbd739e0ccf\` |
-SHA="$(grep -i 'commit' "$VENDOR_FILE" | grep -oE '[0-9a-f]{40}' | head -n 1 || true)"
-if [ -z "$SHA" ]; then
-  echo "ERROR: could not find a parseable 40-character commit SHA in $VENDOR_FILE." >&2
-  echo "Expected a line such as: | Commit | \`<sha>\` |" >&2
-  exit 1
+if [ ! -f "$DIR/VENDOR.md" ]; then
+    echo "ERROR: $DIR/VENDOR.md is missing, so there is no record of what this copy came from." >&2
+    exit 1
 fi
 
-if [ ! -d "$DEST/dependably" ]; then
-  echo "ERROR: $DEST/dependably does not exist — nothing to verify against pin $SHA." >&2
-  exit 1
+if [ ! -f "$MANIFEST" ]; then
+    echo "ERROR: $MANIFEST is missing." >&2
+    echo "Re-run the vendor script to regenerate it; without a manifest this copy cannot be verified." >&2
+    exit 1
 fi
 
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT INT TERM
-
-echo "Pinned commit (from $VENDOR_FILE): $SHA"
-echo "Fetching $SPEC_REPO ..."
-# A full clone, not shallow: the pin can be any historical commit, and a shallow clone
-# would only ever have HEAD available to check out. The spec repo is small (a handful of
-# commits, well under a megabyte), so this costs nothing worth trimming.
-if ! git clone --quiet "$SPEC_REPO" "$WORK/spec"; then
-  echo "ERROR: failed to clone $SPEC_REPO." >&2
-  exit 1
+# shasum on macOS, sha256sum on most CI images. Resolve once rather than per file.
+if command -v sha256sum >/dev/null 2>&1; then
+    hash_of() { sha256sum "$1" | cut -d' ' -f1; }
+elif command -v shasum >/dev/null 2>&1; then
+    hash_of() { shasum -a 256 "$1" | cut -d' ' -f1; }
+else
+    echo "ERROR: neither sha256sum nor shasum is available." >&2
+    exit 2
 fi
 
-if ! git -C "$WORK/spec" checkout --quiet "$SHA" 2>/dev/null; then
-  echo "ERROR: commit $SHA (pinned in $VENDOR_FILE) does not exist in $SPEC_REPO." >&2
-  echo "VENDOR.md is pointing at a commit the spec repo doesn't have — fix the pin." >&2
-  exit 1
+PINNED="$(sed -n 's/^| Commit | `\(.*\)` |$/\1/p' "$DIR/VENDOR.md" | head -1)"
+echo "Verifying $CORPUS against $MANIFEST (pinned ${PINNED:-unknown})"
+
+FAILED=0
+
+# Every file the manifest names must exist and still hash the same.
+while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    expected=${line%% *}
+    path=${line#* }
+    path=${path# }
+
+    if [ ! -f "$CORPUS/$path" ]; then
+        echo "  MISSING   $path" >&2
+        FAILED=1
+        continue
+    fi
+
+    actual="$(hash_of "$CORPUS/$path")"
+    if [ "$actual" != "$expected" ]; then
+        echo "  MODIFIED  $path" >&2
+        echo "            expected $expected" >&2
+        echo "            actual   $actual" >&2
+        FAILED=1
+    fi
+done < "$MANIFEST"
+
+# And nothing may be present that the manifest does not name, or a file could be added here
+# and silently diverge from every other copy.
+( cd "$CORPUS" && find . -type f | sed 's|^\./||' | LC_ALL=C sort ) > /tmp/.corpus-actual.$$
+cut -d' ' -f3- "$MANIFEST" | sed 's/^ *//' | LC_ALL=C sort > /tmp/.corpus-expected.$$
+
+while IFS= read -r path; do
+    if ! grep -Fxq "$path" /tmp/.corpus-expected.$$; then
+        echo "  UNTRACKED $path" >&2
+        FAILED=1
+    fi
+done < /tmp/.corpus-actual.$$
+
+rm -f /tmp/.corpus-actual.$$ /tmp/.corpus-expected.$$
+
+if [ "$FAILED" -ne 0 ]; then
+    echo >&2
+    echo "ERROR: the vendored corpus does not match the checksums recorded when it was copied." >&2
+    echo "Either restore the files, or re-run the vendor script if you meant to update the pin." >&2
+    exit 1
 fi
 
-UPSTREAM_DIR="$WORK/spec/conformance/dependably"
-if [ ! -d "$UPSTREAM_DIR" ]; then
-  echo "ERROR: $SPEC_REPO@$SHA has no conformance/dependably/ directory — cannot verify." >&2
-  exit 1
-fi
-
-if ! diff -rq "$UPSTREAM_DIR" "$DEST/dependably" >"$WORK/diff.summary" 2>&1; then
-  echo "ERROR: $DEST/dependably has drifted from its pinned commit." >&2
-  echo "$VENDOR_FILE claims $SHA, but the vendored files no longer match what that" >&2
-  echo "commit actually contains. Either this copy was edited or partially lost locally," >&2
-  echo "or the pin is stale. Re-sync with the spec repo's tools/vendor.sh, or correct" >&2
-  echo "VENDOR.md to record the commit that was actually vendored." >&2
-  echo >&2
-  echo "--- summary (upstream@$SHA vs. $DEST/dependably) ---" >&2
-  cat "$WORK/diff.summary" >&2
-  echo >&2
-  echo "--- full diff ---" >&2
-  diff -ru "$UPSTREAM_DIR" "$DEST/dependably" >&2 || true
-  exit 1
-fi
-
-echo "OK: $DEST/dependably matches $SPEC_REPO@$SHA."
+echo "OK: $(wc -l < "$MANIFEST" | tr -d ' ') files match."
