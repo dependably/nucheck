@@ -120,6 +120,17 @@ public class DependablyConfigV1Tests : IDisposable
     }
 
     [Fact]
+    public void Tolerates_unknown_key_in_common()
+    {
+        var dir = NewRepoDir();
+        Write(dir, DependablyCheckConfig.FileName, """{ "common": { "maxComplexity": 25 } }""");
+
+        var config = DependablyCheckConfig.Load(null, dir);
+
+        Assert.DoesNotContain("UNKNOWN_KEY", Codes(config));
+    }
+
+    [Fact]
     public void Parses_failOn_severity_and_count()
     {
         var dir = NewRepoDir();

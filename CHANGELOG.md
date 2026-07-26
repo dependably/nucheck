@@ -4,6 +4,26 @@ All notable changes to `nucheck` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **An unknown key in the `common` section no longer emits `UNKNOWN_KEY`.** `common` is shared
+  with every tool in the suite, so a key nucheck does not recognize is usually a sibling tool's
+  legitimate setting rather than a typo — warning about it made a correct config noisier the
+  more suite tools a repo used. The warning still fires for nucheck's own section, where an
+  unrecognized key really is a typo. This matches the handling unknown *rule ids* in `common`
+  already had, and follows the spec clarification made when the shared contract was extracted
+  to its own repository.
+
+### Changed
+
+- The `.dependably` conformance corpus is now vendored from the dependably-spec repository
+  rather than from npm-check, with the upstream commit recorded in
+  `tests/Dependably.NuCheck.Tests/conformance/VENDOR.md`. The fixtures themselves are
+  unchanged; the provenance is now explicit, so drift between the suite's vendored copies is
+  visible.
+
 ## [2.1.0] - 2026-07-16
 
 ### Added

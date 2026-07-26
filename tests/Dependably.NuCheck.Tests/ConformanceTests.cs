@@ -4,10 +4,11 @@ using Dependably.NuCheck.Config;
 namespace Dependably.NuCheck.Tests;
 
 /// <summary>
-/// Replays the shared cross-language <c>.dependably</c> conformance fixtures
-/// (conformance/dependably/cases/*.json, vendored from the spec repo) through the C#
-/// exception parser + matcher. This is what keeps nucheck's port behaviour-identical to
-/// npm-check's reference implementation: same fixtures, same outcomes, three languages.
+/// Replays the shared cross-language <c>.dependably</c> conformance fixtures through the C#
+/// exception parser + matcher. The fixtures under conformance/dependably/cases/*.json are
+/// vendored from https://gitlab.northwardlabs.ca/moonlitlabs/dependably-spec at the commit
+/// recorded in conformance/VENDOR.md — change them there, not here. This is what keeps
+/// nucheck's port behaviour-identical to its sibling tools: same fixtures, same outcomes.
 /// The exception-grammar cases are tool-agnostic; the npm-flavoured config-loader cases
 /// (discovery/section-merge) are covered by nucheck-specific tests instead.
 /// </summary>

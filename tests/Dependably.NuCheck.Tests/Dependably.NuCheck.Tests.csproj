@@ -32,7 +32,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Shared cross-language .dependably conformance fixtures (vendored from the spec repo). -->
+    <!-- Shared cross-language .dependably conformance fixtures, vendored from the dependably-spec
+         repository at the commit recorded in conformance/VENDOR.md. The glob copies only *.json,
+         so the corpus README and VENDOR.md stay out of the test output. -->
     <None Include="conformance\**\*.json" CopyToOutputDirectory="PreserveNewest" LinkBase="conformance" />
   </ItemGroup>
 

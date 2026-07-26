@@ -2,9 +2,15 @@
 
 Language-neutral test cases that pin the behavior in
 [`docs/dependably-config-spec.md`](../../docs/dependably-config-spec.md). Every Dependably
-tool (npm-check in JS, nucheck/cslint/codemetrics in C#, pycheck in Python) vendors this
-directory and runs each case through a thin per-language adapter. Same fixtures, one
-contract, three runtimes — this is what keeps the implementations from drifting.
+tool (npm-check in JS; nucheck, cslint, codemetrics and pdbcheck in C#; pycheck in Python)
+vendors this directory and runs each case through a thin per-language adapter. Same fixtures,
+one contract, three runtimes — this is what keeps the implementations from drifting.
+
+A case is authored against one tool's vocabulary, named in its `tool` field. An adapter for a
+different tool replays the grammar, not that tool's selector applicability: selectors are
+validated before the expiry format is, so replaying a `package`-selector case under a tool
+that does not emit `package` raises a selector error and fails a case that is actually
+passing. Applicability is per-tool and belongs in each tool's own tests.
 
 ## Layout
 
