@@ -1,11 +1,11 @@
 {
   "name": "validation-version-too-high",
   "description": "A version greater than supported is CONFIG_VERSION.",
-  "tool": "npm-check",
+  "tool": "$any",
   "files": {
     ".dependably": {
       "version": 99,
-      "npm-check": {
+      "$tool": {
         "failOn": {
           "count": 1
         }

@@ -1,10 +1,10 @@
 {
   "name": "validation-unknown-key-warns",
   "description": "An unknown key in the own section warns UNKNOWN_KEY but does not error.",
-  "tool": "npm-check",
+  "tool": "$any",
   "files": {
     ".dependably": {
-      "npm-check": {
+      "$tool": {
         "exclde": [
           "typo/**"
         ],

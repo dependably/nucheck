@@ -30,6 +30,15 @@ All notable changes to `nucheck` are documented here. The format is based on
   unchanged; the provenance is now explicit, so drift between the suite's vendored copies is
   visible.
 
+- The corpus is re-pinned to the spec commit that introduces the conformance vocabulary
+  binding (§12), and the adapter replaying it now drives `DependablyCheckConfig.Load` — the
+  entry point the CLI itself uses — instead of reaching past it into the exception parser and
+  matcher. Cases are materialized into a throwaway repository and resolved through real
+  discovery, real section merge, the real exception applier and the real gate, so a defect in
+  the loader can no longer hide behind green primitives. Coverage goes from 12 cases to 16
+  replayed plus 3 recorded as known divergences, each asserted to still fail so the entry
+  cannot outlive the defect.
+
 ## [2.1.0] - 2026-07-16
 
 ### Added

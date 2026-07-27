@@ -1,19 +1,19 @@
 {
   "name": "discovery-prefers-dependably",
   "description": "When both files exist in one directory, .dependably wins and .dependably-check is ignored with a warning.",
-  "tool": "npm-check",
+  "tool": "$any",
   "files": {
     ".dependably": {
-      "npm-check": {
+      "$tool": {
         "rules": {
-          "no-git-deps": "error"
+          "$rule1": "error"
         }
       }
     },
     ".dependably-check": {
-      "npm": {
+      "$tool": {
         "rules": {
-          "no-git-deps": "off"
+          "$rule1": "off"
         }
       }
     }
@@ -25,7 +25,7 @@
     ],
     "resolved": {
       "rules": {
-        "no-git-deps": "error"
+        "$rule1": "error"
       }
     }
   }
