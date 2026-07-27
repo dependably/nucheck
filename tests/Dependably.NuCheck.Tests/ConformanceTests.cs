@@ -162,11 +162,6 @@ public sealed class ConformanceTests : IDisposable
             "`Packages.Corp.Dev` from `common` survives verbatim instead of collapsing to `packages.corp.dev`, " +
             "and a config that spells a host two ways gets two allowlist entries downstream. The case then " +
             "also pins `exclude`, which nucheck does not surface (see discovery-walkup-finds-repo-root).",
-        ["merge-scalar-failon-override"] =
-            "Severity.ParseLevel rejects the §4.2 aliases: `error`, `warning` and `warn` all return null, " +
-            "so `failOn: { \"severity\": \"warning\" }` — the spelling the spec's own examples and four " +
-            "corpus cases use — makes the whole config unloadable with INVALID_FAIL_ON instead of gating " +
-            "at `moderate`.",
     };
 
     // ---------------------------------------------------------------- corpus

@@ -12,6 +12,8 @@ public class SeverityTests
     [InlineData("low", "low")]
     [InlineData("unknown", "info")]
     [InlineData("error", "high")]        // source-trust policy findings
+    [InlineData("warning", "moderate")]  // spec §4.2 alias
+    [InlineData("warn", "moderate")]     // spec §4.2 alias
     [InlineData("HIGH", "high")]          // case-insensitive
     [InlineData("  moderate ", "moderate")] // trimmed
     [InlineData("", "info")]
@@ -38,6 +40,9 @@ public class SeverityTests
     [InlineData("medium", "moderate")]   // alias
     [InlineData("low", "low")]
     [InlineData("info", "info")]
+    [InlineData("error", "high")]        // spec §4.2 alias
+    [InlineData("warning", "moderate")]  // spec §4.2 alias
+    [InlineData("warn", "moderate")]     // spec §4.2 alias
     [InlineData("HIGH", "high")]          // case-insensitive
     [InlineData(" high ", "high")]        // trimmed
     public void ParseLevel_accepts_ladder_words(string raw, string expected)
@@ -46,9 +51,7 @@ public class SeverityTests
     }
 
     [Theory]
-    [InlineData("warning")]   // not a ladder word (unlike Normalize, not coerced to info)
     [InlineData("bogus")]
-    [InlineData("error")]     // a raw source word, not a gate level
     [InlineData("")]
     [InlineData(null)]
     public void ParseLevel_rejects_non_ladder_words(string? raw)

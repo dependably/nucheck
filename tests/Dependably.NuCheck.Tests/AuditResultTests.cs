@@ -431,15 +431,18 @@ public class AuditResultTests
     }
 
     [Fact]
-    public void Pinned_warning_finding_never_gates()
+    public void Pinned_warning_finding_never_trips_the_default_gate()
     {
         var result = WithPinned("warning");
 
         Assert.False(result.HasFailures);
         Assert.False(result.GateTrips(null, null));
-        // warning maps to low on the ladder: a moderate gate ignores it, a low gate trips.
-        Assert.False(result.GateTrips("moderate", null));
+        // warning maps to moderate on the ladder (spec §4.2 alias): a moderate gate trips on
+        // it, and so does a low gate (moderate outranks low); only a high/critical gate lets
+        // it pass through ungated.
+        Assert.True(result.GateTrips("moderate", null));
         Assert.True(result.GateTrips("low", null));
+        Assert.False(result.GateTrips("high", null));
     }
 
     [Fact]

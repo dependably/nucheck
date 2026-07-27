@@ -8,8 +8,9 @@ namespace Dependably.NuCheck.Models;
 /// <remarks>
 /// nucheck mapping (per the shared schema v1): keep critical/high/moderate/low;
 /// normalise <c>medium</c>→<c>moderate</c>; <c>unknown</c> (or anything unrecognised)
-/// →<c>info</c>. Source-trust policy findings carry severity <c>error</c>, which maps to
-/// <c>high</c> (their nature). Used by every formatter so the suite speaks one language.
+/// →<c>info</c>. Spec §4.2 also requires the aliases <c>error</c>→<c>high</c> (the severity
+/// source-trust policy findings carry) and <c>warning</c>/<c>warn</c>→<c>moderate</c>. Used
+/// by every formatter so the suite speaks one language.
 /// </remarks>
 public static class Severity
 {
@@ -27,7 +28,7 @@ public static class Severity
         "moderate" or "medium" => Moderate,
         "low" => Low,
         "error" => High,      // source-trust policy findings
-        "warning" => Low,
+        "warning" or "warn" => Moderate,   // spec §4.2 alias
         _ => Info,            // "unknown", null, blank, or anything unrecognised
     };
 
@@ -47,16 +48,19 @@ public static class Severity
 
     /// <summary>
     /// Parse a gate level for <c>--fail-on severity=&lt;level&gt;</c>. Accepts the five
-    /// ladder words (plus <c>medium</c> as an alias for <c>moderate</c>) and returns the
-    /// canonical word; returns <c>null</c> for anything else so the caller can raise a
-    /// usage error. Unlike <see cref="Normalize"/>, this does NOT swallow a typo into
+    /// ladder words (plus <c>medium</c> as an alias for <c>moderate</c>, and the spec §4.2
+    /// aliases <c>error</c>→<c>high</c> and <c>warning</c>/<c>warn</c>→<c>moderate</c>) and
+    /// returns the canonical word; returns <c>null</c> for anything else so the caller can
+    /// raise a usage error. Unlike <see cref="Normalize"/>, this does NOT swallow a typo into
     /// <c>info</c> — an invalid gate level must be rejected, not silently accepted.
     /// </summary>
     public static string? ParseLevel(string? raw) => raw?.Trim().ToLowerInvariant() switch
     {
         "critical" => Critical,
         "high" => High,
+        "error" => High,
         "moderate" or "medium" => Moderate,
+        "warning" or "warn" => Moderate,
         "low" => Low,
         "info" => Info,
         _ => null,
