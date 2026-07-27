@@ -8,6 +8,15 @@ All notable changes to `nucheck` are documented here. The format is based on
 
 ### Fixed
 
+- **`failOn.severity` (and `--fail-on severity=`) now accepts the spec §4.2 aliases `error`,
+  `warning`, and `warn`.** `Severity.ParseLevel` previously recognized only the five ladder
+  words plus `medium`, so a config spelling the gate level as `warning` — the form the spec's
+  own examples and several corpus cases use — made the whole `.dependably` file unloadable
+  with `INVALID_FAIL_ON` instead of gating at `moderate`. `warning`/`warn` now normalize and
+  parse to `moderate` (not the `low` they previously normalized to under `Severity.Normalize`,
+  which was itself a spec violation), and `error` parses to `high` alongside the mapping
+  `Severity.Normalize` already gave it.
+
 - **`exclude` in nucheck's own section no longer emits a spurious `UNKNOWN_KEY`.** It is one of
   the six keys spec §4 declares legal in `common` and in every tool's own section with identical
   semantics; nucheck's known-keys list had omitted it, so a spec-legal `nucheck.exclude` entry
