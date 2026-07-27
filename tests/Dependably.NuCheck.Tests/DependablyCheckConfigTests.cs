@@ -68,6 +68,47 @@ public class DependablyCheckConfigTests : IDisposable
         Assert.Single(config.AllowedRegistryHosts);
     }
 
+    /// <summary>
+    /// Spec §5.1 requires lowercase as the canonical stored form for
+    /// <c>allowedRegistryHosts</c> — not merely a case-insensitive dedupe that survives with
+    /// whichever spelling appeared first.
+    /// </summary>
+    [Fact]
+    public void Load_stores_allowedRegistryHosts_lowercased()
+    {
+        var dir = NewTempDir();
+        Write(dir, """
+        {
+          "common": { "allowedRegistryHosts": ["Packages.Corp.Dev"] },
+          "nuget":  { "allowedRegistryHosts": ["packages.corp.dev", "Feeds.Corp.Dev"] }
+        }
+        """);
+
+        var config = DependablyCheckConfig.Load(null, dir);
+
+        Assert.Equal(["packages.corp.dev", "feeds.corp.dev"], config.AllowedRegistryHosts);
+    }
+
+    /// <summary>
+    /// Unlike <c>allowedRegistryHosts</c>, <c>allowedLocalFeeds</c> holds filesystem paths, which
+    /// are case-sensitive on the platforms that matter — deduping still applies case-insensitively
+    /// (spec §5.1's dedupe rule), but the stored spelling must be preserved, not lowercased.
+    /// </summary>
+    [Fact]
+    public void Load_preserves_allowedLocalFeeds_casing()
+    {
+        var dir = NewTempDir();
+        Write(dir, """
+        {
+          "common": { "allowedLocalFeeds": ["./Local-Packages"] }
+        }
+        """);
+
+        var config = DependablyCheckConfig.Load(null, dir);
+
+        Assert.Equal(["./Local-Packages"], config.AllowedLocalFeeds);
+    }
+
     [Fact]
     public void Discover_walks_up_to_find_config()
     {
@@ -224,6 +265,32 @@ public class DependablyCheckConfigTests : IDisposable
         var config = DependablyCheckConfig.Load(null, dir);
 
         Assert.Equal(["NugetOnly.Pkg"], config.IgnoreUnusedPackages);
+    }
+
+    // -----------------------------------------------------------------
+    // exclude (spec §4 universal key; nucheck resolves it but has no current consumer)
+    // -----------------------------------------------------------------
+
+    [Fact]
+    public void Load_unions_common_and_nuget_exclude_ordinally()
+    {
+        var dir = NewTempDir();
+        Write(dir, """
+        {
+          "common": { "exclude": ["dist/**"] },
+          "nuget":  { "exclude": ["dist/**", "vendor/**"] }
+        }
+        """);
+
+        var config = DependablyCheckConfig.Load(null, dir);
+
+        Assert.Equal(["dist/**", "vendor/**"], config.Exclude);
+    }
+
+    [Fact]
+    public void Empty_config_has_empty_exclude()
+    {
+        Assert.Empty(DependablyCheckConfig.Empty.Exclude);
     }
 
     // ---- rules severity map (spec §4.1/§5) --------------------------------------

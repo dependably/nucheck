@@ -49,6 +49,7 @@ public sealed class DependablyCheckConfig
         IReadOnlyList<string> allowedRegistryHosts,
         IReadOnlyList<string> ignoreUnusedPackages,
         IReadOnlyList<string> allowedLocalFeeds,
+        IReadOnlyList<string> exclude,
         IReadOnlyList<DependablyException> exceptions,
         string? failOnSeverity,
         int? failOnCount,
@@ -58,6 +59,7 @@ public sealed class DependablyCheckConfig
         AllowedRegistryHosts = allowedRegistryHosts;
         IgnoreUnusedPackages = ignoreUnusedPackages;
         AllowedLocalFeeds = allowedLocalFeeds;
+        Exclude = exclude;
         Exceptions = exceptions;
         FailOnSeverity = failOnSeverity;
         FailOnCount = failOnCount;
@@ -65,7 +67,10 @@ public sealed class DependablyCheckConfig
         Warnings = warnings;
     }
 
-    /// <summary>Bare hostnames trusted as NuGet sources (union of common + nucheck, deduped case-insensitively).</summary>
+    /// <summary>
+    /// Bare hostnames trusted as NuGet sources (union of common + nucheck, deduped
+    /// case-insensitively, stored lowercased per spec §5.1).
+    /// </summary>
     public IReadOnlyList<string> AllowedRegistryHosts { get; }
 
     /// <summary>Package ids never reported as unused (union of common + nucheck, deduped case-insensitively).</summary>
@@ -73,6 +78,14 @@ public sealed class DependablyCheckConfig
 
     /// <summary>Repo-local feeds explicitly trusted (union of common + nucheck, deduped case-insensitively).</summary>
     public IReadOnlyList<string> AllowedLocalFeeds { get; }
+
+    /// <summary>
+    /// Glob patterns excluded from scanning (union of common + nucheck, ordinal — case-preserving,
+    /// since a path is case-sensitive on the filesystems that matter). nucheck has no current
+    /// consumer for this list; it is legal-and-inert here per spec §4, resolved for parity with
+    /// the tool's other §5 list keys.
+    /// </summary>
+    public IReadOnlyList<string> Exclude { get; }
 
     /// <summary>Parsed <c>exceptions</c> entries (common + nucheck), suppressing specific findings (spec §6).</summary>
     public IReadOnlyList<DependablyException> Exceptions { get; }
@@ -96,7 +109,7 @@ public sealed class DependablyCheckConfig
 
     /// <summary>An empty config, used when no file is found.</summary>
     public static DependablyCheckConfig Empty { get; } = new(
-        [], [], [], [], null, null, new Dictionary<string, string>(), []);
+        [], [], [], [], [], null, null, new Dictionary<string, string>(), []);
 
     /// <summary>
     /// Loads the config. When <paramref name="explicitPath"/> is given it is read directly;
@@ -214,9 +227,10 @@ public sealed class DependablyCheckConfig
             // already applied to unknown rule ids in `common`.
             WarnUnknownKeys(root, toolKey, warnings);
 
-            var hosts = UnionStringArray(root, toolKey, "allowedRegistryHosts");
+            var hosts = UnionStringArray(root, toolKey, "allowedRegistryHosts", canonicalizeLowercase: true);
             var ignored = UnionStringArray(root, toolKey, "ignoreUnusedPackages");
             var localFeeds = UnionStringArray(root, toolKey, "allowedLocalFeeds");
+            var exclude = UnionStringArray(root, toolKey, "exclude");
 
             var exceptions = new List<DependablyException>();
             exceptions.AddRange(DependablyExceptions.Parse(
@@ -228,7 +242,7 @@ public sealed class DependablyCheckConfig
             var ruleSeverities = ParseRules(root, toolKey);
 
             return new DependablyCheckConfig(
-                hosts, ignored, localFeeds, exceptions, failOnSeverity, failOnCount, ruleSeverities, warnings);
+                hosts, ignored, localFeeds, exclude, exceptions, failOnSeverity, failOnCount, ruleSeverities, warnings);
         }
     }
 
@@ -362,8 +376,12 @@ public sealed class DependablyCheckConfig
         }
     }
 
-    // Union `common.<arrayKey>` and `<toolKey>.<arrayKey>`, deduped case-insensitively.
-    private static List<string> UnionStringArray(JsonElement root, string toolKey, string arrayKey)
+    // Union `common.<arrayKey>` and `<toolKey>.<arrayKey>`, deduped case-insensitively. The
+    // stored spelling is the first-seen one unless `canonicalizeLowercase` is set, in which case
+    // it is lowercased — spec §5.1 requires that only for `allowedRegistryHosts`; the other two
+    // call sites (a filesystem-path list and nucheck's own key) keep their case as written.
+    private static List<string> UnionStringArray(
+        JsonElement root, string toolKey, string arrayKey, bool canonicalizeLowercase = false)
     {
         var values = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -382,10 +400,12 @@ public sealed class DependablyCheckConfig
                 }
 
                 var value = element.GetString();
-                if (!string.IsNullOrWhiteSpace(value) && seen.Add(value))
+                if (string.IsNullOrWhiteSpace(value) || !seen.Add(value))
                 {
-                    values.Add(value);
+                    continue;
                 }
+
+                values.Add(canonicalizeLowercase ? value.ToLowerInvariant() : value);
             }
         }
 
