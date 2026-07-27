@@ -8,6 +8,21 @@ All notable changes to `nucheck` are documented here. The format is based on
 
 ### Fixed
 
+- **`allowedRegistryHosts` now stores its canonical spelling lowercased, per spec §5.1.**
+  `UnionStringArray` deduped the merged `common` + `nucheck` list case-insensitively but kept
+  whichever spelling appeared first, so `Packages.Corp.Dev` from `common` survived verbatim
+  instead of collapsing to `packages.corp.dev` — a config that spelled the same host two ways
+  ended up with two distinct-looking allowlist entries downstream. The other two list keys that
+  share the same helper, `ignoreUnusedPackages` and `allowedLocalFeeds`, are unaffected: the
+  spec names only `allowedRegistryHosts` for lowercase canonicalization, and `allowedLocalFeeds`
+  holds filesystem paths, which are case-sensitive on the platforms that matter.
+
+- **The merged `exclude` list is now surfaced off `DependablyCheckConfig.Exclude`.** It was
+  already accepted without warning (see the entry below), but the loader resolved nothing for
+  it, so a case pinning `resolved.exclude` had nothing to assert against. `exclude` now unions
+  `common` and `nucheck` ordinally — case-preserving, since these are glob patterns — the same
+  way the other three spec §5 list keys are resolved.
+
 - **`failOn.severity` (and `--fail-on severity=`) now accepts the spec §4.2 aliases `error`,
   `warning`, and `warn`.** `Severity.ParseLevel` previously recognized only the five ladder
   words plus `medium`, so a config spelling the gate level as `warning` — the form the spec's

@@ -148,21 +148,7 @@ public sealed class ConformanceTests : IDisposable
     /// goes red the moment one starts passing and the entry cannot outlive the defect. Empty is
     /// the goal.
     /// </summary>
-    private static readonly Dictionary<string, string> KnownDivergences = new(StringComparer.Ordinal)
-    {
-        ["discovery-walkup-finds-repo-root"] =
-            "nucheck treats `exclude` as legal-and-inert: it is in KnownSectionKeys so it never warns, but " +
-            "DependablyCheckConfig exposes no property carrying the merged list, so a case pinning " +
-            "`resolved.exclude` has nothing to assert against. Closing it means either surfacing the merged " +
-            "`exclude` off the config the way the other three §5 list keys are surfaced, or the corpus " +
-            "growing an `exclude` capability token so §12.5 can skip the case honestly.",
-        ["merge-lists-union-and-dedupe"] =
-            "Two defects in one case. UnionStringArray dedupes allowedRegistryHosts case-insensitively but " +
-            "stores the FIRST-seen spelling, where §5.1 requires lowercase as the canonical stored form — so " +
-            "`Packages.Corp.Dev` from `common` survives verbatim instead of collapsing to `packages.corp.dev`, " +
-            "and a config that spells a host two ways gets two allowlist entries downstream. The case then " +
-            "also pins `exclude`, which nucheck does not surface (see discovery-walkup-finds-repo-root).",
-    };
+    private static readonly Dictionary<string, string> KnownDivergences = new(StringComparer.Ordinal);
 
     // ---------------------------------------------------------------- corpus
 
@@ -246,24 +232,31 @@ public sealed class ConformanceTests : IDisposable
     /// <summary>
     /// A recorded divergence must STILL fail. When one starts passing the fix has landed and the
     /// <see cref="KnownDivergences"/> entry has to go, or the case would sit unreplayed forever.
+    /// A plain <see cref="Fact"/> looping over <see cref="DivergentCases"/> rather than a
+    /// <see cref="Theory"/> driven by <c>MemberData</c>, because <see cref="KnownDivergences"/> is
+    /// meant to reach empty (that is the stated goal) and xUnit's <c>MemberData</c> theory throws
+    /// "No data found" the moment its source is empty — a bare <c>Theory</c> here would make the
+    /// suite go red the instant every divergence is fixed, which is backwards.
     /// </summary>
-    [Theory]
-    [MemberData(nameof(DivergentCases))]
-    public void Known_divergence_still_fails(string name)
+    [Fact]
+    public void Known_divergence_still_fails()
     {
-        var conforms = true;
-        try
+        foreach (var name in DivergentCases().Select(c => (string)c[0]))
         {
-            Replay(Bind(Case(name)));
-        }
-        catch (Exception ex)
-        {
-            conforms = false;
-            _output.WriteLine($"{name} diverges as recorded: {ex.Message}");
-        }
+            var conforms = true;
+            try
+            {
+                Replay(Bind(Case(name)));
+            }
+            catch (Exception ex)
+            {
+                conforms = false;
+                _output.WriteLine($"{name} diverges as recorded: {ex.Message}");
+            }
 
-        Assert.False(conforms,
-            $"{name} now conforms — delete its KnownDivergences entry so the case is replayed for real.");
+            Assert.False(conforms,
+                $"{name} now conforms — delete its KnownDivergences entry so the case is replayed for real.");
+        }
     }
 
     // ---------------------------------------------------------------- coverage
@@ -337,12 +330,21 @@ public sealed class ConformanceTests : IDisposable
         Assert.NotEqual("$any", Tool(Case(name)));
     }
 
-    [Theory]
-    [MemberData(nameof(DivergenceEntries))]
-    public void Records_a_divergence_for_a_stated_reason(string name, string reason)
+    /// <summary>
+    /// A plain <see cref="Fact"/> looping over <see cref="DivergenceEntries"/> rather than a
+    /// <c>MemberData</c> <see cref="Theory"/>, for the same reason as
+    /// <see cref="Known_divergence_still_fails"/>: <see cref="KnownDivergences"/> reaching empty
+    /// must not turn into a "No data found" failure.
+    /// </summary>
+    [Fact]
+    public void Records_a_divergence_for_a_stated_reason()
     {
-        Assert.Contains(name, Corpus.Select(Name));
-        Assert.True(reason.Length > 20, $"{name} needs a reason a reader can act on");
+        foreach (var entry in DivergenceEntries())
+        {
+            var (name, reason) = ((string)entry[0], (string)entry[1]);
+            Assert.Contains(name, Corpus.Select(Name));
+            Assert.True(reason.Length > 20, $"{name} needs a reason a reader can act on");
+        }
     }
 
     // ---------------------------------------------------------------- binding contract
@@ -610,10 +612,9 @@ public sealed class ConformanceTests : IDisposable
             Assert.Equal(hosts.Select(n => (string)n!), config.AllowedRegistryHosts);
         }
 
-        // Last, so a case pinning several list keys reports the one nucheck CAN express first.
-        if (resolved["exclude"] is not null)
+        if (resolved["exclude"] is JsonArray exclude)
         {
-            Assert.Fail("case pins `exclude`, which DependablyCheckConfig does not surface at all.");
+            Assert.Equal(exclude.Select(n => (string)n!), config.Exclude);
         }
 
         if (resolved["failOn"] is JsonObject failOn)

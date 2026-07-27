@@ -120,9 +120,10 @@ public class DependablyConfigV1Tests : IDisposable
     }
 
     /// <summary>
-    /// <c>exclude</c> is one of the six spec-§4 keys legal in every tool's own section, even
-    /// though nucheck has no current use for it: legal-but-inert is the point (spec §4), not a
-    /// gap to fill in nucheck itself.
+    /// <c>exclude</c> is one of the six spec-§4 keys legal in every tool's own section. nucheck
+    /// has no current consumer for the patterns, but resolves and surfaces the merged list off
+    /// <see cref="DependablyCheckConfig.Exclude"/> the same way it does for the other §5 list
+    /// keys, rather than only suppressing the warning.
     /// </summary>
     [Fact]
     public void Spec_universal_exclude_key_does_not_warn_in_own_section()
@@ -133,6 +134,7 @@ public class DependablyConfigV1Tests : IDisposable
         var config = DependablyCheckConfig.Load(null, dir);
 
         Assert.DoesNotContain("UNKNOWN_KEY", Codes(config));
+        Assert.Equal(["**/vendor/**"], config.Exclude);
     }
 
     [Fact]
