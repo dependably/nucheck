@@ -15,7 +15,8 @@
 # Required CI/CD variables (Settings → CI/CD → Variables), "Protected" + "Masked":
 #   REGISTRY_URL          private NuGet feed BASE host, e.g. https://nuget.example.com
 #                         (the publish job appends /nuget/v3/index.json itself)
-#   REGISTRY_KEY          API key for `dotnet nuget push`
+#   REGISTRY_PUBLISH_KEY  API key for `dotnet nuget push`. Protected + Masked;
+#                         publish-scoped. REGISTRY_KEY is read-only and cannot push.
 #   dependencyTrack_url   Dependency-Track base URL
 #   dependencyTrack_token DT API key with BOM_UPLOAD + PROJECT_CREATION_UPLOAD perms
 #   SNYK_TOKEN            Snyk (SAST) token. UNPROTECTED + masked so MR pipelines can scan.
@@ -279,8 +280,15 @@ publish:
       allow_failure: false
   script:
     - |
-      if [ -z "$REGISTRY_URL" ] || [ -z "$REGISTRY_KEY" ]; then
-        echo "ERROR: REGISTRY_URL and REGISTRY_KEY must be set as CI/CD variables." >&2
+      # REGISTRY_PUBLISH_KEY is the publish credential: protected + masked, so it
+      # resolves only on protected refs. REGISTRY_KEY is the unprotected read token
+      # and is scoped read-only on the registry — it cannot push, so it is not
+      # accepted here even as a fallback. An empty value on a protected ref means
+      # the variable is missing or the ref is not actually protected.
+      if [ -z "$REGISTRY_URL" ] || [ -z "$REGISTRY_PUBLISH_KEY" ]; then
+        echo "ERROR: REGISTRY_URL and REGISTRY_PUBLISH_KEY must be set as CI/CD variables." >&2
+        echo "       REGISTRY_PUBLISH_KEY must be Protected + Masked; if it is set and still" >&2
+        echo "       empty here, this ref is not protected (add 'v*' to Protected Tags)." >&2
         exit 1
       fi
     - |
@@ -298,7 +306,7 @@ publish:
     # Build the v3 service index from the base host (tolerate a trailing slash).
     - FEED="${REGISTRY_URL%/}/nuget/v3/index.json"
     - echo "Publishing $PKG to $FEED"
-    - dotnet nuget push "$PKG" --source "$FEED" --api-key "$REGISTRY_KEY" --skip-duplicate
+    - dotnet nuget push "$PKG" --source "$FEED" --api-key "$REGISTRY_PUBLISH_KEY" --skip-duplicate
 
 # Mirror the default branch (+ tags) to the public GitHub repo. Runs automatically at the
 # end of a v* tag pipeline — carrying the tag to GitHub fires the GitHub Actions release
