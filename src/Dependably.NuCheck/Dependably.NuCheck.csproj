@@ -26,7 +26,53 @@
     <RepositoryUrl>https://github.com/dependably/nucheck.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/dependably/nucheck</PackageProjectUrl>
+
+    <!-- Ship debug symbols as a separate .snupkg instead of bundling PDBs in the tool package. -->
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
+
+  <!-- PackAsTool copies the whole build output (PDBs included) into tools/; strip the
+       PDBs from the .nupkg — they ship in the .snupkg instead. -->
+  <Target Name="RemovePdbsFromToolPackage" AfterTargets="PackTool">
+    <ItemGroup>
+      <TfmSpecificPackageFile Remove="@(TfmSpecificPackageFile)" Condition="'%(Extension)' == '.pdb'" />
+    </ItemGroup>
+  </Target>
+
+  <!-- PackAsTool sets IncludeBuildOutput=false, which makes the pack targets skip symbol
+       collection entirely and fail the .snupkg with NU5017 (empty package). Mirror the
+       SDK's _WalkEachTargetPerFramework fan-out to collect each TFM's PDB at the tools/
+       path, so the .snupkg layout matches the .nupkg. NuGet prepends the tools/ folder
+       itself, so TargetPath is relative to it. -->
+  <Target Name="_AddToolPdbsToSymbols" AfterTargets="_WalkEachTargetPerFramework">
+    <MSBuild Projects="@(_ProjectsWithTFM)"
+             Targets="_GetToolDebugSymbolsWithTfm"
+             BuildInParallel="$(BuildInParallel)">
+      <Output TaskParameter="TargetOutputs" ItemName="_TargetPathsToSymbols" />
+    </MSBuild>
+    <!-- PackTask only reads TargetPathsToSymbols when IncludeBuildOutput is true. Flip it
+         back here — after the build-output collection targets have already been skipped —
+         so the PDBs reach the .snupkg without lib/ output leaking into the tool .nupkg
+         (the .nupkg side also filters on AllowedOutputExtensionsInPackageBuildOutputFolder,
+         which excludes .pdb). BuildOutputTargetFolder makes NuGet place them under
+         tools/{tfm}/ instead of lib/{tfm}/. -->
+    <PropertyGroup>
+      <IncludeBuildOutput>true</IncludeBuildOutput>
+      <BuildOutputTargetFolder>tools</BuildOutputTargetFolder>
+    </PropertyGroup>
+  </Target>
+
+  <Target Name="_GetToolDebugSymbolsWithTfm"
+          DependsOnTargets="DebugSymbolsProjectOutputGroup"
+          Returns="@(_ToolDebugSymbols)">
+    <ItemGroup>
+      <_ToolDebugSymbols Include="@(DebugSymbolsProjectOutputGroupOutput)">
+        <TargetPath>any/%(Filename)%(Extension)</TargetPath>
+        <TargetFramework>$(TargetFramework)</TargetFramework>
+      </_ToolDebugSymbols>
+    </ItemGroup>
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="NuGet.Configuration" Version="7.6.0" />

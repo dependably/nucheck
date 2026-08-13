@@ -4,10 +4,11 @@
 #                                                 ↘  mirror-to-github (auto on v* tag; manual on main)
 #
 #   test            build + xUnit tests w/ coverage, format check, secret + SAST + Sonar scans
-#   pack            `dotnet pack` the .nupkg tool, kept as a job artifact
+#   pack            `dotnet pack` the .nupkg tool + .snupkg symbols, kept as job artifacts
 #   sbom            generate a CycloneDX SBOM (every pipeline), kept as an artifact
 #   sbom-publish    upload the SBOM to Dependency-Track on the default branch
-#   publish         pushes the .nupkg to the private NuGet feed — auto on a v* tag, manual on main
+#   publish         pushes the .nupkg AND .snupkg to the private NuGet feed —
+#                     auto on a v* tag, manual on main (fails until the feed accepts .snupkg)
 #   mirror-to-github  pushes main + tags to the public GitHub mirror — auto on a v* tag, manual
 #                     on main — once all core jobs pass; GitHub Actions CI then runs there
 #                     (.github/workflows/ci.yml), which is what publishes to nuget.org
@@ -191,6 +192,7 @@ pack:
   artifacts:
     paths:
       - artifacts/*.nupkg
+      - artifacts/*.snupkg
     expire_in: 1 week
 
 # Software Bill of Materials (CycloneDX). Generated every pipeline from the restored
@@ -306,7 +308,15 @@ publish:
     # Build the v3 service index from the base host (tolerate a trailing slash).
     - FEED="${REGISTRY_URL%/}/nuget/v3/index.json"
     - echo "Publishing $PKG to $FEED"
-    - dotnet nuget push "$PKG" --source "$FEED" --api-key "$REGISTRY_PUBLISH_KEY" --skip-duplicate
+    # --no-symbols so the two pushes are explicit, separate steps with their own errors
+    # (otherwise dotnet silently auto-pushes the adjacent .snupkg with this one).
+    - dotnet nuget push "$PKG" --source "$FEED" --api-key "$REGISTRY_PUBLISH_KEY" --skip-duplicate --no-symbols
+    # Symbols are REQUIRED: a release is not complete until the .snupkg is on the feed.
+    # NOTE: this fails until the registry accepts .snupkg uploads — that's intentional,
+    # so a symbols-less release can't pass silently.
+    - SYM=$(ls artifacts/*.snupkg)
+    - echo "Publishing $SYM to $FEED"
+    - dotnet nuget push "$SYM" --source "$FEED" --api-key "$REGISTRY_PUBLISH_KEY" --skip-duplicate
 
 # Mirror the default branch (+ tags) to the public GitHub repo. Runs automatically at the
 # end of a v* tag pipeline — carrying the tag to GitHub fires the GitHub Actions release
