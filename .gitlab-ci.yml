@@ -311,9 +311,10 @@ publish:
     # --no-symbols so the two pushes are explicit, separate steps with their own errors
     # (otherwise dotnet silently auto-pushes the adjacent .snupkg with this one).
     - dotnet nuget push "$PKG" --source "$FEED" --api-key "$REGISTRY_PUBLISH_KEY" --skip-duplicate --no-symbols
-    # Symbols are REQUIRED: a release is not complete until the .snupkg is on the feed.
-    # NOTE: this fails until the registry accepts .snupkg uploads — that's intentional,
-    # so a symbols-less release can't pass silently.
+    # Symbols are REQUIRED: a release is not complete until the .snupkg is on the feed,
+    # so this push is a hard failure rather than best-effort. The registry does accept
+    # .snupkg — it advertises SymbolPackagePublish/4.9.0 + SymbolServer/1.0.0 and a real
+    # push returns Created (verified 2026-08-13, pipeline #5742).
     - SYM=$(ls artifacts/*.snupkg)
     - echo "Publishing $SYM to $FEED"
     - dotnet nuget push "$SYM" --source "$FEED" --api-key "$REGISTRY_PUBLISH_KEY" --skip-duplicate
