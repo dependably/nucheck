@@ -59,7 +59,8 @@ public static class DependablyExceptions
     public static readonly string[] KnownRules =
         ["vulnerable-package", "untrusted-source", "untrusted-local-feed", "unused-packages", "unverifiable-advisory", "pinned-versions"];
 
-    private static readonly Regex ExpiresPattern = new(@"^\d{4}-\d{2}-\d{2}$", RegexOptions.Compiled);
+    private static readonly Regex ExpiresPattern =
+        new(@"^\d{4}-\d{2}-\d{2}$", RegexOptions.Compiled, TimeSpan.FromSeconds(1));
 
     /// <summary>
     /// Parse and validate an <c>exceptions</c> array element.

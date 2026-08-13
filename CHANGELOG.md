@@ -4,7 +4,52 @@ All notable changes to `nucheck` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.1.0] - 2026-08-13
+
+### Added
+
+- **`pinned-versions` rule — unpinned package versions now fail the build by default.**
+  Every declared version must be an exact pin: floating versions (`6.*`), ranges
+  (`[1.0,2.0)`), a range-carrying `allowedVersions` in `packages.config`, and a
+  version-less `<PackageReference>` with no Central Package Management entry are error
+  findings (exit 1); the exact bracket range `[1.2.3]` counts as pinned, and MSBuild
+  property versions (`$(...)`) are skipped (static parse, no MSBuild evaluation). Not
+  applicable to `packages.lock.json` — a lock file's resolved versions are exact by
+  definition. Suite parity with npm-check 1.8.0 / pycheck 1.3.0: the shared rule id means
+  one `common.rules["pinned-versions"]` entry in `.dependably` governs all three tools.
+
+- **The `.dependably` `rules` severity map is now parsed and applied.** Previously
+  whitelisted but ignored, per-rule severities (`error` / `warn` / `off`) resolve with the
+  suite merge rule (per rule id, the `nucheck` section replacing `common` wholesale);
+  `warn` findings are reported (ladder severity `low`) but never gate, `off` skips the
+  check. Unknown rule ids in nucheck's own section are `UNKNOWN_RULE`; invalid severities
+  are `INVALID_SEVERITY`.
+
+- **`--rule <id>:<severity>` CLI flag** (repeatable) overrides the config's `rules` map for
+  one run — e.g. `--rule pinned-versions:warn`. Unknown ids and bad severities are usage
+  errors (exit 2).
+
+- Pinned-versions findings are suppressible per package via the standard `exceptions`
+  grammar (`{ "rule": "pinned-versions", "package": "Foo.Bar", ... }`, optionally
+  `@<declared-version>`), and the pre-commit hook now also audits the repo's own two
+  `.csproj` files so the new rule is dogfooded.
+
+### Changed
+
+- The `.dependably` conformance corpus is now vendored from the dependably-spec repository
+  rather than from npm-check, with the upstream commit recorded in
+  `tests/Dependably.NuCheck.Tests/conformance/VENDOR.md`. The fixtures themselves are
+  unchanged; the provenance is now explicit, so drift between the suite's vendored copies is
+  visible.
+
+- The corpus is re-pinned to the spec commit that introduces the conformance vocabulary
+  binding (§12), and the adapter replaying it now drives `DependablyCheckConfig.Load` — the
+  entry point the CLI itself uses — instead of reaching past it into the exception parser and
+  matcher. Cases are materialized into a throwaway repository and resolved through real
+  discovery, real section merge, the real exception applier and the real gate, so a defect in
+  the loader can no longer hide behind green primitives. Coverage goes from 12 cases to 16
+  replayed plus 3 recorded as known divergences, each asserted to still fail so the entry
+  cannot outlive the defect.
 
 ### Fixed
 
@@ -45,53 +90,6 @@ All notable changes to `nucheck` are documented here. The format is based on
   unrecognized key really is a typo. This matches the handling unknown *rule ids* in `common`
   already had, and follows the spec clarification made when the shared contract was extracted
   to its own repository.
-
-### Changed
-
-- The `.dependably` conformance corpus is now vendored from the dependably-spec repository
-  rather than from npm-check, with the upstream commit recorded in
-  `tests/Dependably.NuCheck.Tests/conformance/VENDOR.md`. The fixtures themselves are
-  unchanged; the provenance is now explicit, so drift between the suite's vendored copies is
-  visible.
-
-- The corpus is re-pinned to the spec commit that introduces the conformance vocabulary
-  binding (§12), and the adapter replaying it now drives `DependablyCheckConfig.Load` — the
-  entry point the CLI itself uses — instead of reaching past it into the exception parser and
-  matcher. Cases are materialized into a throwaway repository and resolved through real
-  discovery, real section merge, the real exception applier and the real gate, so a defect in
-  the loader can no longer hide behind green primitives. Coverage goes from 12 cases to 16
-  replayed plus 3 recorded as known divergences, each asserted to still fail so the entry
-  cannot outlive the defect.
-
-## [2.1.0] - 2026-07-16
-
-### Added
-
-- **`pinned-versions` rule — unpinned package versions now fail the build by default.**
-  Every declared version must be an exact pin: floating versions (`6.*`), ranges
-  (`[1.0,2.0)`), a range-carrying `allowedVersions` in `packages.config`, and a
-  version-less `<PackageReference>` with no Central Package Management entry are error
-  findings (exit 1); the exact bracket range `[1.2.3]` counts as pinned, and MSBuild
-  property versions (`$(...)`) are skipped (static parse, no MSBuild evaluation). Not
-  applicable to `packages.lock.json` — a lock file's resolved versions are exact by
-  definition. Suite parity with npm-check 1.8.0 / pycheck 1.3.0: the shared rule id means
-  one `common.rules["pinned-versions"]` entry in `.dependably` governs all three tools.
-
-- **The `.dependably` `rules` severity map is now parsed and applied.** Previously
-  whitelisted but ignored, per-rule severities (`error` / `warn` / `off`) resolve with the
-  suite merge rule (per rule id, the `nucheck` section replacing `common` wholesale);
-  `warn` findings are reported (ladder severity `low`) but never gate, `off` skips the
-  check. Unknown rule ids in nucheck's own section are `UNKNOWN_RULE`; invalid severities
-  are `INVALID_SEVERITY`.
-
-- **`--rule <id>:<severity>` CLI flag** (repeatable) overrides the config's `rules` map for
-  one run — e.g. `--rule pinned-versions:warn`. Unknown ids and bad severities are usage
-  errors (exit 2).
-
-- Pinned-versions findings are suppressible per package via the standard `exceptions`
-  grammar (`{ "rule": "pinned-versions", "package": "Foo.Bar", ... }`, optionally
-  `@<declared-version>`), and the pre-commit hook now also audits the repo's own two
-  `.csproj` files so the new rule is dogfooded.
 
 ## [2.0.1] - 2026-07-03
 
@@ -307,7 +305,8 @@ Advisory Database, matching installed versions with the real `NuGet.Versioning` 
 
 - Published as a `dotnet tool` (`PackAsTool`); metadata includes `PackageProjectUrl`.
 
-[Unreleased]: https://github.com/dependably/nucheck/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/dependably/nucheck/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/dependably/nucheck/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/dependably/nucheck/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/dependably/nucheck/compare/v1.1.1...v2.0.0
 [1.1.1]: https://github.com/dependably/nucheck/compare/v1.1.0...v1.1.1
