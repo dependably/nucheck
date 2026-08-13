@@ -178,12 +178,14 @@ jobs:
       # consumes these exact bytes — nothing is rebuilt, so the provenance covers
       # precisely what ships.
       - run: dotnet pack src/Dependably.NuCheck/Dependably.NuCheck.csproj -c Release --no-restore -o artifacts
-      # Signed build provenance over the packed .nupkg, by digest. Pinned to a
-      # full commit SHA (the one third-party-style action this job adds).
+      # Signed build provenance over the packed .nupkg and .snupkg, by digest. Pinned
+      # to a full commit SHA (the one third-party-style action this job adds).
       - name: Attest build provenance
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
-          subject-path: "artifacts/*.nupkg"
+          subject-path: |
+            artifacts/*.nupkg
+            artifacts/*.snupkg
       # Publish to nuget.org via Trusted Publishing (OIDC) — no long-lived API key.
       # The id-token above is exchanged for a short-lived, single-use nuget.org key at
       # publish time. Requires a Trusted Publishing policy on nuget.org (Repository
@@ -197,6 +199,8 @@ jobs:
         uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1
         with:
           user: ${{ secrets.NUGET_USER }}
+      # The adjacent .snupkg is auto-detected and pushed alongside; nuget.org indexes
+      # it into its symbol server.
       - name: Publish to nuget.org
         if: env.NUGET_USER != ''
         run: |
@@ -204,16 +208,16 @@ jobs:
           dotnet nuget push artifacts/*.nupkg \
             --source https://api.nuget.org/v3/index.json \
             --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --skip-duplicate
-      # Attach the attested .nupkg to a GitHub Release so the exact signed bytes
-      # are downloadable and verifiable by digest.
+      # Attach the attested .nupkg + .snupkg to a GitHub Release so the exact signed
+      # bytes are downloadable and verifiable by digest.
       - name: Publish .nupkg to the GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eu
-          gh release create "$GITHUB_REF_NAME" artifacts/*.nupkg \
+          gh release create "$GITHUB_REF_NAME" artifacts/*.nupkg artifacts/*.snupkg \
             --title "$GITHUB_REF_NAME" --generate-notes \
-          || gh release upload "$GITHUB_REF_NAME" artifacts/*.nupkg --clobber
+          || gh release upload "$GITHUB_REF_NAME" artifacts/*.nupkg artifacts/*.snupkg --clobber
       # Production-dependency SBOM: pull the exact bytes the `sbom` job produced, sign
       # them with the same keyless OIDC/sigstore flow, and attach the SBOM plus its
       # sigstore bundle to the Release so consumers can verify what shipped:
