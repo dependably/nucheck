@@ -61,7 +61,7 @@ public static partial class UsingScanner
             }
             catch (Exception ex)
             {
-                unanalyzable.Add(new UnanalyzableEntry(rel, UnanalyzableEntry.KindFile, $"unreadable: {ex.Message}"));
+                unanalyzable.Add(new UnanalyzableEntry(rel, UnanalyzableEntry.KindFile, $"unreadable: {UnanalyzableEntry.Describe(ex)}"));
                 continue;
             }
             var uses = new List<NamespaceUse>();
@@ -71,7 +71,7 @@ public static partial class UsingScanner
             }
             catch (Exception ex)
             {
-                unanalyzable.Add(new UnanalyzableEntry(rel, UnanalyzableEntry.KindFile, $"analysis error: {ex.Message}"));
+                unanalyzable.Add(new UnanalyzableEntry(rel, UnanalyzableEntry.KindFile, $"analysis error: {UnanalyzableEntry.Describe(ex)}"));
                 continue;
             }
             result.Add(new ScannedFile(rel, uses));

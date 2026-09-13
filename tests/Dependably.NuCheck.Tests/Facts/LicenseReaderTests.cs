@@ -126,9 +126,9 @@ public class LicenseReaderTests
         try
         {
             var unanalyzable = new List<UnanalyzableEntry>();
-            Assert.Null(LicenseReader.Read([root], "Never.Restored", "1.0.0", unanalyzable));
+            Assert.Null(LicenseReader.Read([root], "Never.Restored", "1.0.0", unanalyzable: unanalyzable));
             // A packageFolders entry that doesn't exist at all must not throw either.
-            Assert.Null(LicenseReader.Read(["/definitely/not/a/dir"], "Never.Restored", "1.0.0", unanalyzable));
+            Assert.Null(LicenseReader.Read(["/definitely/not/a/dir"], "Never.Restored", "1.0.0", unanalyzable: unanalyzable));
             // Absence of the file is not a read failure — nothing to report.
             Assert.Empty(unanalyzable);
         }
@@ -147,12 +147,21 @@ public class LicenseReaderTests
             var path = WriteNuspec(root, "Acme.Widgets", "1.2.3", "not valid xml <<<");
             var unanalyzable = new List<UnanalyzableEntry>();
 
-            Assert.Null(LicenseReader.Read([root], "Acme.Widgets", "1.2.3", unanalyzable));
+            // Under the scanned tree: relative path. The reason carries the XML
+            // parser's position, never a filesystem path.
+            Assert.Null(LicenseReader.Read([root], "Acme.Widgets", "1.2.3", srcDir: root, unanalyzable));
 
             var gap = Assert.Single(unanalyzable);
             Assert.Equal(UnanalyzableEntry.KindFile, gap.Kind);
-            Assert.Equal(path.Replace('\\', '/'), gap.File);
-            Assert.StartsWith("unparseable nuspec", gap.Reason);
+            Assert.Equal("acme.widgets/1.2.3/acme.widgets.nuspec", gap.File);
+            Assert.StartsWith("unparseable nuspec: ", gap.Reason);
+            Assert.DoesNotContain(root, gap.Reason);
+            Assert.DoesNotContain("/", gap.Reason);
+
+            // Outside any scanned tree: the absolute path, POSIX separators.
+            unanalyzable.Clear();
+            Assert.Null(LicenseReader.Read([root], "Acme.Widgets", "1.2.3", srcDir: Path.Combine(root, "elsewhere"), unanalyzable));
+            Assert.Equal(Path.GetFullPath(path).Replace('\\', '/'), Assert.Single(unanalyzable).File);
         }
         finally
         {

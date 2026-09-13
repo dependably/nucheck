@@ -341,6 +341,46 @@ public class CliOptionsTests
         Assert.Null(options.Error);
     }
 
+    // ---- --roots (facts mode) --------------------------------------------------------
+
+    [Fact]
+    public void Parse_roots_defaults_to_empty()
+    {
+        Assert.Empty(CliOptions.Parse(["--facts", "./src"]).Roots);
+    }
+
+    [Fact]
+    public void Parse_roots_is_repeatable_and_comma_separated()
+    {
+        var options = CliOptions.Parse(["--facts", "./src", "--roots", "Amazon, Fabrikam", "--roots", "Contoso"]);
+
+        Assert.Null(options.Error);
+        Assert.Equal(["Amazon", "Fabrikam", "Contoso"], options.Roots);
+    }
+
+    [Fact]
+    public void Parse_roots_reduces_dotted_names_to_first_segment_and_dedupes()
+    {
+        var options = CliOptions.Parse(["--facts", "./src", "--roots", "Amazon.S3,Amazon.SQS,Amazon"]);
+
+        Assert.Null(options.Error);
+        Assert.Equal(["Amazon"], options.Roots);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" , ")]
+    [InlineData("Not-An-Identifier")]
+    [InlineData("1Amazon")]
+    [InlineData("Amazon.")]
+    public void Parse_roots_rejects_empty_or_non_identifier(string value)
+    {
+        var options = CliOptions.Parse(["--facts", "./src", "--roots", value]);
+
+        Assert.NotNull(options.Error);
+        Assert.Contains("--roots", options.Error);
+    }
+
     // ---- --rule <id>:<severity> ---------------------------------------------------
 
     [Fact]

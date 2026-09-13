@@ -28,6 +28,7 @@ public sealed record ProjectInfo(
 public static class ProjectDiscovery
 {
     public const string IsTestProjectMarker = "<IsTestProject>";
+    public const string SymlinkedDirectoryReason = "symlinked directory not followed";
 
     private static readonly HashSet<string> SkipDirs = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -87,6 +88,11 @@ public static class ProjectDiscovery
     /// A directory the walk could not list is reported here (kind
     /// <c>directory</c>) rather than silently dropped: every file inside it is
     /// then in no list at all, and a consumer must know the search was incomplete.
+    /// A SYMLINKED directory is never followed — a link back into the tree
+    /// (`a/loop -> a`) would enumerate the same files over and over until the
+    /// path length overflowed, and a link out of it (`vendor -> /usr/share`) would
+    /// scan code that is not the target — and is reported the same way, with
+    /// <see cref="SymlinkedDirectoryReason"/>.
     /// </param>
     public static IEnumerable<string> EnumerateFiles(string root, List<UnanalyzableEntry> unanalyzable)
     {
@@ -103,21 +109,40 @@ public static class ProjectDiscovery
             catch (Exception ex)
             {
                 unanalyzable.Add(new UnanalyzableEntry(
-                    RelativePath(root, dir), UnanalyzableEntry.KindDirectory, $"unlistable directory: {ex.Message}"));
+                    RelativePath(root, dir), UnanalyzableEntry.KindDirectory, $"unlistable directory: {UnanalyzableEntry.Describe(ex)}"));
                 continue;
             }
             foreach (var entry in entries)
             {
-                if (Directory.Exists(entry))
-                {
-                    var dirName = Path.GetFileName(entry);
-                    if (!SkipDirs.Contains(dirName) && !dirName.StartsWith('.')) pending.Push(entry);
-                }
-                else
+                if (!Directory.Exists(entry))
                 {
                     yield return entry;
+                    continue;
                 }
+                var dirName = Path.GetFileName(entry);
+                if (SkipDirs.Contains(dirName) || dirName.StartsWith('.')) continue;
+                if (IsSymbolicLink(entry))
+                {
+                    unanalyzable.Add(new UnanalyzableEntry(
+                        RelativePath(root, entry), UnanalyzableEntry.KindDirectory, SymlinkedDirectoryReason));
+                    continue;
+                }
+                pending.Push(entry);
             }
+        }
+    }
+
+    private static bool IsSymbolicLink(string path)
+    {
+        try
+        {
+            return new DirectoryInfo(path).LinkTarget is not null;
+        }
+        catch
+        {
+            // If the link cannot even be inspected, treat it as one: not following
+            // is the safe direction (the entry is reported, never silently walked).
+            return true;
         }
     }
 
@@ -132,7 +157,7 @@ public static class ProjectDiscovery
         catch (Exception ex)
         {
             unanalyzable.Add(new UnanalyzableEntry(
-                RelativePath(srcDir, file), UnanalyzableEntry.KindFile, $"unparseable project file: {ex.Message}"));
+                RelativePath(srcDir, file), UnanalyzableEntry.KindFile, $"unparseable project file: {UnanalyzableEntry.Describe(ex)}"));
             return null;
         }
     }
@@ -173,6 +198,19 @@ public static class ProjectDiscovery
         return result;
     }
 
+    /// A path known to be under `root`, relative to it with POSIX separators.
     public static string RelativePath(string root, string path) =>
         Path.GetRelativePath(root, path).Replace('\\', '/');
+
+    /// A path that may lie outside `root` (a package-cache assembly or nuspec):
+    /// relative with POSIX separators when it is under the root, else the
+    /// absolute path with POSIX separators — never a `../..` chain.
+    public static string DisplayPath(string root, string path)
+    {
+        var rel = Path.GetRelativePath(root, path);
+        var outside = Path.IsPathRooted(rel)
+            || rel == ".."
+            || rel.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+        return (outside ? Path.GetFullPath(path) : rel).Replace('\\', '/');
+    }
 }

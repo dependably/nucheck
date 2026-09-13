@@ -18,12 +18,18 @@ public static class LicenseReader
     /// is left absent rather than guessed at — a URL or file reference isn't
     /// itself the license identifier.
     /// </summary>
+    /// <param name="srcDir">The scanned tree, so a nuspec under it is reported relative to it.</param>
     /// <param name="unanalyzable">
     /// A nuspec that exists but cannot be parsed is reported here (kind
     /// <c>file</c>) as well as yielding null — "absent" then means "unreadable",
     /// not "the package states no expression".
     /// </param>
-    public static string? Read(List<string> packageFolders, string id, string version, List<UnanalyzableEntry>? unanalyzable = null)
+    public static string? Read(
+        IReadOnlyList<string> packageFolders,
+        string id,
+        string version,
+        string? srcDir = null,
+        List<UnanalyzableEntry>? unanalyzable = null)
     {
         var idLower = id.ToLowerInvariant();
         foreach (var folder in packageFolders)
@@ -46,8 +52,11 @@ public static class LicenseReader
             catch (Exception ex)
             {
                 // Malformed/unreadable nuspec: absent, not guessed — and reported.
+                var display = srcDir is null
+                    ? Path.GetFullPath(nuspecPath).Replace('\\', '/')
+                    : ProjectDiscovery.DisplayPath(srcDir, nuspecPath);
                 unanalyzable?.Add(new UnanalyzableEntry(
-                    nuspecPath.Replace('\\', '/'), UnanalyzableEntry.KindFile, $"unparseable nuspec: {ex.Message}"));
+                    display, UnanalyzableEntry.KindFile, $"unparseable nuspec: {UnanalyzableEntry.Describe(ex)}"));
                 return null;
             }
         }

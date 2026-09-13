@@ -78,7 +78,7 @@ public static class Program
                 return ExitError;
             }
 
-            return FactsCommand.Run(options.FilePath, ToolVersion, options.Verbose, Console.Out, Console.Error);
+            return FactsCommand.Run(options.FilePath, ToolVersion, options.Roots, options.Verbose, Console.Out, Console.Error);
         }
 
         if (options.FilePath is null)
@@ -258,7 +258,7 @@ nucheck - NuGet vulnerability auditor
 
 Usage:
   nucheck <path-to-packages-file> [options]
-  nucheck --facts <directory> [--verbose]
+  nucheck --facts <directory> [--roots <a,b,...>] [--verbose]
 
 Arguments:
   <path-to-packages-file>    Path to packages.config, packages.lock.json, or a
@@ -284,6 +284,14 @@ Options:
                              2 for a missing or unreadable <directory>. --fail-on,
                              --severity, --source, --rule, --rest, --config and
                              --format are inert in this mode.
+  --roots <a,b,...>          Facts mode only (repeatable, comma-separated). Extra top-level
+                             identifier roots to keep fully-qualified uses for, in addition
+                             to the roots the tree's own artefacts reveal (published as
+                             source.qualifiedRoots). A package absent from every readable
+                             restore artefact — an un-restored tree, no lock file — would
+                             otherwise lose its `Foo.Bar.Client.Send(...)`-style uses that
+                             have no using directive. A dotted name is reduced to its
+                             first segment (Amazon.S3 -> Amazon).
   --source <name>            Advisory source: github (default), osv
   --format <type>            Output format: human, table, json (default: human)
   --severity <level>         Filter by severity: critical, high, moderate, low, info
@@ -397,5 +405,6 @@ Examples:
   nucheck ./packages.config --fail-on severity=high   # ignore moderate/low for gating
   nucheck ./packages.config --fail-on count=0         # fail on any vulnerability
   nucheck --facts ./src > facts.json                  # language facts, no audit
+  nucheck --facts ./src --roots Amazon,Fabrikam       # keep Amazon.* / Fabrikam.* qualified uses too
 """;
 }

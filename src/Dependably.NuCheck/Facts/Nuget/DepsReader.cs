@@ -31,9 +31,10 @@ public sealed record RuntimeOutput(string DepsJson, List<PackageIdentity> Packag
 /// </summary>
 public static class DepsReader
 {
-    /// Null when the project has no `bin/` or no `*.deps.json` under it: nothing
-    /// was built, so nothing is known about what ships — and that must not be
-    /// reported as "ships nothing".
+    /// Null when the project has no `bin/`, no `*.deps.json` under it, or only
+    /// deps files that could not be parsed (each of those is in
+    /// <paramref name="unanalyzable"/>): nothing is then known about what ships,
+    /// and that must not be reported as "ships nothing".
     public static List<RuntimeOutput>? Read(string srcDir, ProjectInfo project, List<UnanalyzableEntry> unanalyzable)
     {
         var binDir = Path.Combine(Path.GetDirectoryName(project.CsprojPath)!, "bin");
@@ -47,7 +48,7 @@ public static class DepsReader
         catch (Exception ex)
         {
             unanalyzable.Add(new UnanalyzableEntry(
-                ProjectDiscovery.RelativePath(srcDir, binDir), UnanalyzableEntry.KindDirectory, $"unlistable directory: {ex.Message}"));
+                ProjectDiscovery.RelativePath(srcDir, binDir), UnanalyzableEntry.KindDirectory, $"unlistable directory: {UnanalyzableEntry.Describe(ex)}"));
             return null;
         }
         if (depsFiles.Length == 0) return null;
@@ -60,7 +61,9 @@ public static class DepsReader
             if (packages is null) continue;
             outputs.Add(new RuntimeOutput(ProjectDiscovery.RelativePath(srcDir, depsFile), packages));
         }
-        return outputs;
+        // Every deps file unparseable: the output exists but says nothing readable.
+        // An empty list here would read as "built, ships nothing" — omit instead.
+        return outputs.Count > 0 ? outputs : null;
     }
 
     private static List<PackageIdentity>? ReadDepsFile(string path, string srcDir, List<UnanalyzableEntry> unanalyzable)
@@ -90,7 +93,7 @@ public static class DepsReader
         catch (Exception ex)
         {
             unanalyzable.Add(new UnanalyzableEntry(
-                ProjectDiscovery.RelativePath(srcDir, path), UnanalyzableEntry.KindDeps, $"unparseable deps file: {ex.Message}"));
+                ProjectDiscovery.RelativePath(srcDir, path), UnanalyzableEntry.KindDeps, $"unparseable deps file: {UnanalyzableEntry.Describe(ex)}"));
             return null;
         }
     }

@@ -32,7 +32,7 @@ public enum NamespaceMapping
 
 /// <param name="AssembliesRead">How many of the package's assemblies were successfully read for <see cref="Namespaces"/>.</param>
 public sealed record PackageNamespaces(
-    string PackageId,
+    ResolvedPackage Package,
     HashSet<string> Namespaces,
     NamespaceMapping Mapping,
     int AssembliesRead)
@@ -42,30 +42,33 @@ public sealed record PackageNamespaces(
 }
 
 /// <summary>
-/// Maps each package to the namespaces of its public types by reading the
-/// package's lib/ref DLLs from the global-packages folder with
-/// System.Reflection.Metadata (no assembly loading). Falls back to the package
-/// id as a namespace prefix — correct by convention for most packages, but the
-/// resulting <see cref="NamespaceMapping.IdConvention"/> mapping is recorded so
-/// the document can withhold the guess.
+/// Maps each resolved package (id+version) to the namespaces of its public
+/// types by reading the package's lib/ref DLLs from the global-packages folder
+/// with System.Reflection.Metadata (no assembly loading). Falls back to the
+/// package id as a namespace prefix — correct by convention for most packages,
+/// but the resulting <see cref="NamespaceMapping.IdConvention"/> mapping is
+/// recorded so the document can withhold the guess.
 /// </summary>
 public static class NamespaceMap
 {
+    public const string MissingListedAssemblyReason = "listed in assets but not present in package folder";
+
+    /// <returns>Keyed by <see cref="ResolvedPackage.Key"/> (case-insensitive).</returns>
     public static Dictionary<string, PackageNamespaces> Build(
-        IEnumerable<string> packageIds,
-        AssetsInfo assets,
+        IEnumerable<ResolvedPackage> packages,
+        IReadOnlyList<string> packageFolders,
+        string srcDir,
         List<UnanalyzableEntry> unanalyzable)
     {
         var map = new Dictionary<string, PackageNamespaces>(StringComparer.OrdinalIgnoreCase);
-        foreach (var id in packageIds)
+        foreach (var package in packages)
         {
             var namespaces = new HashSet<string>(StringComparer.Ordinal);
-            var inClosure = assets.Closure.TryGetValue(id, out var resolved);
             var assembliesRead = 0;
 
-            if (inClosure && resolved!.LibDllRelPaths.Count > 0)
+            if (package.LibDllRelPaths.Count > 0)
             {
-                assembliesRead = ReadFromPackageFolders(assets.PackageFolders, resolved, namespaces, unanalyzable);
+                assembliesRead = ReadFromPackageFolders(packageFolders, package, srcDir, namespaces, unanalyzable);
             }
 
             NamespaceMapping mapping;
@@ -73,7 +76,7 @@ public static class NamespaceMap
             {
                 mapping = NamespaceMapping.DllVerified;
             }
-            else if (inClosure && resolved!.FilesKnown && resolved.LibDllRelPaths.Count == 0)
+            else if (package.FilesKnown && package.LibDllRelPaths.Count == 0)
             {
                 // The assets file enumerated this package's files and none of them
                 // is an assembly: it exposes no types at all (analyzer/targets-only
@@ -83,24 +86,27 @@ public static class NamespaceMap
             }
             else
             {
-                // Convention: Newtonsoft.Json → Newtonsoft.Json.* — but namespaces are
-                // case-sensitive while NuGet ids are not, so prefer the restored
-                // closure's canonical casing over whatever the caller used.
-                namespaces.Add(inClosure ? resolved!.Id : id);
+                // Convention: Newtonsoft.Json → Newtonsoft.Json.* — namespaces are
+                // case-sensitive while NuGet ids are not, and the artefact's
+                // canonical casing is what the closure carries.
+                namespaces.Add(package.Id);
                 mapping = NamespaceMapping.IdConvention;
             }
 
-            map[id] = new PackageNamespaces(id, namespaces, mapping, assembliesRead);
+            map[package.Key] = new PackageNamespaces(package, namespaces, mapping, assembliesRead);
         }
         return map;
     }
 
     /// The first package folder that holds the package wins (the same
     /// `folder/id-lowercase/version` layout NuGet itself resolves through);
-    /// returns how many assemblies were read from it.
+    /// returns how many assemblies were read from it. A DLL the artefact lists
+    /// but the folder lacks is reported, not skipped: a namespace list built from
+    /// the assemblies that WERE present would otherwise be published as complete.
     private static int ReadFromPackageFolders(
-        List<string> packageFolders,
+        IReadOnlyList<string> packageFolders,
         ResolvedPackage resolved,
+        string srcDir,
         HashSet<string> namespaces,
         List<UnanalyzableEntry> unanalyzable)
     {
@@ -112,7 +118,12 @@ public static class NamespaceMap
             foreach (var rel in resolved.LibDllRelPaths)
             {
                 var dllPath = Path.Combine(pkgRoot, rel.Replace('/', Path.DirectorySeparatorChar));
-                if (!File.Exists(dllPath)) continue;
+                var display = ProjectDiscovery.DisplayPath(srcDir, dllPath);
+                if (!File.Exists(dllPath))
+                {
+                    unanalyzable.Add(new UnanalyzableEntry(display, UnanalyzableEntry.KindAssembly, MissingListedAssemblyReason));
+                    continue;
+                }
                 try
                 {
                     CollectNamespaces(dllPath, namespaces);
@@ -121,7 +132,7 @@ public static class NamespaceMap
                 catch (Exception ex)
                 {
                     unanalyzable.Add(new UnanalyzableEntry(
-                        dllPath.Replace('\\', '/'), UnanalyzableEntry.KindAssembly, $"could not read metadata: {ex.Message}"));
+                        display, UnanalyzableEntry.KindAssembly, $"could not read metadata: {UnanalyzableEntry.Describe(ex)}"));
                 }
             }
             if (read > 0) return read;

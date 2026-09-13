@@ -27,8 +27,16 @@ public static class FactsCommand
     /// <summary>
     /// Runs the facts scan. Writes the document to <paramref name="stdout"/> and,
     /// under <paramref name="verbose"/>, progress to <paramref name="stderr"/>.
+    /// <paramref name="roots"/> are the <c>--roots</c> the caller asked for (see
+    /// <see cref="Build"/>).
     /// </summary>
-    public static int Run(string target, string toolVersion, bool verbose, TextWriter stdout, TextWriter stderr)
+    public static int Run(
+        string target,
+        string toolVersion,
+        IReadOnlyList<string> roots,
+        bool verbose,
+        TextWriter stdout,
+        TextWriter stderr)
     {
         var srcDir = Path.GetFullPath(target);
         if (!Directory.Exists(srcDir))
@@ -46,7 +54,7 @@ public static class FactsCommand
             return ExitError;
         }
 
-        var document = Build(target, toolVersion, verbose ? stderr : null);
+        var document = Build(target, toolVersion, verbose ? stderr : null, roots);
         stdout.WriteLine(Serialize(document));
         return ExitOk;
     }
@@ -54,8 +62,20 @@ public static class FactsCommand
     /// <summary>The document's wire form: indented JSON, omitted keys where the tool could not tell.</summary>
     public static string Serialize(FactsDocument document) => JsonSerializer.Serialize(document, JsonOptions);
 
-    /// <summary>Builds the document for an existing, readable directory.</summary>
-    public static FactsDocument Build(string target, string toolVersion, TextWriter? progress = null)
+    /// <summary>
+    /// Builds the document for an existing, readable directory.
+    /// <paramref name="extraRoots"/> EXTENDS <c>source.qualifiedRoots</c> before the
+    /// scan: the tree-derived roots come from the artefacts the tree carries, so a
+    /// package a consumer cares about that is in no readable artefact (an un-restored
+    /// tree, no lock file) would otherwise lose every fully-qualified use of it
+    /// (<c>Foo.Bar.Client.Send(...)</c> with no <c>using</c>) with no way to get them
+    /// back. The applied set is still published so the filter stays visible.
+    /// </summary>
+    public static FactsDocument Build(
+        string target,
+        string toolVersion,
+        TextWriter? progress = null,
+        IEnumerable<string>? extraRoots = null)
     {
         var srcDir = Path.GetFullPath(target);
         var unanalyzable = new List<UnanalyzableEntry>();
@@ -64,10 +84,14 @@ public static class FactsCommand
         progress?.WriteLine($"Discovered {projects.Count} project(s) under {target}");
 
         var assets = AssetsReader.ReadAll(srcDir, projects, unanalyzable);
-        var nsMap = NamespaceMap.Build(assets.Closure.Keys, assets, unanalyzable);
+        var nsMap = NamespaceMap.Build(assets.Closure.Values, assets.PackageFolders, srcDir, unanalyzable);
         progress?.WriteLine($"Resolved {assets.Closure.Count} package(s); {nsMap.Values.Count(n => n.DllBacked)} with readable assemblies");
 
         var qualifiedRoots = BuildQualifiedRoots(nsMap, assets, projects, cpmDeclarations);
+        foreach (var root in extraRoots ?? [])
+        {
+            qualifiedRoots.Add(FirstSegment(root));
+        }
         var scanned = UsingScanner.ScanAll(srcDir, qualifiedRoots, unanalyzable);
         progress?.WriteLine($"Scanned {scanned.Count} C# file(s)");
 
@@ -112,8 +136,11 @@ public static class FactsCommand
                 Assets = assets.AssetsFileByProject.TryGetValue(project.CsprojPath, out var source)
                     ? new AssetsSourceFacts(source.File, source.Kind)
                     : null,
-                Closure = assets.PackageIdsByProject.TryGetValue(project.CsprojPath, out var closure)
-                    ? closure.OrderBy(id => id, StringComparer.OrdinalIgnoreCase).ToList()
+                Closure = assets.PackagesByProject.TryGetValue(project.CsprojPath, out var closure)
+                    ? closure
+                        .OrderBy(p => p.Id, StringComparer.OrdinalIgnoreCase)
+                        .ThenBy(p => p.Version, StringComparer.Ordinal)
+                        .ToList()
                     : null,
                 OutputAssembly = relAssembly,
                 RuntimeOutput = runtime?
@@ -125,7 +152,8 @@ public static class FactsCommand
 
         var packageFacts = assets.Closure.Values
             .OrderBy(p => p.Id, StringComparer.OrdinalIgnoreCase)
-            .Select(p => PackageFactsOf(p, nsMap[p.Id], assets, unanalyzable))
+            .ThenBy(p => p.Version, StringComparer.Ordinal)
+            .Select(p => PackageFactsOf(p, nsMap[p.Key], assets, srcDir, unanalyzable))
             .ToList();
 
         var projectDirs = ProjectDirectories(srcDir, projects);
@@ -173,7 +201,7 @@ public static class FactsCommand
                 FilesScanned = sourceFiles.Count,
                 AssembliesRead = nsMap.Values.Sum(n => n.AssembliesRead) + ilAssembliesRead,
                 Packages = packageFacts.Count,
-                PackagesWithNamespaces = packageFacts.Count(p => p.Namespaces is not null),
+                PackagesWithNamespaces = packageFacts.Count(p => p.Namespaces is { Count: > 0 }),
                 Unanalyzable = unanalyzableFacts.Count,
                 ExitCode = ExitOk,
             },
@@ -199,6 +227,7 @@ public static class FactsCommand
         ResolvedPackage package,
         PackageNamespaces namespaces,
         AssetsInfo assets,
+        string srcDir,
         List<UnanalyzableEntry> unanalyzable)
     {
         // The three tiers, made visible: read from DLLs → the list; provably no
@@ -214,7 +243,7 @@ public static class FactsCommand
         {
             Id = package.Id,
             Version = package.Version,
-            License = LicenseReader.Read(assets.PackageFolders, package.Id, package.Version, unanalyzable),
+            License = LicenseReader.Read(assets.PackageFolders, package.Id, package.Version, srcDir, unanalyzable),
             Assemblies = package.FilesKnown
                 ? package.LibDllRelPaths
                     .Select(Path.GetFileNameWithoutExtension)
@@ -225,7 +254,7 @@ public static class FactsCommand
                     .ToList()
                 : null,
             Namespaces = namespaceFacts,
-            Dependencies = assets.DependencyEdges.TryGetValue(package.Id, out var deps)
+            Dependencies = assets.DependencyEdges.TryGetValue(package.Key, out var deps)
                 ? deps.OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToList()
                 : [],
         };

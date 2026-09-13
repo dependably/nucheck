@@ -41,7 +41,7 @@ public static class IlReferenceReader
         catch (Exception ex)
         {
             unanalyzable.Add(new UnanalyzableEntry(
-                ProjectDiscovery.RelativePath(srcDir, binDir), UnanalyzableEntry.KindDirectory, $"unlistable directory: {ex.Message}"));
+                ProjectDiscovery.RelativePath(srcDir, binDir), UnanalyzableEntry.KindDirectory, $"unlistable directory: {UnanalyzableEntry.Describe(ex)}"));
             return null;
         }
         if (candidates.Length == 0) return null;
@@ -172,7 +172,7 @@ public static class IlReferenceReader
         catch (Exception ex)
         {
             unanalyzable.Add(new UnanalyzableEntry(
-                ProjectDiscovery.RelativePath(srcDir, dllPath), UnanalyzableEntry.KindAssembly, $"could not read IL metadata: {ex.Message}"));
+                ProjectDiscovery.RelativePath(srcDir, dllPath), UnanalyzableEntry.KindAssembly, $"could not read IL metadata: {UnanalyzableEntry.Describe(ex)}"));
             references = [];
             return false;
         }

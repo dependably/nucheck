@@ -96,7 +96,15 @@ public class FixtureDocumentTests
             Assert.True(d.Line > 1);
         });
         Assert.Equal(new AssetsSourceFacts("App/obj/project.assets.json", "assets"), app.Assets);
-        Assert.Equal(["CsvHelper", "Microsoft.Bcl.AsyncInterfaces", "Newtonsoft.Json", "Polly", "Serilog"], app.Closure);
+        Assert.Equal(
+            [
+                new PackageIdentity("CsvHelper", "27.0.0"),
+                new PackageIdentity("Microsoft.Bcl.AsyncInterfaces", "5.0.0"),
+                new PackageIdentity("Newtonsoft.Json", "12.0.1"),
+                new PackageIdentity("Polly", "7.2.0"),
+                new PackageIdentity("Serilog", "2.10.0"),
+            ],
+            app.Closure);
 
         var lib = doc.Projects[1];
         Assert.Equal(["Newtonsoft.Json"], lib.DirectReferences.Select(d => d.Id));

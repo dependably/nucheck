@@ -83,8 +83,11 @@ public class RuntimeOutputTests
         Assert.Equal(JsonValueKind.Null, wireApp.GetProperty("outputAssembly").ValueKind);
     }
 
+    /// When every deps file under bin/ is unparseable the output exists but says
+    /// nothing readable: `runtimeOutput` is OMITTED (cannot tell), never `[]`
+    /// (which would read as "built, ships nothing"), and the gap is reported.
     [Fact]
-    public void AMalformedDepsFileIsReportedNotSkipped()
+    public void AMalformedDepsFileIsReportedAndRuntimeOutputIsOmitted()
     {
         using var fixture = new Fixture(built: true);
         File.WriteAllText(Path.Combine(fixture.Root, "App", "bin", "Debug", "net8.0", "App.deps.json"), "{ not json");
@@ -92,9 +95,33 @@ public class RuntimeOutputTests
         var doc = FactsCommand.Build(fixture.Root, "test");
 
         var app = Assert.Single(doc.Projects, p => p.Path == "App/App.csproj");
-        Assert.Empty(app.RuntimeOutput!);
+        Assert.Null(app.RuntimeOutput);
         var gap = Assert.Single(doc.Unanalyzable, u => u.Kind == UnanalyzableEntry.KindDeps);
         Assert.Equal("App/bin/Debug/net8.0/App.deps.json", gap.File);
+        Assert.StartsWith("unparseable deps file: ", gap.Reason);
+        Assert.DoesNotContain(fixture.Root, gap.Reason);
+
+        using var json = JsonDocument.Parse(FactsCommand.Serialize(doc));
+        var wireApp = json.RootElement.GetProperty("projects")[0];
+        Assert.False(wireApp.TryGetProperty("runtimeOutput", out _));
+    }
+
+    /// One readable deps file beside an unparseable one: the readable one is
+    /// reported and the other is a gap — a partial view, stated as such.
+    [Fact]
+    public void AReadableDepsFileBesideAMalformedOneIsStillReported()
+    {
+        using var fixture = new Fixture(built: true);
+        var releaseDir = Path.Combine(fixture.Root, "App", "bin", "Release", "net8.0");
+        Directory.CreateDirectory(releaseDir);
+        File.WriteAllText(Path.Combine(releaseDir, "App.deps.json"), "{ not json");
+
+        var doc = FactsCommand.Build(fixture.Root, "test");
+
+        var app = Assert.Single(doc.Projects, p => p.Path == "App/App.csproj");
+        var output = Assert.Single(app.RuntimeOutput!);
+        Assert.Equal("App/bin/Debug/net8.0/App.deps.json", output.DepsJson);
+        Assert.Equal("App/bin/Release/net8.0/App.deps.json", Assert.Single(doc.Unanalyzable).File);
     }
 
     private sealed class Fixture : IDisposable

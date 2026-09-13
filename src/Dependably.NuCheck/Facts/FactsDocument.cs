@@ -56,7 +56,9 @@ public sealed record FactsSummary
     [JsonPropertyName("filesScanned")] public int FilesScanned { get; init; }
     /// <summary>Assemblies whose metadata was read: package DLLs (for <c>namespaces</c>) plus first-party output assemblies (for <c>il</c>).</summary>
     [JsonPropertyName("assembliesRead")] public int AssembliesRead { get; init; }
+    /// <summary>Entries in <c>packages</c> — one per id + version.</summary>
     [JsonPropertyName("packages")] public int Packages { get; init; }
+    /// <summary>Packages whose <c>namespaces</c> is present AND non-empty: read from assemblies and found at least one public namespace. A provably assembly-less package (<c>[]</c>) does not count.</summary>
     [JsonPropertyName("packagesWithNamespaces")] public int PackagesWithNamespaces { get; init; }
     [JsonPropertyName("unanalyzable")] public int Unanalyzable { get; init; }
     [JsonPropertyName("exitCode")] public int ExitCode { get; init; }
@@ -76,18 +78,22 @@ public sealed record ProjectFacts
     /// <summary>The restore artefact read for this project, or an explicit <c>null</c> when neither exists.</summary>
     [JsonPropertyName("assets")] public AssetsSourceFacts? Assets { get; init; }
     /// <summary>
-    /// Every package id the project's restore artefact resolved (transitive closure).
+    /// Every package (id + version) the project's restore artefact resolved
+    /// (transitive closure). Versioned because one tree can resolve two versions of
+    /// one id in different projects, and each is a distinct entry in <c>packages</c>.
     /// OMITTED when there was no readable artefact: a project whose closure was never
     /// enumerated must not read as a project that resolved nothing.
     /// </summary>
     [JsonPropertyName("closure")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public List<string>? Closure { get; init; }
+    public List<PackageIdentity>? Closure { get; init; }
     /// <summary>The project's own built assembly under <c>bin/</c>, or an explicit <c>null</c> when none was found.</summary>
     [JsonPropertyName("outputAssembly")] public string? OutputAssembly { get; init; }
     /// <summary>
-    /// One entry per <c>*.deps.json</c> under the project's <c>bin/</c>. OMITTED when
-    /// nothing was built — never guess what an artefact nobody produced contains.
+    /// One entry per readable <c>*.deps.json</c> under the project's <c>bin/</c>.
+    /// OMITTED when nothing was built, or when every deps file present is
+    /// unparseable (those are in <c>unanalyzable</c>) — never guess what an
+    /// artefact nobody produced, or nobody could read, contains.
     /// </summary>
     [JsonPropertyName("runtimeOutput")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -132,9 +138,11 @@ public sealed record PackageFacts
     public List<string>? Assemblies { get; init; }
     /// <summary>
     /// Namespaces of the package's public types, READ FROM ITS ASSEMBLIES. Present-
-    /// and-empty when the package provably ships no assembly. OMITTED when no
-    /// assembly could be read — never inferred from the package id (the id is wrong
-    /// for whole families of real packages: <c>AWSSDK.*</c> ships <c>Amazon.*</c>).
+    /// and-empty when the package's assemblies were read and expose no public
+    /// namespace, or when it provably ships no assembly at all (see
+    /// <see cref="Assemblies"/>). OMITTED when no assembly could be read — never
+    /// inferred from the package id (the id is wrong for whole families of real
+    /// packages: <c>AWSSDK.*</c> ships <c>Amazon.*</c>).
     /// </summary>
     [JsonPropertyName("namespaces")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -151,9 +159,11 @@ public sealed record SourceFacts
 {
     /// <summary>
     /// The top-level identifier segments qualified identifiers were kept for: first
-    /// segments of every DLL-read namespace plus of every closure or declared
-    /// package id. A qualified identifier whose root is not in this set was not
-    /// recorded, so a consumer knows what the <c>qualified</c> lists could contain.
+    /// segments of every DLL-read namespace, of every closure or declared package
+    /// id, and of every root passed with <c>--roots</c>. A qualified identifier whose
+    /// root is not in this set was not recorded, so a consumer knows what the
+    /// <c>qualified</c> lists could contain — and what it has to ask for via
+    /// <c>--roots</c> when a package it cares about is in no readable artefact.
     /// </summary>
     [JsonPropertyName("qualifiedRoots")] public List<string> QualifiedRoots { get; init; } = [];
     /// <summary>Every C# file that was read, sorted by path — a file with no usings is still listed.</summary>
@@ -204,10 +214,11 @@ public sealed record IlReferenceFacts(
     [property: JsonPropertyName("assembly")] string Assembly);
 
 public sealed record UnanalyzableEntry(
-    /// <summary>Relative to the target when under it; a package-cache assembly or nuspec outside the tree keeps its absolute path.</summary>
+    /// <summary>Relative to the target when under it (POSIX separators); a package-cache assembly or nuspec outside the tree keeps its absolute path.</summary>
     [property: JsonPropertyName("file")] string File,
     /// <summary><c>file</c>, <c>directory</c>, <c>assembly</c>, <c>assets</c>, or <c>deps</c>.</summary>
     [property: JsonPropertyName("kind")] string Kind,
+    /// <summary>How far the tool got, with nothing machine-specific in it: never an absolute path, never raw exception text that could carry one.</summary>
     [property: JsonPropertyName("reason")] string Reason)
 {
     public const string KindFile = "file";
@@ -215,4 +226,21 @@ public sealed record UnanalyzableEntry(
     public const string KindAssembly = "assembly";
     public const string KindAssets = "assets";
     public const string KindDeps = "deps";
+
+    /// <summary>
+    /// A path-free description of a read failure. Filesystem exceptions embed the
+    /// offending absolute path in their message, so they are mapped to a fixed
+    /// phrase; parser exceptions carry only a position inside the document and
+    /// keep their message. Anything else is named by type, never by message.
+    /// </summary>
+    public static string Describe(Exception ex) => ex switch
+    {
+        UnauthorizedAccessException => "access denied",
+        FileNotFoundException or DirectoryNotFoundException => "not found",
+        PathTooLongException => "path too long",
+        BadImageFormatException => "not a valid PE/metadata image",
+        System.Text.Json.JsonException or System.Xml.XmlException => ex.Message,
+        IOException => "I/O error",
+        _ => ex.GetType().Name,
+    };
 }
