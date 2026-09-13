@@ -20,14 +20,13 @@
 #                         publish-scoped. REGISTRY_KEY is read-only and cannot push.
 #   dependencyTrack_url   Dependency-Track base URL
 #   dependencyTrack_token DT API key with BOM_UPLOAD + PROJECT_CREATION_UPLOAD perms
-#   SNYK_TOKEN            Snyk (SAST) token. UNPROTECTED + masked so MR pipelines can scan.
 #   SONAR_HOST_URL        SonarQube server URL (not a secret)
 #   SONAR_TOKEN           SonarQube analysis token (masked)
 #   GITHUB_TOKEN          GitHub PAT with Contents:write (classic: 'repo') on
 #                         dependably/nucheck, used by mirror-to-github. Masked.
 
 # Run ONE pipeline per change: a merge-request pipeline when an MR is open (so the
-# full test suite runs in — and gates — the MR, not just snyk), the branch pipeline
+# full test suite runs in — and gates — the MR), the branch pipeline
 # on the default branch, and tag pipelines — while suppressing the redundant branch
 # pipeline when an MR is already open. Mirrors the python-check pipeline.
 #
@@ -120,23 +119,6 @@ secret-scan:
       else
         trufflehog git file://. --since-commit "$BEFORE" --only-verified --fail
       fi
-
-# Snyk (SAST) — pinned-by-digest snyk/snyk image. Advisory for now
-# (allow_failure:true); flip to false to make it a hard gate once triaged. The
-# rules keep it out of the pipeline until SNYK_TOKEN exists (set UNPROTECTED +
-# masked so MR pipelines on unprotected branches can read it).
-snyk-code:
-  stage: test
-  image:
-    name: snyk/snyk:linux@sha256:aeb296d943659dccbc7464340bb8741f6e11999cd99644dc92e6d315d6eda3f4
-    entrypoint: [""]
-  allow_failure: true
-  rules:
-    - if: '$SNYK_TOKEN'
-  script:
-    # SAST over the C# source (not a dependency scan — that would flag the
-    # intentionally-vulnerable example fixtures). Matches the sibling pipelines.
-    - snyk code test --severity-threshold=high
 
 # SonarQube analysis + coverage via the .NET scanner (dotnet-sonarscanner), wrapped
 # around the build so the analyzer sees the compilation. Main-only + allow_failure
@@ -324,9 +306,9 @@ publish:
 # job (pack -> SLSA provenance -> nuget.org -> GitHub Release) — and stays a manual gate on
 # the default branch (to sync docs/CI between releases). `needs:` lists the deterministic
 # gating jobs so this can
-# only run after they pass (the advisory allow_failure scans — snyk-code,
-# sonarqube-check — and the side-effecting sbom-publish are intentionally not
-# blockers). It runs independently of the `publish` manual gate.
+# only run after they pass (the advisory allow_failure scan — sonarqube-check —
+# and the side-effecting sbom-publish are intentionally not blockers). It runs
+# independently of the `publish` manual gate.
 #
 # GIT_DEPTH 0 fetches full history so the push isn't a shallow-clone fragment.
 # Non-fast-forward pushes fail by design (no --force): GitHub is a downstream
