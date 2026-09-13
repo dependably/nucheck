@@ -1,0 +1,40 @@
+{
+  "version": 3,
+  "targets": {
+    "net8.0": {
+      "Newtonsoft.Json/12.0.1": { "type": "package" },
+      "Serilog/2.10.0": { "type": "package" },
+      "Polly/7.2.0": { "type": "package" },
+      "CsvHelper/27.0.0": {
+        "type": "package",
+        "dependencies": { "Microsoft.Bcl.AsyncInterfaces": "5.0.0" }
+      },
+      "Microsoft.Bcl.AsyncInterfaces/5.0.0": { "type": "package" }
+    }
+  },
+  "libraries": {
+    "Newtonsoft.Json/12.0.1": {
+      "type": "package",
+      "files": ["lib/netstandard2.0/Newtonsoft.Json.dll"]
+    },
+    "Serilog/2.10.0": {
+      "type": "package",
+      "files": ["lib/netstandard2.0/Serilog.dll"]
+    },
+    "Polly/7.2.0": {
+      "type": "package",
+      "files": ["lib/netstandard2.0/Polly.dll"]
+    },
+    "CsvHelper/27.0.0": {
+      "type": "package",
+      "files": ["lib/netstandard2.0/CsvHelper.dll"]
+    },
+    "Microsoft.Bcl.AsyncInterfaces/5.0.0": {
+      "type": "package",
+      "files": ["lib/netstandard2.1/Microsoft.Bcl.AsyncInterfaces.dll"]
+    }
+  },
+  "packageFolders": {
+    "/nonexistent/fixture-global-packages": {}
+  }
+}

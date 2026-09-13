@@ -36,3 +36,11 @@ sbom-prod.json
 *.log
 .env
 .DS_Store
+
+# The csharp-app test fixture commits App's obj/project.assets.json on purpose
+# (a machine-independent, deliberately UN-restored assets file whose
+# packageFolders point nowhere — see tests/Dependably.NuCheck.Tests/Facts). Un-ignore
+# that one obj/ dir, then re-ignore everything in it except that one file.
+!tests/Dependably.NuCheck.Tests/fixtures/csharp-app/App/obj/
+tests/Dependably.NuCheck.Tests/fixtures/csharp-app/App/obj/*
+!tests/Dependably.NuCheck.Tests/fixtures/csharp-app/App/obj/project.assets.json

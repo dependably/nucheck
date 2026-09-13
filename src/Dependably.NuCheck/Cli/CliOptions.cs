@@ -19,6 +19,7 @@ public sealed class CliOptions
     private static readonly Dictionary<string, Action<CliOptions>> BoolFlags = new(StringComparer.Ordinal)
     {
         ["--rest"] = o => o.UseRest = true,
+        ["--facts"] = o => o.Facts = true,
         ["--verbose"] = o => o.Verbose = true,
         ["-v"] = o => o.Verbose = true,
         ["--help"] = o => o.ShowHelp = true,
@@ -72,6 +73,15 @@ public sealed class CliOptions
     private readonly Dictionary<string, string> _ruleOverrides = new(StringComparer.Ordinal);
 
     public bool UseRest { get; private set; }
+
+    /// <summary>
+    /// True when <c>--facts</c> was passed: the positional path is a DIRECTORY and the
+    /// run emits the facts document instead of auditing a manifest. No advisory source
+    /// is created and no network is touched; <c>--fail-on</c>, <c>--severity</c>,
+    /// <c>--source</c>, <c>--rule</c>, <c>--rest</c>, <c>--config</c> and <c>--format</c>
+    /// are accepted (still validated) but inert in this mode.
+    /// </summary>
+    public bool Facts { get; private set; }
 
     public bool Verbose { get; private set; }
 

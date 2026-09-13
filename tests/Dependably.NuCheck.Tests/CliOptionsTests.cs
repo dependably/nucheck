@@ -308,6 +308,39 @@ public class CliOptionsTests
         Assert.Null(options.Error);
     }
 
+    // ---- --facts -------------------------------------------------------------------
+
+    [Fact]
+    public void Parse_facts_defaults_to_false()
+    {
+        Assert.False(CliOptions.Parse(["./p.config"]).Facts);
+    }
+
+    [Fact]
+    public void Parse_recognises_facts_with_a_directory()
+    {
+        // --facts is a bool flag: the positional argument is the target DIRECTORY.
+        var options = CliOptions.Parse(["--facts", "./src"]);
+
+        Assert.True(options.Facts);
+        Assert.Equal("./src", options.FilePath);
+        Assert.Null(options.Error);
+    }
+
+    [Fact]
+    public void Parse_facts_takes_no_value_and_coexists_with_other_flags()
+    {
+        // Audit flags still parse (and validate) alongside --facts; Program makes
+        // them inert in facts mode rather than the parser rejecting them.
+        var options = CliOptions.Parse(["./src", "--facts", "--verbose", "--fail-on", "severity=low"]);
+
+        Assert.True(options.Facts);
+        Assert.True(options.Verbose);
+        Assert.Equal("low", options.FailOnSeverity);
+        Assert.Equal("./src", options.FilePath);
+        Assert.Null(options.Error);
+    }
+
     // ---- --rule <id>:<severity> ---------------------------------------------------
 
     [Fact]

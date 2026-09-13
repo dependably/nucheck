@@ -1,6 +1,7 @@
 using System.Reflection;
 using Dependably.NuCheck.Cli;
 using Dependably.NuCheck.Config;
+using Dependably.NuCheck.Facts;
 using Dependably.NuCheck.Models;
 using Dependably.NuCheck.Output;
 using Dependably.NuCheck.Services;
@@ -63,6 +64,21 @@ public static class Program
             Console.Error.WriteLine($"Error: {options.Error}");
             Console.WriteLine(HelpText);
             return ExitError;
+        }
+
+        if (options.Facts)
+        {
+            // Facts mode branches BEFORE any advisory source exists: no network, no
+            // GITHUB_TOKEN notice, no gate. Exit 0 on a successful scan, 2 for a
+            // missing/unreadable target (an operational error — no help text).
+            if (options.FilePath is null)
+            {
+                Console.Error.WriteLine("Error: --facts requires a target directory.");
+                Console.WriteLine(HelpText);
+                return ExitError;
+            }
+
+            return FactsCommand.Run(options.FilePath, ToolVersion, options.Verbose, Console.Out, Console.Error);
         }
 
         if (options.FilePath is null)
@@ -242,6 +258,7 @@ nucheck - NuGet vulnerability auditor
 
 Usage:
   nucheck <path-to-packages-file> [options]
+  nucheck --facts <directory> [--verbose]
 
 Arguments:
   <path-to-packages-file>    Path to packages.config, packages.lock.json, or a
@@ -251,8 +268,22 @@ Arguments:
                              evaluation); version ranges & floating versions are audited
                              at their declared LOWER BOUND, not the restored version. For
                              exact resolved versions, point at a packages.lock.json.
+  <directory>                With --facts: the source tree to describe.
 
 Options:
+  --facts                    Emit a JSON "facts" document describing the .NET source
+                             tree at <directory> instead of auditing a manifest: the
+                             projects and their PackageReferences, each restore
+                             artefact's resolved closure, the namespaces read from each
+                             package's assemblies, every C# file's using directives and
+                             qualified identifiers, and the type/member references of
+                             each built output assembly. Facts, not findings: no
+                             advisories, no severities, no verdicts; nothing is gated
+                             and no network is touched. Exits 0 on a successful scan
+                             (paths it could not read are listed in `unanalyzable`),
+                             2 for a missing or unreadable <directory>. --fail-on,
+                             --severity, --source, --rule, --rest, --config and
+                             --format are inert in this mode.
   --source <name>            Advisory source: github (default), osv
   --format <type>            Output format: human, table, json (default: human)
   --severity <level>         Filter by severity: critical, high, moderate, low, info
@@ -365,5 +396,6 @@ Examples:
   nucheck ./packages.config --config ./.dependably
   nucheck ./packages.config --fail-on severity=high   # ignore moderate/low for gating
   nucheck ./packages.config --fail-on count=0         # fail on any vulnerability
+  nucheck --facts ./src > facts.json                  # language facts, no audit
 """;
 }
