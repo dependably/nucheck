@@ -70,13 +70,19 @@ internal static class Fixtures
     /// <summary>
     /// Emits a real assembly with Roslyn so the metadata readers are exercised
     /// against genuine PE files without committing any binary fixture.
+    /// <paramref name="extraReferences"/> lets a caller chain a second emitted
+    /// assembly in as a reference (e.g. a "library" DLL a "consumer" DLL's IL
+    /// then genuinely points MemberReference/TypeReference rows at).
     /// </summary>
-    public static void EmitAssembly(string assemblyName, string source, string path)
+    public static void EmitAssembly(string assemblyName, string source, string path, IEnumerable<MetadataReference>? extraReferences = null)
     {
+        List<MetadataReference> references = [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)];
+        if (extraReferences is not null) references.AddRange(extraReferences);
+
         var compilation = CSharpCompilation.Create(
             assemblyName,
             [CSharpSyntaxTree.ParseText(source)],
-            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+            references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         var result = compilation.Emit(path);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics));

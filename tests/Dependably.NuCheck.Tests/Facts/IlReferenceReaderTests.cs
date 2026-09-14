@@ -1,4 +1,6 @@
 using Dependably.NuCheck.Facts;
+using Dependably.NuCheck.Facts.Il;
+using Microsoft.CodeAnalysis;
 
 namespace Dependably.NuCheck.Tests.Facts;
 
@@ -163,5 +165,114 @@ public class IlReferenceReaderTests
         {
             Fixtures.DeleteScratch(scratch);
         }
+    }
+}
+
+/// <summary>
+/// The three normalization/resolution refinements ported for parity with
+/// sbom-reach's sidecar analyzer, exercised against Roslyn-emitted DLLs
+/// (<see cref="Fixtures.EmitAssembly"/>) rather than the shared real
+/// `dotnet build` fixture — fast, and isolated to exactly the metadata shapes
+/// each refinement targets: a property (accessor naming), a generic class and
+/// a closed-generic member access (arity stripping + the pre-existing
+/// TypeSpecification resolution) all in one small "library + consumer"
+/// assembly pair.
+/// </summary>
+public class IlReferenceReaderNormalizationTests
+{
+    /// <summary>
+    /// Emits a library DLL with a public class and an auto-property, and a
+    /// consumer DLL that both reads and writes that property and puts the
+    /// library type into a <c>List&lt;T&gt;</c> — real IL exercising all three
+    /// refinements at once. Returns the consumer's raw reference list
+    /// (un-deduplicated — that's <c>FactsCommand</c>'s job, not the reader's).
+    /// </summary>
+    private static List<ReferenceInfo> EmitConsumerReferences()
+    {
+        var root = Fixtures.NewScratch("il-normalization");
+        try
+        {
+            var libPath = Path.Combine(root, "TestLib.dll");
+            Fixtures.EmitAssembly("TestLib", """
+                namespace TestLib
+                {
+                    public class Widget
+                    {
+                        public string Name { get; set; } = "";
+                    }
+                }
+                """, libPath);
+
+            var consumerPath = Path.Combine(root, "Consumer.dll");
+            Fixtures.EmitAssembly("Consumer", """
+                using System.Collections.Generic;
+                using TestLib;
+
+                namespace TestApp
+                {
+                    public static class Program
+                    {
+                        public static void Run()
+                        {
+                            var widget = new Widget();
+                            widget.Name = "x";
+                            var read = widget.Name;
+                            var list = new List<Widget>();
+                            list.Add(widget);
+                        }
+                    }
+                }
+                """, consumerPath, [MetadataReference.CreateFromFile(libPath)]);
+
+            var unanalyzable = new List<UnanalyzableEntry>();
+            var ok = IlReferenceReader.TryEnumerateReferences(consumerPath, root, unanalyzable, out var references);
+            Assert.True(ok);
+            Assert.Empty(unanalyzable);
+            return references;
+        }
+        finally
+        {
+            Fixtures.DeleteScratch(root);
+        }
+    }
+
+    [Fact]
+    public void AccessorReferencesAreAlsoRecordedUnderTheirNaturalPropertyName()
+    {
+        var references = EmitConsumerReferences();
+
+        // Raw compiled accessor names are still reported...
+        Assert.Contains(references, r => r.Kind == "il-member-ref" && r.Symbol == "TestLib.Widget.set_Name" && r.AssemblyName == "TestLib");
+        Assert.Contains(references, r => r.Kind == "il-member-ref" && r.Symbol == "TestLib.Widget.get_Name" && r.AssemblyName == "TestLib");
+
+        // ...and additionally normalized to the natural property name, so a
+        // consumer correlating source-level `Name` usage doesn't miss them.
+        Assert.Contains(references, r => r.Kind == "il-member-ref" && r.Symbol == "TestLib.Widget.Name" && r.AssemblyName == "TestLib");
+    }
+
+    [Fact]
+    public void GenericTypeReferencesAreAlsoRecordedWithArityStripped()
+    {
+        var references = EmitConsumerReferences();
+
+        var rawListRef = Assert.Single(references, r => r.Kind == "il-type-ref" && r.Symbol == "System.Collections.Generic.List`1");
+        // Arity-stripped form additionally recorded, same defining assembly.
+        Assert.Contains(references, r =>
+            r.Kind == "il-type-ref" && r.Symbol == "System.Collections.Generic.List" && r.AssemblyName == rawListRef.AssemblyName);
+    }
+
+    /// <c>list.Add(widget)</c> is a member invoked on the CLOSED generic type
+    /// <c>List&lt;Widget&gt;</c> — MemberReference.Parent is a
+    /// TypeSpecification, not a TypeReference directly. This is the
+    /// pre-existing GENERICINST resolution path (unchanged by this port);
+    /// asserted here to pin that it keeps working now that both the raw and
+    /// arity-stripped type spellings flow through it.
+    [Fact]
+    public void MemberOnAClosedGenericTypeResolvesUnderBothTypeSpellings()
+    {
+        var references = EmitConsumerReferences();
+
+        Assert.Contains(references, r => r.Kind == "il-member-ref" && r.Symbol == "System.Collections.Generic.List`1.Add");
+        Assert.Contains(references, r => r.Kind == "il-member-ref" && r.Symbol == "System.Collections.Generic.List.Add");
     }
 }
