@@ -105,6 +105,21 @@ public static class IlReferenceReader
     }
 
     /// <summary>
+    /// The fully-qualified spellings to record for a type name: the raw
+    /// metadata name (namespace-qualified), plus — only when it differs — the
+    /// generic-arity-stripped form (<see cref="GenericTypeNaming.StripArity"/>).
+    /// Never more than two entries; one when the type isn't generic.
+    /// </summary>
+    private static IEnumerable<string> TypeFqSpellings(string ns, string name)
+    {
+        yield return FormatTypeFq(ns, name);
+        var stripped = GenericTypeNaming.StripArity(name);
+        if (stripped != name) yield return FormatTypeFq(ns, stripped);
+    }
+
+    private static string FormatTypeFq(string ns, string name) => string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
+
+    /// <summary>
     /// Walks TypeReferences (→ <c>il-type-ref</c>) and MemberReferences whose
     /// parent is a TypeReference or a TypeSpecification wrapping one (→
     /// <c>il-member-ref</c>; see <see cref="TryResolveGenericInstantiationTypeRef"/>
@@ -138,8 +153,15 @@ public static class IlReferenceReader
                 var name = reader.GetString(tr.Name);
                 typeRefInfo[trh] = (ns, name, asmName);
 
-                var typeFq = string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
-                references.Add(new ReferenceInfo("il-type-ref", typeFq, asmName));
+                // Generic-arity stripping (ECMA-335 §I.10.7.2): `List`1` is
+                // additionally recorded as `List` so a consumer matching
+                // against the source-level spelling isn't defeated by the
+                // backtick-arity suffix. Both forms are kept — the raw
+                // metadata name stays the precise one.
+                foreach (var typeFq in TypeFqSpellings(ns, name))
+                {
+                    references.Add(new ReferenceInfo("il-type-ref", typeFq, asmName));
+                }
             }
 
             foreach (var mrh in reader.MemberReferences)
@@ -164,8 +186,22 @@ public static class IlReferenceReader
                 if (info is not { } resolved) continue;
 
                 var memberName = reader.GetString(mr.Name);
-                var typeFq = string.IsNullOrEmpty(resolved.Namespace) ? resolved.Name : $"{resolved.Namespace}.{resolved.Name}";
-                references.Add(new ReferenceInfo("il-member-ref", $"{typeFq}.{memberName}", resolved.Assembly));
+
+                // Accessor ↔ natural-name normalization: a compiled property/
+                // indexer/event accessor (`get_Foo`/`set_Foo`/`add_Foo`/
+                // `remove_Foo`) is additionally recorded under its natural
+                // name (`Foo`) so a consumer correlating "was Foo used"
+                // against source-level uses doesn't miss the compiled call.
+                var memberNameHasNatural = AccessorNaming.TryGetNaturalName(memberName, out var naturalMemberName);
+
+                foreach (var typeFq in TypeFqSpellings(resolved.Namespace, resolved.Name))
+                {
+                    references.Add(new ReferenceInfo("il-member-ref", $"{typeFq}.{memberName}", resolved.Assembly));
+                    if (memberNameHasNatural)
+                    {
+                        references.Add(new ReferenceInfo("il-member-ref", $"{typeFq}.{naturalMemberName}", resolved.Assembly));
+                    }
+                }
             }
             return true;
         }

@@ -4,6 +4,35 @@ All notable changes to `nucheck` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-09-13
+
+### Added
+
+- **IL facts parity with sbom-reach's sidecar analyzer.** `--facts`'s `il[]` member/type
+  references now match two normalizations the sidecar's `IlAnalyzer` applied that
+  `IlReferenceReader` didn't yet:
+
+  - **Accessor ↔ natural-name normalization.** A compiled property/indexer/event
+    accessor (`get_Foo`/`set_Foo`/`add_Foo`/`remove_Foo`) is now ADDITIONALLY recorded
+    under its natural name (`Foo`), via a new pure `AccessorNaming.TryGetNaturalName()`
+    helper — so a consumer correlating "was `Foo` used" against source-level `Foo`
+    usages doesn't miss the compiled accessor call. The raw accessor name is still
+    reported too; nothing is replaced.
+  - **Generic-arity stripping.** A generic type's metadata name carries a
+    backtick-arity suffix (`List\`1`, `Dictionary\`2`) that never appears in source. A
+    new pure `GenericTypeNaming.StripArity()` helper additionally records the
+    arity-stripped form (`List`, `Dictionary`) alongside the raw one, for both
+    `il-type-ref` entries and the type half of `il-member-ref` entries — so both
+    spellings resolve to the same logical type.
+
+  The third refinement in scope for parity — resolving a `MemberReference` whose
+  parent is a closed generic `TypeSpecification` (`List<Foo>.Add`) back to the open
+  generic type — was already present (`TryResolveGenericInstantiationTypeRef`,
+  shipped in 2.2.0); it's now exercised by both normalizations rather than only the
+  raw metadata name. Neither change touches verdict/reachability computation — nucheck
+  publishes facts, not verdicts, and this stays entirely inside "what does the facts
+  document record."
+
 ## [2.2.0] - 2026-09-13
 
 ### Added
