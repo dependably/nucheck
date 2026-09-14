@@ -16,10 +16,10 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>nucheck</ToolCommandName>
     <PackageId>Dependably.NuCheck</PackageId>
-    <Version>2.1.0</Version>
+    <Version>2.2.0</Version>
     <Authors>MHiland &lt;michael@dependably.ca&gt;</Authors>
     <Company>Dependably</Company>
-    <Description>Audits .NET NuGet dependencies (packages.config / packages.lock.json) for known vulnerabilities via the GitHub Advisory Database, similar to npm audit.</Description>
+    <Description>Audits .NET NuGet dependencies (packages.config / packages.lock.json) for known vulnerabilities via the GitHub Advisory Database, similar to npm audit. --facts publishes a source tree's .NET language and packaging facts as JSON for other tools.</Description>
     <PackageTags>nuget;audit;vulnerability;security;dotnet-tool</PackageTags>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
@@ -30,6 +30,11 @@
     <!-- Ship debug symbols as a separate .snupkg instead of bundling PDBs in the tool package. -->
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+
+    <!-- Roslyn (pulled in for the facts-mode C# scan) ships localized resource satellites
+         for a dozen languages; nucheck's own text is English. Keeping just `en` drops
+         ~13 satellite directories per TFM from the tool package. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
 
   <!-- PackAsTool copies the whole build output (PDBs included) into tools/; strip the
@@ -75,6 +80,8 @@
   </Target>
 
   <ItemGroup>
+    <!-- Parse-only C# syntax trees for the facts-mode using/qualified-identifier scan. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.11.0" />
     <PackageReference Include="NuGet.Configuration" Version="7.6.0" />
     <PackageReference Include="NuGet.Packaging" Version="7.6.0" />
     <PackageReference Include="NuGet.ProjectModel" Version="7.6.0" />

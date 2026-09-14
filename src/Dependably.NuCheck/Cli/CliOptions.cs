@@ -14,11 +14,13 @@ public sealed class CliOptions
         ["--config"] = (o, v) => o.ConfigPath = v,
         ["--fail-on"] = (o, v) => o.ApplyFailOn(v),
         ["--rule"] = (o, v) => o.ApplyRule(v),
+        ["--roots"] = (o, v) => o.ApplyRoots(v),
     };
 
     private static readonly Dictionary<string, Action<CliOptions>> BoolFlags = new(StringComparer.Ordinal)
     {
         ["--rest"] = o => o.UseRest = true,
+        ["--facts"] = o => o.Facts = true,
         ["--verbose"] = o => o.Verbose = true,
         ["-v"] = o => o.Verbose = true,
         ["--help"] = o => o.ShowHelp = true,
@@ -72,6 +74,25 @@ public sealed class CliOptions
     private readonly Dictionary<string, string> _ruleOverrides = new(StringComparer.Ordinal);
 
     public bool UseRest { get; private set; }
+
+    /// <summary>
+    /// True when <c>--facts</c> was passed: the positional path is a DIRECTORY and the
+    /// run emits the facts document instead of auditing a manifest. No advisory source
+    /// is created and no network is touched; <c>--fail-on</c>, <c>--severity</c>,
+    /// <c>--source</c>, <c>--rule</c>, <c>--rest</c>, <c>--config</c> and <c>--format</c>
+    /// are accepted (still validated) but inert in this mode.
+    /// </summary>
+    public bool Facts { get; private set; }
+
+    /// <summary>
+    /// Extra qualified-identifier roots from the repeatable, comma-separated
+    /// <c>--roots</c> flag (facts mode only; inert otherwise). Each entry is reduced
+    /// to its first dotted segment (<c>Amazon.S3</c> → <c>Amazon</c>), deduplicated, in
+    /// the order first given. Extends <c>source.qualifiedRoots</c>; never replaces it.
+    /// </summary>
+    public IReadOnlyList<string> Roots => _roots;
+
+    private readonly List<string> _roots = [];
 
     public bool Verbose { get; private set; }
 
@@ -209,6 +230,37 @@ public sealed class CliOptions
         }
 
         _ruleOverrides[id] = severity;
+    }
+
+    /// <summary>
+    /// Apply one repeatable <c>--roots a,b.c</c> value: each comma-separated entry
+    /// must be a C# identifier or dotted name; the first segment is what the
+    /// qualified-identifier filter keys on. An empty value or a token that is not an
+    /// identifier is a usage error (first error wins, exit 2).
+    /// </summary>
+    private void ApplyRoots(string value)
+    {
+        var any = false;
+        foreach (var raw in value.Split(','))
+        {
+            var token = raw.Trim();
+            if (token.Length == 0) continue;
+            if (!System.Text.RegularExpressions.Regex.IsMatch(token, @"^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$"))
+            {
+                Error ??= $"invalid --roots entry '{token}': expected an identifier or dotted name (e.g. Amazon or Amazon.S3)";
+                return;
+            }
+
+            any = true;
+            var dot = token.IndexOf('.');
+            var root = dot > 0 ? token[..dot] : token;
+            if (!_roots.Contains(root, StringComparer.Ordinal)) _roots.Add(root);
+        }
+
+        if (!any)
+        {
+            Error ??= "invalid --roots: expected at least one comma-separated identifier";
+        }
     }
 
     /// <summary>

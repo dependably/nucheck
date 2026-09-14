@@ -308,6 +308,79 @@ public class CliOptionsTests
         Assert.Null(options.Error);
     }
 
+    // ---- --facts -------------------------------------------------------------------
+
+    [Fact]
+    public void Parse_facts_defaults_to_false()
+    {
+        Assert.False(CliOptions.Parse(["./p.config"]).Facts);
+    }
+
+    [Fact]
+    public void Parse_recognises_facts_with_a_directory()
+    {
+        // --facts is a bool flag: the positional argument is the target DIRECTORY.
+        var options = CliOptions.Parse(["--facts", "./src"]);
+
+        Assert.True(options.Facts);
+        Assert.Equal("./src", options.FilePath);
+        Assert.Null(options.Error);
+    }
+
+    [Fact]
+    public void Parse_facts_takes_no_value_and_coexists_with_other_flags()
+    {
+        // Audit flags still parse (and validate) alongside --facts; Program makes
+        // them inert in facts mode rather than the parser rejecting them.
+        var options = CliOptions.Parse(["./src", "--facts", "--verbose", "--fail-on", "severity=low"]);
+
+        Assert.True(options.Facts);
+        Assert.True(options.Verbose);
+        Assert.Equal("low", options.FailOnSeverity);
+        Assert.Equal("./src", options.FilePath);
+        Assert.Null(options.Error);
+    }
+
+    // ---- --roots (facts mode) --------------------------------------------------------
+
+    [Fact]
+    public void Parse_roots_defaults_to_empty()
+    {
+        Assert.Empty(CliOptions.Parse(["--facts", "./src"]).Roots);
+    }
+
+    [Fact]
+    public void Parse_roots_is_repeatable_and_comma_separated()
+    {
+        var options = CliOptions.Parse(["--facts", "./src", "--roots", "Amazon, Fabrikam", "--roots", "Contoso"]);
+
+        Assert.Null(options.Error);
+        Assert.Equal(["Amazon", "Fabrikam", "Contoso"], options.Roots);
+    }
+
+    [Fact]
+    public void Parse_roots_reduces_dotted_names_to_first_segment_and_dedupes()
+    {
+        var options = CliOptions.Parse(["--facts", "./src", "--roots", "Amazon.S3,Amazon.SQS,Amazon"]);
+
+        Assert.Null(options.Error);
+        Assert.Equal(["Amazon"], options.Roots);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" , ")]
+    [InlineData("Not-An-Identifier")]
+    [InlineData("1Amazon")]
+    [InlineData("Amazon.")]
+    public void Parse_roots_rejects_empty_or_non_identifier(string value)
+    {
+        var options = CliOptions.Parse(["--facts", "./src", "--roots", value]);
+
+        Assert.NotNull(options.Error);
+        Assert.Contains("--roots", options.Error);
+    }
+
     // ---- --rule <id>:<severity> ---------------------------------------------------
 
     [Fact]

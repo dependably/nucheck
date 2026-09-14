@@ -11,6 +11,9 @@
          forward to it so `dotnet test` runs both target frameworks without a net8 runtime. -->
     <RollForward>Major</RollForward>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- fixtures/csharp-app is a sample .NET app the Facts tests scan (and build a temp
+         COPY of); its .cs/.csproj files must not become this project's own items. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);fixtures/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>

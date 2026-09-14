@@ -4,6 +4,85 @@ All notable changes to `nucheck` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-09-13
+
+### Added
+
+- **`--facts <directory>` — a JSON "facts" document describing a .NET source tree, for
+  other tools to consume.** It states the projects and their `PackageReference`s (with
+  line numbers and the test-project marker — `<IsTestProject>` or the test-framework
+  package id, never a directory name), the resolved closure each `obj/project.assets.json`
+  / `packages.lock.json` records and the dependency edges among it, the namespaces read
+  out of each package's own assemblies with `System.Reflection.Metadata`, every C# file's
+  `using` directives (global/static/alias, and `#if`-disabled ones flagged) and qualified
+  identifiers from a parse-only Roslyn scan, the type/member references in each built
+  output assembly, and what each `*.deps.json` says lands next to the binary. Same envelope
+  identity as the findings document (`tool`/`toolVersion`/`schemaVersion`/`target`/
+  `summary`) with `findings` replaced by the fact sections and an explicit
+  `documentType: "facts"` discriminator; the findings envelope is unchanged (no
+  `documentType` means "findings document").
+
+  **Facts are not findings, and this is the ownership rule the mode exists for**: the
+  check tool owns *language facts* (AST usings, qualified identifiers, artefact and
+  lockfile parsing, DLL namespace reads, IL member references, line locations); the
+  consumer — sbom-reach, in the Dependably suite — owns *verdicts* (reachable /
+  not-observed / unknown, confidence, dev-only, runtime presence, symbol intersection).
+  Nothing verdict-shaped is in the document: no `status`, no `confidence`, no purls, no
+  SBOM, no `bomRef`. The precedent is pycheck 1.4.0's `--imports`: a report, not a gate
+  (a successful scan exits `0`; only a missing or unreadable target exits `2`; `--fail-on`,
+  `--severity`, `--source`, `--rule`, `--rest`, `--config` and `--format` are inert), with
+  `unanalyzable[]` as a load-bearing part of the contract — every file, directory,
+  assembly, restore artefact or deps file the scan could not read is listed with a kind and
+  a reason, because "nothing references X" is only evidence when the search ran over
+  every file. A namespace is **never** inferred from a package id: when no assembly of a
+  package can be read its `namespaces` key is omitted, so an un-restored tree yields no
+  namespace for any package rather than a guess that is wrong for whole families
+  (`AWSSDK.*` → `Amazon.*`). Absent means "could not tell", an explicit `null` states an
+  absence, and an empty list is a fact ("enumerated, found none").
+
+  The fact-gathering code is MOVED from sbom-reach's .NET sidecar
+  (`sidecar/dotnet/SbomReach.Analyzer.CSharp` at commit `44e9252`): `AssetsReader`,
+  `DepsReader`, `LicenseReader`, `NamespaceMap`, `ProjectDiscovery` and `UsingScanner`
+  verbatim in logic (their diagnostics sink is now the structured `unanalyzable` list),
+  plus `IlReferenceReader`, the metadata-enumeration third of the sidecar's `IlAnalyzer`.
+  The sidecar's verdict half (`Analyzer`, `IlAnalyzer`'s merge/intersection,
+  `ProjectScopes`, the wire protocol) stays where the verdicts live. No network, no
+  `GITHUB_TOKEN`: the mode branches before any advisory source is created. A consumer
+  probes for it by running it — an older nucheck answers `Error: unknown option: '--facts'`
+  and exits `2`.
+
+  Shape notes that came out of adversarial review before release: `packages[]` is keyed
+  by **id + version** and `projects[].closure` is `[{ id, version }]`, because one tree can
+  resolve two versions of one id in different projects and a consumer whose dedup key
+  carries the version must see both, each with its own assemblies/namespaces/license read
+  from its own package folder. A **symlinked directory is never followed** (a loop would
+  enumerate without end; a link out of the tree would scan foreign code) and is reported
+  as `{ kind: "directory", reason: "symlinked directory not followed" }`. A DLL the
+  artefact lists but the package folder lacks is reported (`listed in assets but not
+  present in package folder`) rather than silently skipped, so a `namespaces` list built
+  from its siblings is not mistaken for the complete set. `runtimeOutput` is omitted, not
+  `[]`, when every `*.deps.json` under `bin/` is unparseable. `unanalyzable[].reason` is
+  path-free (fixed phrases for filesystem failures, parser positions kept) and
+  `unanalyzable[].file` is relative to the target whenever the path is under it.
+  `summary.packagesWithNamespaces` counts only non-empty DLL-read lists.
+
+- **`--roots <a,b,...>`** (facts mode; repeatable, comma-separated) extends
+  `source.qualifiedRoots` before the scan. The documented limitation it exists for: a
+  fully-qualified use with no `using` directive (`Foo.Bar.Client.Send(...)`) is only
+  recorded when its first segment is a root the tree itself reveals — a namespace read
+  from a package assembly, or an id in a restore artefact or project file — so a package
+  in no readable artefact (an un-restored tree with no lock file, or one the consumer
+  knows about only from an SBOM) loses those uses with no way to recover them from the
+  document. `--roots` is how the consumer asks; the applied set is published either way.
+
+### Changed
+
+- The tool package now carries Roslyn (`Microsoft.CodeAnalysis.CSharp` 4.11.0, with
+  `Microsoft.CodeAnalysis`) for the parse-only C# scan: the `.nupkg` grows from 3.3 MB to
+  10.1 MB, with satellite resource languages trimmed to `en` so the two Roslyn assemblies
+  are the whole of the increase. Both `packages.lock.json` files record the new transitive
+  closure (CI restores `--locked-mode`).
+
 ## [2.1.0] - 2026-08-13
 
 ### Added
