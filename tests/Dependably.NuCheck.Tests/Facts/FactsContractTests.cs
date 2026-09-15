@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Dependably.NuCheck.Facts;
+using Dependably.NuCheck.Models;
+using Dependably.NuCheck.Output;
 
 namespace Dependably.NuCheck.Tests.Facts;
 
@@ -27,6 +29,17 @@ public class FactsContractTests
         // where that decision gets made deliberately rather than incidentally.
         Assert.Equal("1.1", FactsDocument.SchemaVersion);
         Assert.Equal("1.1", FactsCommand.Build(Fixtures.CsharpApp, "test").Schema);
+
+        // The INDEPENDENCE half, asserted here rather than assumed: the findings
+        // envelope this tool also emits carries its own `schemaVersion`, still at
+        // "1.0", and the two version their own contracts. Reading the facts
+        // document's minor bump as a findings-schema change (or vice versa) is
+        // exactly what a shared number would invite, so both literals live in one
+        // assertion and a change to either has to be made on purpose.
+        using var findings = JsonDocument.Parse(
+            new JsonResultFormatter("test", "packages.config").Format(new AuditResult { TotalPackages = 0, Vulnerabilities = [] }));
+        Assert.Equal("1.0", findings.RootElement.GetProperty("schemaVersion").GetString());
+        Assert.NotEqual(FactsDocument.SchemaVersion, findings.RootElement.GetProperty("schemaVersion").GetString());
     }
 
     [Fact]
