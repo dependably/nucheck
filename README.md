@@ -421,6 +421,16 @@ that they disagree. That same pair of sightings is why `assemblies` and `namespa
 present for such a package: the restored artefact enumerated its files, so the merged entry
 carries the enumeration rather than the un-restored sibling's silence.
 
+**Collapse on `(field, value)` before emitting, and read repeated `file`s as
+corroboration.** The list is per ARTEFACT, so a package restored by several projects
+carries one entry per project's own assets file — identical `source`, `field` and `value`,
+differing only in `file` (15 of nucheck's own 33 packages look like this). Mapped 1:1 into
+a CycloneDX `hashes[]` that becomes N duplicate SHA-512 entries for one component, scaling
+as projects × packages; collapsed on `(field, value)` it is one entry that several
+artefacts independently agree on. Entries that survive the collapse with the same `field`
+and DIFFERENT values are the case worth surfacing: the artefacts disagree about the
+package, which is why nucheck reports them rather than picking a winner.
+
 **`producer` is verbatim free text, and its absence is two different statements.**
 `<authors>` and `<owners>` are comma-separated free text in the `.nuspec`, not identities:
 NuGet neither validates nor resolves them, so nucheck does not split them on the comma,
