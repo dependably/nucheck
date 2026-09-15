@@ -21,10 +21,10 @@ public class FactsContractTests
     [Fact]
     public void SchemaVersionIsPinnedAndIndependentOfTheFindingsDocument()
     {
-        // 1.0 -> 1.1 is the ADDITIVE step the README contract defines: `capabilities`
-        // was added; nothing was renamed, removed or redefined. A rename or a removal is
-        // a MAJOR, and this literal is where that decision gets made deliberately rather
-        // than incidentally.
+        // 1.0 -> 1.1 is the ADDITIVE step the README contract defines: `capabilities`,
+        // `packages[].hashes` and `packages[].producer` were added; nothing was renamed,
+        // removed or redefined. A rename or a removal is a MAJOR, and this literal is
+        // where that decision gets made deliberately rather than incidentally.
         Assert.Equal("1.1", FactsDocument.SchemaVersion);
         Assert.Equal("1.1", FactsCommand.Build(Fixtures.CsharpApp, "test").Schema);
     }

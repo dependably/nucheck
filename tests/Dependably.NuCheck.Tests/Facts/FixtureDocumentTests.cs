@@ -60,6 +60,27 @@ public class FixtureDocumentTests
         }
     }
 
+    /// The same un-restored case, for the two provenance fields: the assets file
+    /// enumerated each package and states no `sha512`, so `hashes` is an empty list
+    /// ("read, none stated"); no package folder is readable, so no .nuspec is, so
+    /// `producer` is OMITTED. Writing `{ "authors": null }` here would say the
+    /// package claims no author, about a file nothing opened.
+    [Fact]
+    public void UnrestoredFixtureStatesNoHashesAndOmitsProducer()
+    {
+        var doc = Doc();
+
+        Assert.All(doc.Packages, p => Assert.Empty(p.Hashes));
+        Assert.All(doc.Packages, p => Assert.Null(p.Producer));
+
+        using var json = JsonDocument.Parse(FactsCommand.Serialize(doc));
+        foreach (var package in json.RootElement.GetProperty("packages").EnumerateArray())
+        {
+            Assert.Equal(0, package.GetProperty("hashes").GetArrayLength());
+            Assert.False(package.TryGetProperty("producer", out _), $"{package.GetProperty("id")} must not claim a producer from a .nuspec nobody read");
+        }
+    }
+
     /// Both App.csproj and Lib.csproj are non-test, with no marker of any kind —
     /// a stated `null`, never a guess from a directory name.
     [Fact]

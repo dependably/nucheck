@@ -49,8 +49,9 @@ public sealed record FactsDocument
     /// <summary>
     /// The facts document's own schema version — independent of the findings
     /// document's (they are separate documents with separate shapes) and of the
-    /// tool version. 1.0 → 1.1: <c>capabilities</c> was ADDED; nothing was
-    /// renamed, removed or redefined.
+    /// tool version. 1.0 → 1.1: <c>capabilities</c>, <c>packages[].hashes</c> and
+    /// <c>packages[].producer</c> were ADDED; nothing was renamed, removed or
+    /// redefined.
     /// </summary>
     public const string SchemaVersion = "1.1";
     public const string DocumentTypeName = "facts";
@@ -221,7 +222,63 @@ public sealed record PackageFacts
     public List<string>? Namespaces { get; init; }
     /// <summary>Ids this package depends on, as the restore artefact records them. An id may name a package absent from <c>packages</c> (a TFM-conditional edge that did not resolve) — reported as written, not filtered.</summary>
     [JsonPropertyName("dependencies")] public List<string> Dependencies { get; init; } = [];
+    /// <summary>
+    /// Every hash the tree's restore artefacts state for this package, each
+    /// naming the artefact that stated it. NOT flattened into one <c>hash</c>: a
+    /// <c>packages.lock.json</c> <c>contentHash</c> and a
+    /// <c>project.assets.json</c> <c>sha512</c> are different fields of different
+    /// artefacts, and a consumer that has to guess which one it is holding cannot
+    /// say what its own hash entry describes. Present-and-empty is a fact — the
+    /// artefact entries for this package were read and stated no hash. nucheck
+    /// never computes one: it publishes what a file says, or nothing.
+    /// </summary>
+    [JsonPropertyName("hashes")] public List<PackageHashFacts> Hashes { get; init; } = [];
+    /// <summary>
+    /// The producer strings from the package's own <c>.nuspec</c>, verbatim.
+    /// OMITTED when no <c>.nuspec</c> could be read (unrestored tree, missing or
+    /// unparseable file) — "cannot tell". PRESENT with explicit <c>null</c>s when
+    /// the file WAS read and states none: a fact of absence, which is what lets a
+    /// consumer say the component's provenance is unknown rather than unchecked.
+    /// </summary>
+    [JsonPropertyName("producer")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PackageProducerFacts? Producer { get; init; }
 }
+
+/// <summary>
+/// One hash exactly as a restore artefact states it. <c>Source</c> and
+/// <c>Field</c> name WHERE it came from (<c>lock</c> + <c>contentHash</c>, or
+/// <c>assets</c> + <c>sha512</c>) rather than asserting an algorithm: a
+/// <c>packages.lock.json</c> names no algorithm anywhere — only the assets
+/// file's KEY does — so putting an <c>algorithm</c> in the document would be
+/// nucheck asserting something one of the two files it read never said. Both
+/// values are bare base64 as written; nothing is decoded, re-encoded or
+/// re-computed, and a consumer that does so is doing it against the field it was
+/// told the string came from.
+/// </summary>
+/// <param name="Source">The artefact kind, same vocabulary as <c>projects[].assets.kind</c>: <c>assets</c> or <c>lock</c>.</param>
+/// <param name="File">The artefact that stated it, relative to the target — so the claim stays traceable after the per-project closures are merged into one <c>packages</c> list.</param>
+/// <param name="Field">The key as the artefact spells it: <c>sha512</c> or <c>contentHash</c>.</param>
+/// <param name="Value">The string as written. Never split, decoded, re-encoded or re-computed.</param>
+public sealed record PackageHashFacts(
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("file")] string File,
+    [property: JsonPropertyName("field")] string Field,
+    [property: JsonPropertyName("value")] string Value);
+
+/// <summary>
+/// <c>.nuspec</c> <c>&lt;authors&gt;</c> / <c>&lt;owners&gt;</c>, VERBATIM. Both
+/// are comma-separated free text, not identities: NuGet neither validates nor
+/// resolves them, so nucheck does not split, normalize or attribute them either —
+/// what a consumer does with "James Newton-King" or "Acme Corp, contributors" is
+/// its own call, and a split done here could not be undone downstream. An
+/// explicit <c>null</c> means the file was read and states that element nowhere
+/// (or states it empty); the whole object is omitted when no file was read at
+/// all.
+/// </summary>
+public sealed record PackageProducerFacts(
+    [property: JsonPropertyName("authors")] string? Authors,
+    [property: JsonPropertyName("owners")] string? Owners);
 
 public sealed record PackageFolderFacts(
     [property: JsonPropertyName("path")] string Path,

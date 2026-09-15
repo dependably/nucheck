@@ -22,6 +22,18 @@ public sealed record ResolvedPackage(
     List<string> LibDllRelPaths,
     bool FilesKnown)
 {
+    /// <summary>
+    /// Every hash the artefacts state for this id+version, each naming the
+    /// artefact and the key it came from. A list rather than one string because
+    /// the two artefact kinds carry DIFFERENT fields (a lock file's
+    /// <c>contentHash</c>, an assets file's <c>sha512</c>) and one tree can
+    /// resolve the same package through both — see
+    /// <see cref="AssetsReader.MergeHashes"/>. Empty means the entries were read
+    /// and stated none, never "not looked at": every package here came from an
+    /// entry this reader parsed.
+    /// </summary>
+    public List<PackageHashFacts> Hashes { get; init; } = [];
+
     /// The identity a closure entry is keyed on. A tree can resolve TWO versions
     /// of one id (App on 12.0.1, Tests on 13.0.3, separate artefacts), and each
     /// has its own package folder, assemblies, namespaces and license — a
@@ -69,6 +81,15 @@ public sealed record AssetsInfo(
 /// </summary>
 public static class AssetsReader
 {
+    /// The key `project.assets.json` states a package hash under — the KEY names
+    /// the algorithm, the value is bare base64 of the .nupkg.
+    private const string FieldSha512 = "sha512";
+
+    /// The key `packages.lock.json` states a package hash under. Neither the key
+    /// nor the value names an algorithm — hence <see cref="PackageHashFacts"/>
+    /// naming the field and the artefact rather than asserting one.
+    private const string FieldContentHash = "contentHash";
+
     public static AssetsInfo ReadAll(string srcDir, IEnumerable<ProjectInfo> projects, List<UnanalyzableEntry> unanalyzable)
     {
         var closure = new Dictionary<string, ResolvedPackage>(StringComparer.OrdinalIgnoreCase);
@@ -83,8 +104,9 @@ public static class AssetsReader
             var assetsPath = Path.Combine(Path.GetDirectoryName(project.CsprojPath)!, "obj", "project.assets.json");
             if (File.Exists(assetsPath))
             {
-                sources[project.CsprojPath] = new AssetsSource(ProjectDiscovery.RelativePath(srcDir, assetsPath), AssetsSource.KindAssets);
-                if (ReadAssetsFile(assetsPath, closure, folders, unanalyzable, srcDir, projectPackages, edges))
+                var assetsSource = new AssetsSource(ProjectDiscovery.RelativePath(srcDir, assetsPath), AssetsSource.KindAssets);
+                sources[project.CsprojPath] = assetsSource;
+                if (ReadAssetsFile(assetsPath, assetsSource, closure, folders, unanalyzable, srcDir, projectPackages, edges))
                 {
                     packagesByProject[project.CsprojPath] = projectPackages;
                 }
@@ -93,8 +115,9 @@ public static class AssetsReader
             var lockPath = Path.Combine(Path.GetDirectoryName(project.CsprojPath)!, "packages.lock.json");
             if (File.Exists(lockPath))
             {
-                sources[project.CsprojPath] = new AssetsSource(ProjectDiscovery.RelativePath(srcDir, lockPath), AssetsSource.KindLock);
-                if (ReadLockFile(lockPath, closure, unanalyzable, srcDir, projectPackages, edges))
+                var lockSource = new AssetsSource(ProjectDiscovery.RelativePath(srcDir, lockPath), AssetsSource.KindLock);
+                sources[project.CsprojPath] = lockSource;
+                if (ReadLockFile(lockPath, lockSource, closure, unanalyzable, srcDir, projectPackages, edges))
                 {
                     packagesByProject[project.CsprojPath] = projectPackages;
                 }
@@ -106,6 +129,7 @@ public static class AssetsReader
 
     private static bool ReadAssetsFile(
         string path,
+        AssetsSource source,
         Dictionary<string, ResolvedPackage> closure,
         List<string> folders,
         List<UnanalyzableEntry> unanalyzable,
@@ -125,7 +149,7 @@ public static class AssetsReader
 
             if (root.TryGetProperty("libraries", out var libraries))
             {
-                ReadLibraries(libraries, closure, projectPackages);
+                ReadLibraries(libraries, source, closure, projectPackages);
             }
 
             ReadTargetsForEdges(root, edges);
@@ -141,7 +165,7 @@ public static class AssetsReader
 
     /// One `libraries` entry per "PackageId/Version" key. Split out of
     /// ReadAssetsFile so the two nested loops don't compound its complexity.
-    private static void ReadLibraries(JsonElement libraries, Dictionary<string, ResolvedPackage> closure, List<PackageIdentity> projectPackages)
+    private static void ReadLibraries(JsonElement libraries, AssetsSource source, Dictionary<string, ResolvedPackage> closure, List<PackageIdentity> projectPackages)
     {
         foreach (var lib in libraries.EnumerateObject())
         {
@@ -170,7 +194,10 @@ public static class AssetsReader
                 }
             }
             libDlls.AddRange(refDlls);
-            AddPackage(closure, projectPackages, new ResolvedPackage(id, version, libDlls, filesKnown));
+            AddPackage(
+                closure,
+                projectPackages,
+                new ResolvedPackage(id, version, libDlls, filesKnown) { Hashes = HashesOf(lib.Value, source, FieldSha512) });
         }
     }
 
@@ -214,15 +241,41 @@ public static class AssetsReader
     /// records every identity this project resolved, once each.
     private static void AddPackage(Dictionary<string, ResolvedPackage> closure, List<PackageIdentity> projectPackages, ResolvedPackage package)
     {
-        closure.TryAdd(package.Key, package);
+        if (!closure.TryAdd(package.Key, package)) MergeHashes(closure[package.Key].Hashes, package.Hashes);
         if (!projectPackages.Any(p => p.Id.Equals(package.Id, StringComparison.OrdinalIgnoreCase) && p.Version == package.Version))
         {
             projectPackages.Add(package.Identity);
         }
     }
 
+    /// The one place a second sighting of an already-recorded package still
+    /// contributes: a monorepo where one project is restored (assets, `sha512`)
+    /// and another is not (lock file, `contentHash`) states BOTH about the same
+    /// id+version, and first-sighting-wins would silently drop whichever came
+    /// second. Deduped on the whole entry, so two artefacts that agree collapse
+    /// and two that DISAGREE are both reported — a conflict is a fact, and
+    /// picking a winner here would hide it.
+    internal static void MergeHashes(List<PackageHashFacts> into, IEnumerable<PackageHashFacts> incoming)
+    {
+        foreach (var hash in incoming)
+        {
+            if (!into.Contains(hash)) into.Add(hash);
+        }
+    }
+
+    /// Reads one artefact entry's hash field, verbatim. A missing, non-string or
+    /// empty value yields nothing at all rather than an empty-string hash: the
+    /// artefact stated no hash for this package, which the empty list says.
+    private static List<PackageHashFacts> HashesOf(JsonElement entry, AssetsSource source, string field)
+    {
+        if (!entry.TryGetProperty(field, out var value) || value.ValueKind != JsonValueKind.String) return [];
+        var text = value.GetString();
+        return string.IsNullOrWhiteSpace(text) ? [] : [new PackageHashFacts(source.Kind, source.File, field, text)];
+    }
+
     private static bool ReadLockFile(
         string path,
+        AssetsSource source,
         Dictionary<string, ResolvedPackage> closure,
         List<UnanalyzableEntry> unanalyzable,
         string srcDir,
@@ -243,7 +296,10 @@ public static class AssetsReader
                     // A lock file names the closure but never enumerates package
                     // files: FilesKnown = false, so downstream must not read the
                     // empty DLL list as "this package ships no assemblies".
-                    var package = new ResolvedPackage(pkg.Name, version, [], FilesKnown: false);
+                    var package = new ResolvedPackage(pkg.Name, version, [], FilesKnown: false)
+                    {
+                        Hashes = HashesOf(pkg.Value, source, FieldContentHash),
+                    };
                     AddPackage(closure, projectPackages, package);
                     if (pkg.Value.TryGetProperty("dependencies", out var pkgDeps)) AddDependencyEdges(edges, package.Key, pkgDeps);
                 }

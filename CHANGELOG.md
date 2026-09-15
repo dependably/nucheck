@@ -31,6 +31,35 @@ All notable changes to `nucheck` are documented here. The format is based on
   `schemaVersion` is `1.1` accordingly — the first exercise of the additive rule. The
   findings document's own `schemaVersion` is untouched at `1.0`.
 
+- **`packages[]` publishes the artefact hashes and the `.nuspec` producer strings** the
+  facts readers already had open: `packages.lock.json`'s `contentHash`,
+  `project.assets.json`'s per-library `sha512`, and `<authors>`/`<owners>`. CISA's 2026
+  SBOM Minimum Elements make Component Hash Value, Component Hash Algorithm and Component
+  Producer required fields, and a consumer generating CycloneDX from these facts had no
+  way to fill them.
+
+  `hashes[]` is a list whose entries NAME their source — `{ source, file, field, value }`,
+  e.g. `assets` + `sha512` or `lock` + `contentHash` — rather than one flattened `hash`:
+  the two are different fields of different artefacts, the assets key names an algorithm
+  and the lock key names none anywhere in the file, so a consumer emitting `hashes[].alg`
+  would otherwise have to guess which artifact and which algorithm its entry describes.
+  Values are verbatim; nucheck never computes a hash. One package can carry two entries
+  (a monorepo with one restored project and one un-restored sibling states both about the
+  same id+version), and two artefacts that disagree are both reported.
+
+  `producer` is `{ authors, owners }` verbatim — comma-separated free text is published
+  unsplit, unnormalized and unattributed, because a split done here could not be undone
+  downstream. Absence keeps the document's three-way discipline: the object is OMITTED
+  when no `.nuspec` could be read (un-restored tree, missing folder, unparseable XML) and
+  PRESENT with explicit `null`s when the file was read and states none — a consumer can
+  only call a component's provenance *unknown* if it can tell that from *not looked at*.
+
+### Changed
+
+- `LicenseReader` is now `NuspecReader` and returns everything the file states in one
+  load (license + producer). The class had grown a second question to answer and one
+  parse of the XML answers both; behaviour for `license` is unchanged.
+
 ### Documentation
 
 - `--roots` is in the README synopsis and option table (it was documented only in
