@@ -239,11 +239,16 @@ public static class FactsCommand
             _ => null,
         };
 
+        // One .nuspec load answers both questions, and its ABSENCE answers a third:
+        // no readable file means `producer` is omitted ("cannot tell"), while a file
+        // that states no <authors> gets an explicit null ("it says none").
+        var nuspec = NuspecReader.Read(assets.PackageFolders, package.Id, package.Version, srcDir, unanalyzable);
+
         return new PackageFacts
         {
             Id = package.Id,
             Version = package.Version,
-            License = LicenseReader.Read(assets.PackageFolders, package.Id, package.Version, srcDir, unanalyzable),
+            License = nuspec?.License,
             Assemblies = package.FilesKnown
                 ? package.LibDllRelPaths
                     .Select(Path.GetFileNameWithoutExtension)
@@ -257,6 +262,13 @@ public static class FactsCommand
             Dependencies = assets.DependencyEdges.TryGetValue(package.Key, out var deps)
                 ? deps.OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToList()
                 : [],
+            Hashes = package.Hashes
+                .OrderBy(h => h.Source, StringComparer.Ordinal)
+                .ThenBy(h => h.File, StringComparer.Ordinal)
+                .ThenBy(h => h.Field, StringComparer.Ordinal)
+                .ThenBy(h => h.Value, StringComparer.Ordinal)
+                .ToList(),
+            Producer = nuspec?.Producer,
         };
     }
 

@@ -21,17 +21,56 @@ namespace Dependably.NuCheck.Facts;
 /// A property written as an explicit <c>null</c> states a fact of absence (a
 /// project with no test marker, a <c>using</c> with no alias). A present-and-empty
 /// list is likewise a fact: "enumerated, found none".</para>
+///
+/// <para><b>The <c>schemaVersion</c> contract</b> (published in README.md, because a
+/// contract only a consumer can read is a policy the consumer invented): a newer
+/// MINOR is ADDITIVE — keys were added, every key a previous 1.x document carried
+/// still exists and still means the same thing, so a consumer written against an
+/// older minor proceeds unchanged. A newer MAJOR means a key was RENAMED, REMOVED,
+/// or had its meaning changed, and a consumer written against the older major must
+/// refuse the document. The version describes the document's SHAPE and nothing
+/// else.</para>
+///
+/// <para><b>Why <see cref="Capabilities"/> exists beside it.</b> A shape version
+/// cannot express a change in how an EXISTING field is filled: nucheck 2.3.0's IL
+/// normalizations added no key — they changed which spellings appear inside
+/// <c>il[].references[]</c> — so a 2.2.0 and a 2.3.0 build emit the same schema and
+/// a consumer that needs the normalized spellings cannot tell them apart from the
+/// document. Answering that with a version bump would also force every consumer to
+/// learn, out of band, which minor meant which behaviour. The document therefore
+/// NAMES its behaviours, which is the same reasoning that makes probing a tool by
+/// running it better than parsing its <c>--version</c>: a fork, a dev build or a
+/// backport can state truthfully what it does.</para>
 /// </summary>
 public sealed record FactsDocument
 {
     public const string ToolName = "nucheck";
-    public const string SchemaVersion = "1.0";
+
+    /// <summary>
+    /// The facts document's own schema version — independent of the findings
+    /// document's (they are separate documents with separate shapes) and of the
+    /// tool version. 1.0 → 1.1: <c>capabilities</c>, <c>packages[].hashes</c> and
+    /// <c>packages[].producer</c> were ADDED; nothing was renamed, removed or
+    /// redefined.
+    /// </summary>
+    public const string SchemaVersion = "1.1";
     public const string DocumentTypeName = "facts";
 
     [JsonPropertyName("tool")] public string Tool { get; init; } = ToolName;
     [JsonPropertyName("toolVersion")] public string ToolVersion { get; init; } = "";
     [JsonPropertyName("schemaVersion")] public string Schema { get; init; } = SchemaVersion;
     [JsonPropertyName("documentType")] public string DocumentType { get; init; } = DocumentTypeName;
+    /// <summary>
+    /// The behaviours THIS BUILD has, named rather than versioned — see
+    /// <see cref="FactsCapabilities"/> for what belongs here and what does not.
+    /// Written always (an emitting build always knows its own), so a consumer
+    /// negotiates from the document it has already parsed instead of launching the
+    /// tool a second time to parse a version string. An ABSENT <c>capabilities</c>
+    /// is a schemaVersion 1.0 document, i.e. a build that predates the field: that
+    /// is "cannot tell", never "declares none" — the same distinction
+    /// <c>WhenWritingNull</c> draws everywhere else in this document.
+    /// </summary>
+    [JsonPropertyName("capabilities")] public List<string> Capabilities { get; init; } = [.. FactsCapabilities.All];
     /// <summary>The target path exactly as given on the command line; every path inside the document is relative to it.</summary>
     [JsonPropertyName("target")] public string Target { get; init; } = "";
     [JsonPropertyName("summary")] public FactsSummary Summary { get; init; } = new();
@@ -48,6 +87,40 @@ public sealed record FactsDocument
     /// document whose <c>unanalyzable</c> is non-empty.
     /// </summary>
     [JsonPropertyName("unanalyzable")] public List<UnanalyzableEntry> Unanalyzable { get; init; } = [];
+}
+
+/// <summary>
+/// The capability ids the facts document declares. A capability names a
+/// BEHAVIOUR a consumer would otherwise have to infer from the tool version —
+/// i.e. one the document's own shape cannot reveal. A newly ADDED FIELD is not a
+/// capability: <c>schemaVersion</c>'s minor already announces it and the key is
+/// either there or it is not. Keeping that line means this list stays a short
+/// negotiation surface rather than a second changelog.
+///
+/// <para>Adding one: define the constant, add it to <see cref="All"/> (every
+/// emitted document then declares it), document it in README.md, and update the
+/// pinned literal in the contract tests — which fail until you do.</para>
+/// </summary>
+public static class FactsCapabilities
+{
+    /// <summary>
+    /// <c>il[].references[]</c> records a compiled property/indexer/event accessor
+    /// (<c>get_Foo</c>) ADDITIONALLY under its natural source-level name
+    /// (<c>Foo</c>). Shipped in nucheck 2.3.0; a 2.2.0 build emits the same schema
+    /// with only the raw accessor spelling.
+    /// </summary>
+    public const string IlAccessorNames = "il-accessor-names";
+
+    /// <summary>
+    /// <c>il[].references[]</c> records a generic type ADDITIONALLY with its
+    /// metadata arity suffix stripped (<c>List`1</c> → <c>List</c>), for
+    /// <c>il-type-ref</c> entries and the type half of <c>il-member-ref</c>
+    /// entries. Shipped in nucheck 2.3.0.
+    /// </summary>
+    public const string IlGenericArity = "il-generic-arity";
+
+    /// <summary>Every capability this build declares, ordinal-sorted for a deterministic document.</summary>
+    public static IReadOnlyList<string> All { get; } = [IlAccessorNames, IlGenericArity];
 }
 
 public sealed record FactsSummary
@@ -149,7 +222,63 @@ public sealed record PackageFacts
     public List<string>? Namespaces { get; init; }
     /// <summary>Ids this package depends on, as the restore artefact records them. An id may name a package absent from <c>packages</c> (a TFM-conditional edge that did not resolve) — reported as written, not filtered.</summary>
     [JsonPropertyName("dependencies")] public List<string> Dependencies { get; init; } = [];
+    /// <summary>
+    /// Every hash the tree's restore artefacts state for this package, each
+    /// naming the artefact that stated it. NOT flattened into one <c>hash</c>: a
+    /// <c>packages.lock.json</c> <c>contentHash</c> and a
+    /// <c>project.assets.json</c> <c>sha512</c> are different fields of different
+    /// artefacts, and a consumer that has to guess which one it is holding cannot
+    /// say what its own hash entry describes. Present-and-empty is a fact — the
+    /// artefact entries for this package were read and stated no hash. nucheck
+    /// never computes one: it publishes what a file says, or nothing.
+    /// </summary>
+    [JsonPropertyName("hashes")] public List<PackageHashFacts> Hashes { get; init; } = [];
+    /// <summary>
+    /// The producer strings from the package's own <c>.nuspec</c>, verbatim.
+    /// OMITTED when no <c>.nuspec</c> could be read (unrestored tree, missing or
+    /// unparseable file) — "cannot tell". PRESENT with explicit <c>null</c>s when
+    /// the file WAS read and states none: a fact of absence, which is what lets a
+    /// consumer say the component's provenance is unknown rather than unchecked.
+    /// </summary>
+    [JsonPropertyName("producer")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PackageProducerFacts? Producer { get; init; }
 }
+
+/// <summary>
+/// One hash exactly as a restore artefact states it. <c>Source</c> and
+/// <c>Field</c> name WHERE it came from (<c>lock</c> + <c>contentHash</c>, or
+/// <c>assets</c> + <c>sha512</c>) rather than asserting an algorithm: a
+/// <c>packages.lock.json</c> names no algorithm anywhere — only the assets
+/// file's KEY does — so putting an <c>algorithm</c> in the document would be
+/// nucheck asserting something one of the two files it read never said. Both
+/// values are bare base64 as written; nothing is decoded, re-encoded or
+/// re-computed, and a consumer that does so is doing it against the field it was
+/// told the string came from.
+/// </summary>
+/// <param name="Source">The artefact kind, same vocabulary as <c>projects[].assets.kind</c>: <c>assets</c> or <c>lock</c>.</param>
+/// <param name="File">The artefact that stated it, relative to the target — so the claim stays traceable after the per-project closures are merged into one <c>packages</c> list.</param>
+/// <param name="Field">The key as the artefact spells it: <c>sha512</c> or <c>contentHash</c>.</param>
+/// <param name="Value">The string as written. Never split, decoded, re-encoded or re-computed.</param>
+public sealed record PackageHashFacts(
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("file")] string File,
+    [property: JsonPropertyName("field")] string Field,
+    [property: JsonPropertyName("value")] string Value);
+
+/// <summary>
+/// <c>.nuspec</c> <c>&lt;authors&gt;</c> / <c>&lt;owners&gt;</c>, VERBATIM. Both
+/// are comma-separated free text, not identities: NuGet neither validates nor
+/// resolves them, so nucheck does not split, normalize or attribute them either —
+/// what a consumer does with "James Newton-King" or "Acme Corp, contributors" is
+/// its own call, and a split done here could not be undone downstream. An
+/// explicit <c>null</c> means the file was read and states that element nowhere
+/// (or states it empty); the whole object is omitted when no file was read at
+/// all.
+/// </summary>
+public sealed record PackageProducerFacts(
+    [property: JsonPropertyName("authors")] string? Authors,
+    [property: JsonPropertyName("owners")] string? Owners);
 
 public sealed record PackageFolderFacts(
     [property: JsonPropertyName("path")] string Path,

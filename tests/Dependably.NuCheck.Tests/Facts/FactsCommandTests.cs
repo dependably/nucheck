@@ -41,11 +41,11 @@ public class FactsCommandTests : IDisposable
         using var json = JsonDocument.Parse(output);
         var root = json.RootElement;
         Assert.Equal(
-            ["tool", "toolVersion", "schemaVersion", "documentType", "target", "summary", "projects",
-             "centralPackageVersions", "packages", "packageFolders", "source", "il", "unanalyzable"],
+            ["tool", "toolVersion", "schemaVersion", "documentType", "capabilities", "target", "summary",
+             "projects", "centralPackageVersions", "packages", "packageFolders", "source", "il", "unanalyzable"],
             root.EnumerateObject().Select(p => p.Name));
         Assert.Equal("nucheck", root.GetProperty("tool").GetString());
-        Assert.Equal("1.0", root.GetProperty("schemaVersion").GetString());
+        Assert.Equal("1.1", root.GetProperty("schemaVersion").GetString());
         Assert.Equal("facts", root.GetProperty("documentType").GetString());
         Assert.Equal(Fixtures.CsharpApp, root.GetProperty("target").GetString());
         Assert.Matches(@"^\d+\.\d+\.\d+", root.GetProperty("toolVersion").GetString());

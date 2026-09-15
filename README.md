@@ -28,7 +28,7 @@ nucheck ./packages.config
 
 ```
 nucheck <path-to-packages-file> [options]
-nucheck --facts <directory> [--verbose]
+nucheck --facts <directory> [--roots <a,b,...>] [--verbose]
 
   --source <name>       Advisory source: github (default), osv
   --format <type>       Output: human (default), table, json
@@ -38,6 +38,9 @@ nucheck --facts <directory> [--verbose]
   --rest                Use the GitHub REST API instead of GraphQL
   --facts               Emit a JSON facts document for the .NET source tree at <directory>
                         instead of auditing a manifest (see "Facts" below)
+  --roots <a,b,...>     Facts mode only (repeatable, comma-separated). Extra top-level
+                        identifier roots to keep fully-qualified uses for, on top of the
+                        ones the tree's own artefacts reveal (see "Why --roots" below)
   --verbose, -v         Write progress to stderr
   --help, -h            Show full help
   --version             Print the version
@@ -184,9 +187,51 @@ whichever key happens to be present. A document with no `documentType` is a find
 document — the findings envelope is unchanged.
 
 `--fail-on`, `--severity`, `--source`, `--rule`, `--rest`, `--config` and `--format` are
-accepted but inert in this mode. A consumer probes for the capability by running it: a
+accepted but inert in this mode. A consumer probes for the mode itself by running it: a
 nucheck older than 2.2.0 answers `Error: unknown option: '--facts'` on stderr and exits
-`2`.
+`2`. Anything finer-grained than "does this build have `--facts` at all" is answered by
+the document, not by a second process launch — see below.
+
+### `schemaVersion` and `capabilities`
+
+**`schemaVersion` describes the document's SHAPE, and nothing else.**
+
+- A newer **MINOR** is **additive**: keys were added, and every key an older 1.x document
+  carried still exists and still means the same thing. A consumer written against an older
+  minor **proceeds unchanged** — note the new keys if it likes, ignore them otherwise.
+- A newer **MAJOR** means a key was **renamed, removed, or redefined**. A consumer written
+  against the older major must **refuse the document** rather than read it optimistically.
+- The facts document's version is its own. It is **not** the tool version, and **not** the
+  findings document's `schemaVersion` (a separate document with a separate shape, still
+  `1.0`).
+
+**`capabilities` names behaviours the shape cannot reveal.** A version number cannot say
+how an *existing* field is filled: nucheck 2.3.0's IL normalizations added no key — they
+changed which spellings appear inside `il[].references[]` — so 2.2.0 and 2.3.0 emit the
+same schema, and `--facts` shipped in 2.2.0 while those normalizations shipped in 2.3.0.
+A consumer that needs them therefore cannot get its answer from `schemaVersion`, and
+parsing `--version` makes correctness depend on a second process launch that can fail (and
+on nucheck's release history, which a fork, a backport or a dev build does not share).
+The document states its own behaviours instead:
+
+```json
+"capabilities": ["il-accessor-names", "il-generic-arity"]
+```
+
+| Capability | What the emitting build does |
+| ---------- | ---------------------------- |
+| `il-accessor-names` | `il[].references[]` records a compiled property/indexer/event accessor (`get_Foo`) **additionally** under its natural source-level name (`Foo`). The raw accessor spelling is still reported; nothing is replaced. |
+| `il-generic-arity` | `il[].references[]` records a generic type **additionally** with its metadata arity suffix stripped (`` List`1 `` → `List`), for `il-type-ref` entries and the type half of `il-member-ref` entries. |
+
+**An absent `capabilities` is not an empty one.** A `schemaVersion` `1.0` document predates
+the field: it says *nothing* about what its build does, so treat it as "cannot tell" —
+the same rule this document applies to every omitted key. A present `[]` is a build that
+declares no capability.
+
+**A newly added FIELD is not a capability.** The minor bump announces it and the key is
+either in the document or it is not, so listing it here would only grow a second changelog
+to drift out of date. `capabilities` stays a short negotiation surface for behaviour that
+is otherwise invisible.
 
 ### The document
 
@@ -198,9 +243,10 @@ document is (trimmed):
 ```json
 {
   "tool": "nucheck",
-  "toolVersion": "2.2.0",
-  "schemaVersion": "1.0",
+  "toolVersion": "2.4.0",
+  "schemaVersion": "1.1",
   "documentType": "facts",
+  "capabilities": ["il-accessor-names", "il-generic-arity"],
   "target": "./csharp-app",
   "summary": {
     "projects": 2, "filesScanned": 3, "assembliesRead": 0,
@@ -242,9 +288,20 @@ document is (trimmed):
       "id": "CsvHelper",
       "version": "27.0.0",
       "assemblies": ["CsvHelper"],
-      "dependencies": ["Microsoft.Bcl.AsyncInterfaces"]
+      "dependencies": ["Microsoft.Bcl.AsyncInterfaces"],
+      "hashes": [
+        { "source": "assets", "file": "App/obj/project.assets.json", "field": "sha512", "value": "XZ3b1k...Q==" }
+      ]
     },
-    { "id": "Newtonsoft.Json", "version": "12.0.1", "assemblies": ["Newtonsoft.Json"], "dependencies": [] }
+    {
+      "id": "Newtonsoft.Json",
+      "version": "12.0.1",
+      "assemblies": ["Newtonsoft.Json"],
+      "dependencies": [],
+      "hashes": [
+        { "source": "assets", "file": "App/obj/project.assets.json", "field": "sha512", "value": "vAhPl2...==" }
+      ]
+    }
   ],
   "packageFolders": [{ "path": "/nonexistent/fixture-global-packages", "readable": false }],
   "source": {
@@ -278,12 +335,12 @@ process exit code, `0` for every successful scan.
 | ------- | -------------- |
 | `projects[]` | Every `.csproj`, sorted by path. `testMarker` is what made it a test project — `"<IsTestProject>"` for the explicit MSBuild property, else the id of the test-framework package it references — and **never a directory name**; `null` when it is not one. `directReferences` are its `<PackageReference>`s with line numbers. `assets` names the restore artefact read (`obj/project.assets.json` → `"assets"`, `packages.lock.json` → `"lock"`), `null` when neither exists; `closure` is every package (`id` + `version`) that artefact resolved. `outputAssembly` is the project's own built DLL under `bin/`, `null` when none. `runtimeOutput` lists, per readable `*.deps.json` under `bin/`, the packages that contribute a runtime assembly to that output — the ones on disk next to the binary whether or not anything references them. |
 | `centralPackageVersions[]` | `<PackageVersion>` entries from `Directory.Packages.props`, with lines. |
-| `packages[]` | The merged closure across all projects, **one entry per id + version**, sorted by id then version. A tree can resolve two versions of one id (App on 12.0.1, a test project on 13.0.3 — separate artefacts), and each is its own entry with its own facts read from its own package folder. `assemblies` are the simple names of the DLLs the package ships under `lib/` or `ref/`; `namespaces` are the namespaces of its public types **read from those assemblies**; `dependencies` are the ids its artefact entry depends on, as written (an id may be absent from `packages` when a TFM-conditional edge did not resolve — reported, not filtered); `license` is the SPDX expression from its own `.nuspec`. |
+| `packages[]` | The merged closure across all projects, **one entry per id + version**, sorted by id then version. A tree can resolve two versions of one id (App on 12.0.1, a test project on 13.0.3 — separate artefacts), and each is its own entry with its own facts read from its own package folder. `assemblies` are the simple names of the DLLs the package ships under `lib/` or `ref/`; `namespaces` are the namespaces of its public types **read from those assemblies**; `dependencies` are the ids its artefact entry depends on, as written (an id may be absent from `packages` when a TFM-conditional edge did not resolve — reported, not filtered); `license` is the SPDX expression from its own `.nuspec`; `hashes` and `producer` are below. |
 | `packageFolders[]` | The global-packages folders the artefacts name, and whether each exists. |
 | `source.files[]` | **Every C# file that was read**, sorted, attributed to the innermost project whose directory contains it (`null` under no project). A file with no usings is still listed — "read, found nothing" is a different fact from "never read". `usings` carry `global`/`static`/`alias`, and `disabled: true` for a directive inside an `#if` region the parser skipped (a TFM-conditional using — a fact about the file, flagged so the consumer can weigh it). `qualified` are fully-qualified identifier prefixes (`Serilog.Log.Information`) whose first segment is in `qualifiedRoots`. |
 | `source.qualifiedRoots` | The roots qualified identifiers were kept for: first segments of every DLL-read namespace, of every closure or declared package id, and of every `--roots` entry. Made visible so a consumer knows what `qualified` could contain — see "Why `--roots`" below. |
 | `il[]` | One entry per built project: the distinct `il-type-ref` / `il-member-ref` entries in its output assembly's metadata tables, each naming the fully-qualified symbol and the assembly that defines it. Reference evidence read with `System.Reflection.Metadata` (nothing is loaded or executed) — not a call graph, and not a proof of execution. Joining `assembly` to `packages[].assemblies` is the consumer's step. |
-| `unanalyzable[]` | Every path the scan could not read — see below. |
+| `unanalyzable[]` | Every path the scan could not read, as `{ "file", "kind", "reason" }` — a worked example of every `kind` is below. |
 
 Generated files (`*.g.cs`, `*.Designer.cs`, `*.generated.cs`) and `bin/`, `obj/`,
 `node_modules/`, `.git/`, `.vs/` and other dot-directories are not scanned. A **symlinked
@@ -307,16 +364,20 @@ were filtered on and re-run with more if a package it cares about is missing.
 
 **Absent, `null` and empty are three different statements.** A key that is *omitted* means
 the tool could not determine it: `packages[].namespaces` when no assembly of the package
-could be read, `packages[].assemblies` when the artefact never enumerated the files (a
-lock file names the closure, not its contents), `packages[].license` when there is no
-readable expression, `projects[].closure` when there was no readable artefact, and
+could be read, `packages[].assemblies` when NO artefact that resolved the package
+enumerated its files (a lock file names the closure, not its contents — but a restored
+sibling in the same tree does enumerate them, and that enumeration wins for the merged
+entry however the two projects were discovered), `packages[].license` when there is no
+readable expression, `packages[].producer` when no `.nuspec` could be read at all,
+`projects[].closure` when there was no readable artefact, and
 `projects[].runtimeOutput` when nothing was built or when every `*.deps.json` present is
 unparseable. An explicit `null` states an absence (`testMarker`, `alias`, `assets`,
 `outputAssembly`, `project`). A present-and-empty list is a fact: `namespaces: []` means
 the package's assemblies were read and expose no public namespace, or it has no assemblies
 at all (see `assemblies` — an analyzer- or targets-only package), so C# source provably
 cannot reference it; `summary.packagesWithNamespaces` counts only packages whose list is
-present **and** non-empty. In particular, **a namespace is never inferred from a package id** — the convention
+present **and** non-empty, and `hashes: []` means the artefact entries for the package were
+read and state no hash. In particular, **a namespace is never inferred from a package id** — the convention
 holds for most packages and is wrong for whole families (`AWSSDK.*` ships `Amazon.*`,
 `Microsoft.CodeAnalysis.Workspaces.MSBuild` ships `Microsoft.CodeAnalysis.MSBuild`), and a
 consumer handed the guess would search for a namespace the package never had, find nothing,
@@ -325,8 +386,62 @@ and conclude "unused" about a package the code demonstrably imports.
 **Restore and build first for the richest document.** Without `dotnet restore` there is no
 `obj/project.assets.json`: `closure`, `dependencies` and `assemblies` fall back to
 `packages.lock.json` where one exists, and no package assembly is readable, so
-`namespaces` is omitted for every package. Without `dotnet build` there is no `bin/`:
-`il` is empty and `runtimeOutput` is omitted.
+`namespaces` is omitted for every package — as is `producer`, which is read from the
+package's own `.nuspec` in the global-packages folder — and `hashes` carries the lock
+file's `contentHash` instead of the assets file's `sha512`. Without `dotnet build` there
+is no `bin/`: `il` is empty and `runtimeOutput` is omitted.
+
+### Hashes and producer
+
+Two things a package's own artefacts state about **where it came from** — the inputs a
+consumer needs for a CycloneDX `hashes[]` entry and a component supplier, and the reason
+both are published exactly as written rather than in some normalized form of nucheck's.
+
+```json
+"hashes": [
+  { "source": "assets", "file": "App/obj/project.assets.json", "field": "sha512",      "value": "XZ3b1k...Q==" },
+  { "source": "lock",   "file": "Lib/packages.lock.json",      "field": "contentHash", "value": "vAhPl2...==" }
+],
+"producer": { "authors": "James Newton-King", "owners": null }
+```
+
+**`hashes[]` names its source instead of asserting an algorithm.** A
+`packages.lock.json` `contentHash` and a `project.assets.json` `sha512` are different
+fields of different artefacts: the assets key names an algorithm, the lock key names none
+anywhere in the file, and both values are bare base64 as written. Flattening them into one
+`hash` would leave a consumer emitting `hashes[].alg` guessing which artifact and which
+algorithm its own entry describes, so each entry states the artefact kind (`source`, the
+same vocabulary as `projects[].assets.kind`), the artefact that said it (`file`, relative
+to the target — the per-project closures are merged into one `packages` list, and this is
+what keeps the claim traceable afterwards), and the key as that file spells it (`field`).
+**nucheck never computes a hash**: it publishes what a file says, or nothing. One package
+can carry two entries — a monorepo where one project is restored and another is not states
+both about the same `id`+`version`, and both are reported, including on the rare occasion
+that they disagree. That same pair of sightings is why `assemblies` and `namespaces` are
+present for such a package: the restored artefact enumerated its files, so the merged entry
+carries the enumeration rather than the un-restored sibling's silence.
+
+**Collapse on `(field, value)` before emitting, and read repeated `file`s as
+corroboration.** The list is per ARTEFACT, so a package restored by several projects
+carries one entry per project's own assets file — identical `source`, `field` and `value`,
+differing only in `file` (15 of nucheck's own 33 packages look like this). Mapped 1:1 into
+a CycloneDX `hashes[]` that becomes N duplicate SHA-512 entries for one component, scaling
+as projects × packages; collapsed on `(field, value)` it is one entry that several
+artefacts independently agree on. Entries that survive the collapse with the same `field`
+and DIFFERENT values are the case worth surfacing: the artefacts disagree about the
+package, which is why nucheck reports them rather than picking a winner.
+
+**`producer` is verbatim free text, and its absence is two different statements.**
+`<authors>` and `<owners>` are comma-separated free text in the `.nuspec`, not identities:
+NuGet neither validates nor resolves them, so nucheck does not split them on the comma,
+normalize them, or attribute them to a person or an organization — a split done here could
+not be undone by a consumer. The whole `producer` object is **omitted** when no `.nuspec`
+could be read (an un-restored tree, a package folder that does not exist, unparseable XML —
+that last one is also in `unanalyzable`), and **present with explicit `null`s** when the
+file was read and states that element nowhere or states it empty. The difference is the
+point: a consumer can only declare a component's provenance *unknown* if it can tell that
+apart from *not looked at*. Whitespace around the value is trimmed (it is XML
+pretty-printing, not content); nothing else about the string is touched.
 
 ### `unanalyzable`
 
