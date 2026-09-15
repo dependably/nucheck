@@ -83,6 +83,25 @@ public class PackageProvenanceTests
             package.Hashes);
     }
 
+    /// A multi-targeted project's lock file states one `dependencies` block PER
+    /// TFM, and a package resolved for every TFM is restated in each — same file,
+    /// same field, same value. That is ONE statement about the artefact: the TFM is
+    /// no part of what a hash entry says, so the entry appears once. Without the
+    /// dedupe in <c>MergeHashes</c> a consumer mapping entries into a CycloneDX
+    /// `hashes[]` would emit a duplicate SHA per framework the project targets,
+    /// scaling with the TFM count for no added evidence.
+    [Fact]
+    public void OneLockFileRestatingAHashPerTfmYieldsOneEntry()
+    {
+        using var fixture = new Fixture();
+        fixture.WriteLockProject("App", LockContentHash, "net8.0", "net9.0", "net10.0");
+
+        var package = Assert.Single(FactsCommand.Build(fixture.SrcDir, "test").Packages);
+        Assert.Equal(
+            [new PackageHashFacts("lock", "App/packages.lock.json", "contentHash", LockContentHash)],
+            package.Hashes);
+    }
+
     /// An artefact entry that states no hash: read, and it said none. Empty, not
     /// omitted and not invented — every package in the document came from an entry
     /// this reader parsed.
@@ -189,19 +208,27 @@ public class PackageProvenanceTests
             }));
         }
 
-        public void WriteLockProject(string name, string contentHash)
+        /// <param name="tfms">
+        /// The target frameworks the lock file states a `dependencies` block for.
+        /// A real multi-targeted project has one block PER TFM, each restating the
+        /// same package and the same `contentHash` — the shape the dedupe exists
+        /// for. Defaults to the single-TFM case.
+        /// </param>
+        public void WriteLockProject(string name, string contentHash, params string[] tfms)
         {
             var dir = WriteProject(name);
+            var dependencies = new Dictionary<string, object>();
+            foreach (var tfm in tfms.Length == 0 ? new[] { "net8.0" } : tfms)
+            {
+                dependencies[tfm] = new Dictionary<string, object>
+                {
+                    [PackageId] = new { type = "Direct", requested = "[1.0.0, )", resolved = "1.0.0", contentHash },
+                };
+            }
             File.WriteAllText(Path.Combine(dir, "packages.lock.json"), JsonSerializer.Serialize(new
             {
                 version = 1,
-                dependencies = new Dictionary<string, object>
-                {
-                    ["net8.0"] = new Dictionary<string, object>
-                    {
-                        [PackageId] = new { type = "Direct", requested = "[1.0.0, )", resolved = "1.0.0", contentHash },
-                    },
-                },
+                dependencies,
             }));
         }
 
