@@ -4,6 +4,39 @@ All notable changes to `nucheck` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-09-14
+
+### Added
+
+- **The facts document's `schemaVersion` contract is published, and the document now
+  declares its own `capabilities`.** `schemaVersion` describes the document's SHAPE and
+  nothing else: a newer MINOR is additive (keys were added; every key an older 1.x
+  document carried still exists and still means the same thing, so a consumer written
+  against an older minor proceeds unchanged), a newer MAJOR means a key was renamed,
+  removed or redefined and must be refused. README.md states it beside the document
+  spec — until now the only written version of that rule lived in a consumer, which
+  means the consumer had invented it.
+
+  `capabilities` is a separate axis, because a shape version cannot express a change in
+  how an EXISTING field is filled: 2.3.0's IL normalizations added no key — they changed
+  which spellings appear inside `il[].references[]` — and `--facts` shipped in 2.2.0
+  while those normalizations shipped in 2.3.0, so no functional probe and no
+  `schemaVersion` check can tell the two builds apart. The document therefore NAMES its
+  behaviours (`il-accessor-names`, `il-generic-arity`), which a fork, a backport or a dev
+  build can state truthfully and which a consumer reads from the document it already
+  parsed rather than from a second `--version` process launch that can fail. An ABSENT
+  `capabilities` (a `1.0` document) is "cannot tell", never "declares none"; a newly
+  added FIELD is not a capability, since the minor bump already announces it.
+
+  `schemaVersion` is `1.1` accordingly — the first exercise of the additive rule. The
+  findings document's own `schemaVersion` is untouched at `1.0`.
+
+### Documentation
+
+- `--roots` is in the README synopsis and option table (it was documented only in
+  `--help` and in the "Why `--roots`" prose), and the `unanalyzable[]` row names the
+  `file`/`kind`/`reason` keys a consumer has to read.
+
 ## [2.3.0] - 2026-09-13
 
 ### Added

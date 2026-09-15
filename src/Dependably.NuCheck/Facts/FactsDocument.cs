@@ -21,17 +21,55 @@ namespace Dependably.NuCheck.Facts;
 /// A property written as an explicit <c>null</c> states a fact of absence (a
 /// project with no test marker, a <c>using</c> with no alias). A present-and-empty
 /// list is likewise a fact: "enumerated, found none".</para>
+///
+/// <para><b>The <c>schemaVersion</c> contract</b> (published in README.md, because a
+/// contract only a consumer can read is a policy the consumer invented): a newer
+/// MINOR is ADDITIVE — keys were added, every key a previous 1.x document carried
+/// still exists and still means the same thing, so a consumer written against an
+/// older minor proceeds unchanged. A newer MAJOR means a key was RENAMED, REMOVED,
+/// or had its meaning changed, and a consumer written against the older major must
+/// refuse the document. The version describes the document's SHAPE and nothing
+/// else.</para>
+///
+/// <para><b>Why <see cref="Capabilities"/> exists beside it.</b> A shape version
+/// cannot express a change in how an EXISTING field is filled: nucheck 2.3.0's IL
+/// normalizations added no key — they changed which spellings appear inside
+/// <c>il[].references[]</c> — so a 2.2.0 and a 2.3.0 build emit the same schema and
+/// a consumer that needs the normalized spellings cannot tell them apart from the
+/// document. Answering that with a version bump would also force every consumer to
+/// learn, out of band, which minor meant which behaviour. The document therefore
+/// NAMES its behaviours, which is the same reasoning that makes probing a tool by
+/// running it better than parsing its <c>--version</c>: a fork, a dev build or a
+/// backport can state truthfully what it does.</para>
 /// </summary>
 public sealed record FactsDocument
 {
     public const string ToolName = "nucheck";
-    public const string SchemaVersion = "1.0";
+
+    /// <summary>
+    /// The facts document's own schema version — independent of the findings
+    /// document's (they are separate documents with separate shapes) and of the
+    /// tool version. 1.0 → 1.1: <c>capabilities</c> was ADDED; nothing was
+    /// renamed, removed or redefined.
+    /// </summary>
+    public const string SchemaVersion = "1.1";
     public const string DocumentTypeName = "facts";
 
     [JsonPropertyName("tool")] public string Tool { get; init; } = ToolName;
     [JsonPropertyName("toolVersion")] public string ToolVersion { get; init; } = "";
     [JsonPropertyName("schemaVersion")] public string Schema { get; init; } = SchemaVersion;
     [JsonPropertyName("documentType")] public string DocumentType { get; init; } = DocumentTypeName;
+    /// <summary>
+    /// The behaviours THIS BUILD has, named rather than versioned — see
+    /// <see cref="FactsCapabilities"/> for what belongs here and what does not.
+    /// Written always (an emitting build always knows its own), so a consumer
+    /// negotiates from the document it has already parsed instead of launching the
+    /// tool a second time to parse a version string. An ABSENT <c>capabilities</c>
+    /// is a schemaVersion 1.0 document, i.e. a build that predates the field: that
+    /// is "cannot tell", never "declares none" — the same distinction
+    /// <c>WhenWritingNull</c> draws everywhere else in this document.
+    /// </summary>
+    [JsonPropertyName("capabilities")] public List<string> Capabilities { get; init; } = [.. FactsCapabilities.All];
     /// <summary>The target path exactly as given on the command line; every path inside the document is relative to it.</summary>
     [JsonPropertyName("target")] public string Target { get; init; } = "";
     [JsonPropertyName("summary")] public FactsSummary Summary { get; init; } = new();
@@ -48,6 +86,40 @@ public sealed record FactsDocument
     /// document whose <c>unanalyzable</c> is non-empty.
     /// </summary>
     [JsonPropertyName("unanalyzable")] public List<UnanalyzableEntry> Unanalyzable { get; init; } = [];
+}
+
+/// <summary>
+/// The capability ids the facts document declares. A capability names a
+/// BEHAVIOUR a consumer would otherwise have to infer from the tool version —
+/// i.e. one the document's own shape cannot reveal. A newly ADDED FIELD is not a
+/// capability: <c>schemaVersion</c>'s minor already announces it and the key is
+/// either there or it is not. Keeping that line means this list stays a short
+/// negotiation surface rather than a second changelog.
+///
+/// <para>Adding one: define the constant, add it to <see cref="All"/> (every
+/// emitted document then declares it), document it in README.md, and update the
+/// pinned literal in the contract tests — which fail until you do.</para>
+/// </summary>
+public static class FactsCapabilities
+{
+    /// <summary>
+    /// <c>il[].references[]</c> records a compiled property/indexer/event accessor
+    /// (<c>get_Foo</c>) ADDITIONALLY under its natural source-level name
+    /// (<c>Foo</c>). Shipped in nucheck 2.3.0; a 2.2.0 build emits the same schema
+    /// with only the raw accessor spelling.
+    /// </summary>
+    public const string IlAccessorNames = "il-accessor-names";
+
+    /// <summary>
+    /// <c>il[].references[]</c> records a generic type ADDITIONALLY with its
+    /// metadata arity suffix stripped (<c>List`1</c> → <c>List</c>), for
+    /// <c>il-type-ref</c> entries and the type half of <c>il-member-ref</c>
+    /// entries. Shipped in nucheck 2.3.0.
+    /// </summary>
+    public const string IlGenericArity = "il-generic-arity";
+
+    /// <summary>Every capability this build declares, ordinal-sorted for a deterministic document.</summary>
+    public static IReadOnlyList<string> All { get; } = [IlAccessorNames, IlGenericArity];
 }
 
 public sealed record FactsSummary

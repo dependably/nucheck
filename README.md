@@ -28,7 +28,7 @@ nucheck ./packages.config
 
 ```
 nucheck <path-to-packages-file> [options]
-nucheck --facts <directory> [--verbose]
+nucheck --facts <directory> [--roots <a,b,...>] [--verbose]
 
   --source <name>       Advisory source: github (default), osv
   --format <type>       Output: human (default), table, json
@@ -38,6 +38,9 @@ nucheck --facts <directory> [--verbose]
   --rest                Use the GitHub REST API instead of GraphQL
   --facts               Emit a JSON facts document for the .NET source tree at <directory>
                         instead of auditing a manifest (see "Facts" below)
+  --roots <a,b,...>     Facts mode only (repeatable, comma-separated). Extra top-level
+                        identifier roots to keep fully-qualified uses for, on top of the
+                        ones the tree's own artefacts reveal (see "Why --roots" below)
   --verbose, -v         Write progress to stderr
   --help, -h            Show full help
   --version             Print the version
@@ -184,9 +187,51 @@ whichever key happens to be present. A document with no `documentType` is a find
 document — the findings envelope is unchanged.
 
 `--fail-on`, `--severity`, `--source`, `--rule`, `--rest`, `--config` and `--format` are
-accepted but inert in this mode. A consumer probes for the capability by running it: a
+accepted but inert in this mode. A consumer probes for the mode itself by running it: a
 nucheck older than 2.2.0 answers `Error: unknown option: '--facts'` on stderr and exits
-`2`.
+`2`. Anything finer-grained than "does this build have `--facts` at all" is answered by
+the document, not by a second process launch — see below.
+
+### `schemaVersion` and `capabilities`
+
+**`schemaVersion` describes the document's SHAPE, and nothing else.**
+
+- A newer **MINOR** is **additive**: keys were added, and every key an older 1.x document
+  carried still exists and still means the same thing. A consumer written against an older
+  minor **proceeds unchanged** — note the new keys if it likes, ignore them otherwise.
+- A newer **MAJOR** means a key was **renamed, removed, or redefined**. A consumer written
+  against the older major must **refuse the document** rather than read it optimistically.
+- The facts document's version is its own. It is **not** the tool version, and **not** the
+  findings document's `schemaVersion` (a separate document with a separate shape, still
+  `1.0`).
+
+**`capabilities` names behaviours the shape cannot reveal.** A version number cannot say
+how an *existing* field is filled: nucheck 2.3.0's IL normalizations added no key — they
+changed which spellings appear inside `il[].references[]` — so 2.2.0 and 2.3.0 emit the
+same schema, and `--facts` shipped in 2.2.0 while those normalizations shipped in 2.3.0.
+A consumer that needs them therefore cannot get its answer from `schemaVersion`, and
+parsing `--version` makes correctness depend on a second process launch that can fail (and
+on nucheck's release history, which a fork, a backport or a dev build does not share).
+The document states its own behaviours instead:
+
+```json
+"capabilities": ["il-accessor-names", "il-generic-arity"]
+```
+
+| Capability | What the emitting build does |
+| ---------- | ---------------------------- |
+| `il-accessor-names` | `il[].references[]` records a compiled property/indexer/event accessor (`get_Foo`) **additionally** under its natural source-level name (`Foo`). The raw accessor spelling is still reported; nothing is replaced. |
+| `il-generic-arity` | `il[].references[]` records a generic type **additionally** with its metadata arity suffix stripped (`` List`1 `` → `List`), for `il-type-ref` entries and the type half of `il-member-ref` entries. |
+
+**An absent `capabilities` is not an empty one.** A `schemaVersion` `1.0` document predates
+the field: it says *nothing* about what its build does, so treat it as "cannot tell" —
+the same rule this document applies to every omitted key. A present `[]` is a build that
+declares no capability.
+
+**A newly added FIELD is not a capability.** The minor bump announces it and the key is
+either in the document or it is not, so listing it here would only grow a second changelog
+to drift out of date. `capabilities` stays a short negotiation surface for behaviour that
+is otherwise invisible.
 
 ### The document
 
@@ -198,9 +243,10 @@ document is (trimmed):
 ```json
 {
   "tool": "nucheck",
-  "toolVersion": "2.2.0",
-  "schemaVersion": "1.0",
+  "toolVersion": "2.4.0",
+  "schemaVersion": "1.1",
   "documentType": "facts",
+  "capabilities": ["il-accessor-names", "il-generic-arity"],
   "target": "./csharp-app",
   "summary": {
     "projects": 2, "filesScanned": 3, "assembliesRead": 0,
@@ -283,7 +329,7 @@ process exit code, `0` for every successful scan.
 | `source.files[]` | **Every C# file that was read**, sorted, attributed to the innermost project whose directory contains it (`null` under no project). A file with no usings is still listed — "read, found nothing" is a different fact from "never read". `usings` carry `global`/`static`/`alias`, and `disabled: true` for a directive inside an `#if` region the parser skipped (a TFM-conditional using — a fact about the file, flagged so the consumer can weigh it). `qualified` are fully-qualified identifier prefixes (`Serilog.Log.Information`) whose first segment is in `qualifiedRoots`. |
 | `source.qualifiedRoots` | The roots qualified identifiers were kept for: first segments of every DLL-read namespace, of every closure or declared package id, and of every `--roots` entry. Made visible so a consumer knows what `qualified` could contain — see "Why `--roots`" below. |
 | `il[]` | One entry per built project: the distinct `il-type-ref` / `il-member-ref` entries in its output assembly's metadata tables, each naming the fully-qualified symbol and the assembly that defines it. Reference evidence read with `System.Reflection.Metadata` (nothing is loaded or executed) — not a call graph, and not a proof of execution. Joining `assembly` to `packages[].assemblies` is the consumer's step. |
-| `unanalyzable[]` | Every path the scan could not read — see below. |
+| `unanalyzable[]` | Every path the scan could not read, as `{ "file", "kind", "reason" }` — a worked example of every `kind` is below. |
 
 Generated files (`*.g.cs`, `*.Designer.cs`, `*.generated.cs`) and `bin/`, `obj/`,
 `node_modules/`, `.git/`, `.vs/` and other dot-directories are not scanned. A **symlinked

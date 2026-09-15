@@ -16,7 +16,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>nucheck</ToolCommandName>
     <PackageId>Dependably.NuCheck</PackageId>
-    <Version>2.3.0</Version>
+    <Version>2.4.0</Version>
     <Authors>MHiland &lt;michael@dependably.ca&gt;</Authors>
     <Company>Dependably</Company>
     <Description>Audits .NET NuGet dependencies (packages.config / packages.lock.json) for known vulnerabilities via the GitHub Advisory Database, similar to npm audit. --facts publishes a source tree's .NET language and packaging facts as JSON for other tools.</Description>
