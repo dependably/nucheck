@@ -236,20 +236,46 @@ public static class AssetsReader
         }
     }
 
-    /// The merged closure keeps the first sighting of an id+version (the
-    /// artefacts agree on a resolved package's files); the per-project list
-    /// records every identity this project resolved, once each.
+    /// The merged closure keeps the first sighting of an id+version, with two
+    /// exceptions where a later sighting states strictly MORE than the stored one:
+    /// its hashes always merge in (see <see cref="MergeHashes"/>), and a sighting
+    /// that ENUMERATED the package's files replaces one that could not.
+    ///
+    /// The second is the monorepo the hash merge already exists for, one field
+    /// over: `Alpha` is un-restored (a lock file, which names the closure but not
+    /// its contents) and `Beta` is restored (an assets file, which lists
+    /// `lib/…/Acme.Widgets.dll`). Discovery order decided which one won, so with
+    /// Alpha first the document omitted `assemblies` — and `namespaces` with it,
+    /// since <see cref="NamespaceMap"/> reads the same DLL list — while publishing
+    /// Beta's `sha512` for that very package: a document contradicting itself
+    /// about whether any artefact enumerated the files, and an `unknown` handed to
+    /// a consumer whose answer was sitting in the tree.
+    ///
+    /// Strictly one-way. `FilesKnown: true` is never replaced by a later
+    /// `FilesKnown: false` — an artefact that cannot enumerate files says nothing
+    /// about the files, so letting it win would be an absence overwriting evidence
+    /// — and a file list is never MERGED across two enumerating artefacts, which
+    /// would publish a union no single artefact stated.
     private static void AddPackage(Dictionary<string, ResolvedPackage> closure, List<PackageIdentity> projectPackages, ResolvedPackage package)
     {
-        if (!closure.TryAdd(package.Key, package)) MergeHashes(closure[package.Key].Hashes, package.Hashes);
+        if (closure.TryGetValue(package.Key, out var stored))
+        {
+            MergeHashes(stored.Hashes, package.Hashes);
+            // The merged list is the one the winning record carries, either way.
+            if (package.FilesKnown && !stored.FilesKnown) closure[package.Key] = package with { Hashes = stored.Hashes };
+        }
+        else
+        {
+            closure[package.Key] = package;
+        }
         if (!projectPackages.Any(p => p.Id.Equals(package.Id, StringComparison.OrdinalIgnoreCase) && p.Version == package.Version))
         {
             projectPackages.Add(package.Identity);
         }
     }
 
-    /// The one place a second sighting of an already-recorded package still
-    /// contributes: a monorepo where one project is restored (assets, `sha512`)
+    /// What a second sighting of an already-recorded package contributes to its
+    /// provenance: a monorepo where one project is restored (assets, `sha512`)
     /// and another is not (lock file, `contentHash`) states BOTH about the same
     /// id+version, and first-sighting-wins would silently drop whichever came
     /// second. Deduped on the whole entry, so two artefacts that agree collapse

@@ -364,8 +364,10 @@ were filtered on and re-run with more if a package it cares about is missing.
 
 **Absent, `null` and empty are three different statements.** A key that is *omitted* means
 the tool could not determine it: `packages[].namespaces` when no assembly of the package
-could be read, `packages[].assemblies` when the artefact never enumerated the files (a
-lock file names the closure, not its contents), `packages[].license` when there is no
+could be read, `packages[].assemblies` when NO artefact that resolved the package
+enumerated its files (a lock file names the closure, not its contents — but a restored
+sibling in the same tree does enumerate them, and that enumeration wins for the merged
+entry however the two projects were discovered), `packages[].license` when there is no
 readable expression, `packages[].producer` when no `.nuspec` could be read at all,
 `projects[].closure` when there was no readable artefact, and
 `projects[].runtimeOutput` when nothing was built or when every `*.deps.json` present is
@@ -415,7 +417,9 @@ what keeps the claim traceable afterwards), and the key as that file spells it (
 **nucheck never computes a hash**: it publishes what a file says, or nothing. One package
 can carry two entries — a monorepo where one project is restored and another is not states
 both about the same `id`+`version`, and both are reported, including on the rare occasion
-that they disagree.
+that they disagree. That same pair of sightings is why `assemblies` and `namespaces` are
+present for such a package: the restored artefact enumerated its files, so the merged entry
+carries the enumeration rather than the un-restored sibling's silence.
 
 **`producer` is verbatim free text, and its absence is two different statements.**
 `<authors>` and `<owners>` are comma-separated free text in the `.nuspec`, not identities:
